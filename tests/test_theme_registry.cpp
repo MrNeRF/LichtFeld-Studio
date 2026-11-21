@@ -5,8 +5,10 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/path_utils.hpp"
 #include "core/user_paths.hpp"
+#include "visualizer/gui/rmlui/rml_theme.hpp"
 #include "visualizer/internal/resource_paths.hpp"
 #include "visualizer/preferences.hpp"
+#include "visualizer/theme/style_tokens.hpp"
 #include "visualizer/theme/theme.hpp"
 
 #include <gtest/gtest.h>
@@ -303,6 +305,30 @@ TEST(ThemeRegistry, CurrentThemeUsesStablePresetId) {
     if (!original_theme.empty()) {
         EXPECT_TRUE(lfs::vis::setThemeByName(original_theme));
     }
+}
+
+TEST(ThemeRegistry, StylesheetsExpandOnlyTheActiveTheme) {
+    using namespace lfs::vis::gui::rml_theme;
+    const std::string original_theme = lfs::vis::currentThemeId();
+    const std::string rule = ".theme-test { color: @{text}; }";
+
+    ASSERT_TRUE(lfs::vis::setThemeByName("dark"));
+    const auto dark_sheet = generateThemeMediaFromTemplate(rule);
+    EXPECT_TRUE(dark_sheet.starts_with("@media (theme: dark)"));
+    EXPECT_EQ(dark_sheet.find("@media", 1), std::string::npos);
+    EXPECT_EQ(dark_sheet.find("@{text}"), std::string::npos);
+    EXPECT_TRUE(getComponentsThemeMedia().starts_with("@media (theme: dark)"));
+
+    const bool activated_light = lfs::vis::setThemeByName("light");
+    EXPECT_TRUE(activated_light);
+    if (activated_light) {
+        const auto light_sheet = generateThemeMediaFromTemplate(rule);
+        EXPECT_TRUE(light_sheet.starts_with("@media (theme: light)"));
+        EXPECT_EQ(light_sheet.find("@media", 1), std::string::npos);
+        EXPECT_NE(light_sheet.substr(light_sheet.find('{')), dark_sheet.substr(dark_sheet.find('{')));
+        EXPECT_TRUE(getComponentsThemeMedia().starts_with("@media (theme: light)"));
+    }
+    EXPECT_TRUE(lfs::vis::setThemeByName(original_theme));
 }
 
 TEST(ThemeRegistry, OptionalGradientsLoadAndLegacyThemesKeepDerivedFallbacks) {
@@ -805,4 +831,42 @@ TEST(ThemePreferencesContract, SafeModeNeitherReadsNorWritesPreferences) {
     EXPECT_EQ(persisted, original);
     file.close();
     std::filesystem::remove_all(root, error);
+}
+
+TEST(ThemeStyleTokens, NativeMenusPreservePaletteAlphaAndTextSizes) {
+    lfs::vis::Theme t;
+    t.palette.surface = {0.3f, 0.4f, 0.5f, 0.8f};
+    t.palette.primary = {0.3f, 0.4f, 0.5f, 0.7f};
+    t.palette.primary_dim = {0.3f, 0.4f, 0.5f, 0.6f};
+    t.palette.border = {0.2f, 0.3f, 0.4f, 0.8f};
+    t.palette.background = {0.1f, 0.2f, 0.3f, 0.9f};
+    t.palette.text_dim = {0.4f, 0.5f, 0.6f, 0.8f};
+    const auto style = lfs::vis::ui_style::menuStyle(t);
+    EXPECT_FLOAT_EQ(style.surface.w, t.palette.surface.w * 0.92f);
+    EXPECT_FLOAT_EQ(style.disabled_surface.w, t.palette.surface.w * 0.55f);
+    EXPECT_FLOAT_EQ(style.hovered.w, t.palette.primary.w * 0.92f);
+    EXPECT_FLOAT_EQ(style.active.w, t.palette.primary_dim.w * 0.80f);
+    EXPECT_FLOAT_EQ(style.submode_surface.w, t.palette.surface.w * 0.70f);
+    EXPECT_FLOAT_EQ(style.submode_hovered.w, t.palette.primary.w * 0.85f);
+    EXPECT_FLOAT_EQ(style.border.w, t.palette.border.w * 0.50f);
+    EXPECT_FLOAT_EQ(style.disabled_text.w, t.palette.text_dim.w * 0.40f);
+    EXPECT_FLOAT_EQ(style.center.w, t.palette.background.w * 0.55f);
+    EXPECT_FLOAT_EQ(style.halo.w, t.palette.background.w * 0.30f);
+    EXPECT_FLOAT_EQ(style.text_shadow.w, 0.45f);
+    EXPECT_FLOAT_EQ(style.label_size, 11.0f);
+    EXPECT_FLOAT_EQ(style.submode_label_size, 10.0f);
+    EXPECT_FLOAT_EQ(style.fallback_icon_size, 16.0f);
+    EXPECT_FLOAT_EQ(style.stroke_width, lfs::vis::ui_style::normal_stroke);
+}
+
+TEST(ThemeStyleTokens, NativeMenusResolveNewThemeColors) {
+    lfs::vis::Theme first;
+    first.palette.primary = {0.1f, 0.2f, 0.3f, 1.0f};
+    const auto old_style = lfs::vis::ui_style::menuStyle(first);
+    auto next = first;
+    next.palette.primary = {0.8f, 0.7f, 0.6f, 1.0f};
+    const auto new_style = lfs::vis::ui_style::menuStyle(next);
+    EXPECT_FLOAT_EQ(old_style.hovered.x, first.palette.primary.x);
+    EXPECT_FLOAT_EQ(new_style.hovered.x, next.palette.primary.x);
+    EXPECT_NE(old_style.hovered.x, new_style.hovered.x);
 }

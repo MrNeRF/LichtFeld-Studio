@@ -98,6 +98,13 @@ namespace lfs::training {
     struct TrainerCropboxMaskTestAccess;
     struct PPISPFileMetadata;
 
+    // With --undistort: replaces each camera of `cameras` that is trained through pinhole views by its views.
+    // `legacy_uids`, if given, receives for every view whose id changed the id earlier versions gave it
+    // (largest scene uid + 1 + 6 * photograph uid + view), by which their checkpoints index per-camera state.
+    lfs::Status expand_camera_views(const lfs::core::Scene& scene,
+                                    std::vector<std::shared_ptr<lfs::core::Camera>>& cameras,
+                                    std::unordered_map<int, int>* legacy_uids = nullptr);
+
     struct PPISPViewportOverrides {
         // Exposure
         float exposure_offset = 0.0f;
@@ -410,6 +417,7 @@ namespace lfs::training {
         }
 
         PPISPControllerPool* getPPISPControllerPool() const { return ppisp_controller_pool_.get(); }
+        const CalibrationCorrection* getCalibrationCorrection() const { return calibration_correction_.get(); }
         PPISP* getPPISP() const { return ppisp_.get(); }
         std::unique_ptr<PPISP> takePPISP() { return std::move(ppisp_); }
         std::unique_ptr<PPISPControllerPool> takePPISPControllerPool() { return std::move(ppisp_controller_pool_); }
@@ -505,6 +513,9 @@ namespace lfs::training {
         friend struct TrainerCameraErrorTestAccess;
         friend struct TrainerCropboxMaskTestAccess;
         friend struct TrainerPausedProgressTestAccess;
+        friend struct TrainerCameraLossTestAccess;
+        friend struct TrainerDepthAnchorTestAccess;
+        friend struct TrainerViewIdTestAccess;
 
         // Helper for deferred event emission to prevent deadlocks
         struct DeferredEvents {
@@ -634,7 +645,7 @@ namespace lfs::training {
             const lfs::core::Tensor& gt_image,
             const lfs::core::param::OptimizationParameters& opt_params,
             const lfs::core::Tensor& raw_rendered,
-            int iteration = 0);
+            int iteration = 0, CalibrationCorrection* fit = nullptr);
 
         void add_gradient_residual(
             const core::Tensor& corrected, const core::Tensor& target,
@@ -663,7 +674,7 @@ namespace lfs::training {
             const lfs::core::param::OptimizationParameters& opt_params,
             const lfs::core::Tensor& raw_rendered,
             const lfs::core::Tensor& structure_map = {},
-            int iteration = 0);
+            int iteration = 0, CalibrationCorrection* fit = nullptr);
 
         // Validate masks exist for all cameras when mask mode is enabled
         std::expected<void, std::string> validate_masks();
@@ -709,6 +720,11 @@ namespace lfs::training {
         // Cleanup method for re-initialization
         void cleanup();
 
+        lfs::Result<int> camera_slot_count() const;
+        // After a checkpoint load: per-camera state that indexes views by the ids of earlier versions is renamed
+        // (PPISP) or restarted with a warning (bilateral grid).
+        void adopt_legacy_view_uids();
+        lfs::Status initialize_calibration_correction();
         std::expected<void, std::string> initialize_bilateral_grid();
         std::expected<void, std::string> initialize_ppisp();
         std::expected<void, std::string> initialize_ppisp_controller();
@@ -813,6 +829,9 @@ namespace lfs::training {
         struct CameraLossHeatmapState {
             std::vector<int> camera_uids;
             std::unordered_map<int, std::size_t> uid_to_slot;
+            // Colours are per photograph: the views of one share its entry, any other camera has its own.
+            std::vector<std::size_t> slot_entry;
+            std::unordered_map<int, std::size_t> photograph_to_entry;
             lfs::core::Tensor latest_loss_gpu;
             lfs::core::Tensor ema_loss_gpu;
             lfs::core::Tensor ema_loss_stage_cpu;
@@ -873,6 +892,12 @@ namespace lfs::training {
         lfs::core::Tensor pipelined_mask_;
         lfs::core::Tensor pipelined_depth_;
         lfs::core::Tensor pipelined_normal_;
+        // Whether the pipelined depth and normals travelled at their own size, and the size their
+        // request named, which the loss fits them to.
+        int pipelined_prior_target_width_ = 0;
+        int pipelined_prior_target_height_ = 0;
+        bool pipelined_depth_own_size_ = false;
+        bool pipelined_normal_own_size_ = false;
 
         // Bilateral grid for appearance modeling (optional)
         std::unique_ptr<BilateralGrid> bilateral_grid_;
@@ -880,7 +905,9 @@ namespace lfs::training {
         // PPISP for physically-plausible ISP appearance modeling (optional)
         std::unique_ptr<PPISP> ppisp_;
         // --pose-opt; null when off.
+        std::unique_ptr<CalibrationCorrection> calibration_correction_;
         std::unique_ptr<CameraPoseRefinement> pose_refinement_;
+        std::vector<core::CameraViewGroup> held_out_pose_groups_;
         // Train-set EXIF EV mean used by seed_exposure (0.5 * (ev - mean)). Unset
         // when the seed was skipped or disabled; eval then uses exposure 0.
         std::optional<float> ppisp_exif_exposure_mean_;
@@ -1029,6 +1056,8 @@ namespace lfs::training {
         // for camera-space priors.
         std::array<float, 9> normal_prior_world_rotation_{1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f};
         std::unordered_map<int, lfs::training::kernels::DepthAnchor> depth_anchors_;
+        // View uid -> the uid earlier versions gave that view, for views whose uid changed.
+        std::unordered_map<int, int> legacy_view_uids_;
         bool depth_anchor_fit_attempted_ = false;
         lfs::training::kernels::DepthPriorType resolved_depth_prior_ =
             lfs::training::kernels::DepthPriorType::Auto;

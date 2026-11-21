@@ -59,6 +59,13 @@ def test_create_plugin_generates_unified_panel_template(tmp_path):
         assert '<link type="text/rcss" href="main_panel.rcss"/>' in panel_rml.read_text()
         assert '<div id="im-root"></div>' in panel_rml.read_text()
         assert ".panel-shell" in panel_rcss.read_text()
+        markup = panel_rml.read_text()
+        assert 'class="plugin-panel example_plugin-panel"' in markup
+        styles = panel_rcss.read_text()
+        assert "text-transform: uppercase;" in styles
+        assert "letter-spacing: 0.8dp;" in styles
+        assert "font-size: 18dp;" in styles
+        assert styles.count("font-weight: 600;") == 2
     finally:
         if original_lf is None:
             sys.modules.pop("lichtfeld", None)

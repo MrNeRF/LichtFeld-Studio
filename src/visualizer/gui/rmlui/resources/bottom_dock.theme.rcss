@@ -1,3 +1,9 @@
+/* Shared border roles and shape scale. */
+
+.dock-grip-bar {
+    border-radius: 2dp;
+}
+
 #tab-bar {
     background-color: @{surface};
 }

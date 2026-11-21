@@ -50,6 +50,9 @@ namespace lfs::core {
                const std::filesystem::path& normal_path = {});
         Camera(const Camera&, const Tensor& transform);
 
+        std::shared_ptr<Camera> make_pinhole_view(const UndistortParams& params, int uid,
+                                                  const std::string& image_name) const;
+
         // Destructor to clean up CUDA stream
         ~Camera();
 
@@ -245,6 +248,18 @@ namespace lfs::core {
         bool has_normal() const noexcept {
             return !_normal_path.empty() && lfs::core::native_fs::exists(_normal_path);
         }
+        // A prior file's size as the dataset loader read it at admission; 0 x 0 when
+        // unknown. Changing the file's path forgets it.
+        struct PriorSize {
+            int width = 0;
+            int height = 0;
+        };
+        PriorSize depth_prior_size() const noexcept { return _depth_prior_size; }
+        PriorSize normal_prior_size() const noexcept { return _normal_prior_size; }
+        void set_prior_sizes(const PriorSize depth, const PriorSize normal) noexcept {
+            _depth_prior_size = depth;
+            _normal_prior_size = normal;
+        }
         bool has_alpha() const noexcept { return _has_alpha; }
         void set_has_alpha(bool v) noexcept { _has_alpha = v; }
         // Set at dataset load when the bound image file is absent. Independent of
@@ -259,6 +274,8 @@ namespace lfs::core {
         }
         int uid() const noexcept { return _uid; }
         int camera_id() const noexcept { return _camera_id; }
+        // The scene camera a pinhole view is cut from; any other camera is its own photograph.
+        int photograph_uid() const noexcept { return _photograph_uid.value_or(_uid); }
 
         float FoVx() const noexcept { return _FoVx; }
         float FoVy() const noexcept { return _FoVy; }
@@ -269,6 +286,7 @@ namespace lfs::core {
         // Moves the camera to the world-to-camera pose [R | T] (R 3x3, T 3), finished on `stream` when this returns.
         // The device transform and position are rewritten in place, so their device pointers stay valid.
         void set_pose(const Tensor& R, const Tensor& T, cudaStream_t stream);
+        void set_pose(const Tensor& R, const Tensor& T, cudaStream_t stream, const float* shared_centre);
         // Moves only the device transform (float [16], row-major) and position (float [3]), ordered on `stream`
         // without a host sync. R() and T() keep the previous pose until set_pose.
         void set_device_pose(const float* w2c, const float* cam_position, cudaStream_t stream);
@@ -295,6 +313,7 @@ namespace lfs::core {
         friend class Scene;
         int _uid = -1;
         int _camera_id = 0;
+        std::optional<int> _photograph_uid;
         float _focal_x = 0.f;
         float _focal_y = 0.f;
         float _center_x = 0.f;
@@ -318,6 +337,8 @@ namespace lfs::core {
         std::filesystem::path _mask_path;
         std::filesystem::path _depth_path;
         std::filesystem::path _normal_path;
+        PriorSize _depth_prior_size;
+        PriorSize _normal_prior_size;
         bool _has_alpha = false;
         bool _has_image = true;
         CameraSplit _split = CameraSplit::Train;

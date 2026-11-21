@@ -918,6 +918,7 @@ namespace lfs::vis {
         params.scene_image = scene.source_image;
         params.scene_image_size = scene.source_size;
         params.scene_image_flip_y = scene.flip_y;
+        params.scene_image_crop_to_fill = scene_image_crop_to_fill_;
         if (external_scene_image_ != VK_NULL_HANDLE &&
             external_scene_image_view_ != VK_NULL_HANDLE &&
             external_scene_image_size_.x > 0 &&

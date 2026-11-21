@@ -169,7 +169,7 @@ namespace lfs::vis::op {
 
             if (drag_active_ && press_point_index_ &&
                 static_cast<size_t>(*press_point_index_) < picked_points_.size()) {
-                (void)applyPointSample(sampleScreenPoint(mm->position), press_point_index_);
+                (void)requestPoint({mm->position, press_point_index_});
                 return OperatorResult::RUNNING_MODAL;
             }
             return OperatorResult::PASS_THROUGH;
@@ -549,7 +549,7 @@ namespace lfs::vis::op {
         const int depth_y = static_cast<int>(render_y);
 
         // Hover, placement and marker dragging all follow the displayed surface.
-        const float depth = rm->getDepthAtPixel(depth_x, depth_y, panel_info->panel, true);
+        const float depth = rm->getSurfaceDepthAtPixel(depth_x, depth_y, {panel_info->render_width, panel_info->render_height}, panel_info->panel);
         if (depth == PointCloudVulkanRenderer::kDepthSamplePending)
             return {.panel = panel_info->panel, .pending = true};
         if (!std::isfinite(depth) || depth <= 0.0f || depth >= 1e9f) {

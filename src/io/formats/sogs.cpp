@@ -1809,10 +1809,14 @@ namespace lfs::io {
                     const uint32_t k = static_cast<uint32_t>(shN_canon.size(1));
                     const size_t float_count = lfs::core::sh_swizzled_float_count(n, k);
                     shN_float_swizzled = Tensor::zeros({float_count}, Device::CUDA, lfs::core::DataType::Float32);
+                    // Written on its home stream, after its zero fill; the palette
+                    // search waits for that stream before reading it.
+                    const cudaStream_t stream =
+                        lfs::core::prepare_inputs_for_stream({&shN_canon}, shN_float_swizzled.stream());
                     lfs::core::reorder_sh_to_swizzled(
                         shN_canon.ptr<float>(),
                         shN_float_swizzled.ptr<float>(),
-                        n, k, k);
+                        n, k, k, stream);
                 }
 
                 sh_kmeans_future = std::async(

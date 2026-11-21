@@ -40,6 +40,7 @@
 #include <shared_mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -293,6 +294,7 @@ namespace lfs::vis {
                 EveryN,
                 Distinct,
                 CropBoxVisibility,
+                Blurry,
             };
             struct CameraSelectionOptions {
                 CameraSelectionOperation operation = CameraSelectionOperation::Random;
@@ -300,6 +302,7 @@ namespace lfs::vis {
                 int every_n = 2;
                 float overlap = 65.0F;
                 float coverage = 40.0F;
+                double sharpness_threshold = 10.0;
                 core::NodeId camera_group_id = core::NULL_NODE;
                 core::NodeId cropbox_id = core::NULL_NODE;
             };
@@ -532,6 +535,9 @@ namespace lfs::vis {
                 };
                 struct CameraSnapshot {
                     core::Uuid uuid;
+                    std::filesystem::path image_path;
+                    bool has_image = true;
+                    bool training_enabled = false;
                     glm::vec3 center{0.0f};
                     glm::vec3 forward{0.0f, 0.0f, 1.0f};
                     float fov = 0.0f;
@@ -545,6 +551,19 @@ namespace lfs::vis {
                     glm::mat4 world_to_camera{1.0f};
                     bool pose_valid = false;
                 };
+                struct SharpnessStamp {
+                    std::uintmax_t size;
+                    std::filesystem::file_time_type modified;
+                    bool operator==(const SharpnessStamp&) const = default;
+                };
+                struct SharpnessEntry {
+                    std::filesystem::path image_path;
+                    SharpnessStamp stamp;
+                    double score;
+                };
+                // Accessed by one selection worker at a time, and reset at job start after join.
+                std::unordered_map<core::Uuid, SharpnessEntry> sharpness_scores;
+                uint64_t sharpness_epoch = 0;
                 JobHandle job;
                 std::atomic<Completion> completion{Completion::Idle};
                 mutable std::mutex mutex;
@@ -559,6 +578,7 @@ namespace lfs::vis {
                 glm::vec3 cropbox_min{0.0F};
                 glm::vec3 cropbox_max{0.0F};
                 bool has_cropbox = false;
+                bool select_nodes = false;
                 std::vector<size_t> selected_indices;
                 std::optional<std::jthread> thread;
             };

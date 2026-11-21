@@ -39,6 +39,7 @@ class MRNFStrategyTest_GrowAndSplitWithoutMaxCapExtendsBookkeepingMasks_Test;
 class MRNFStrategyTest_DeletedMaskCapacityGrowthPreservesExistingRows_Test;
 class MRNFStrategyTest_GrowAndSplitReplacementSkipsZeroWeightCandidates_Test;
 class MRNFStrategyTest_GrowAndSplitReusesFreeSlotsBeforeAppending_Test;
+class MRNFStrategyTest_FreeSlotCountIsExactPastFloat32Precision_Test;
 class MRNFStrategyTest_ChunkedChildPlacementMatchesSingleChunk_Test;
 class MRNFStrategyTest_SerializeRoundTripPreservesFreeMask_Test;
 class MRNFStrategyTest_SerializeRoundTripPreservesLrScheduleState_Test;
@@ -64,6 +65,9 @@ namespace lfs::training {
     inline constexpr float kBlobSeedOpacity = 0.5f;
     inline constexpr double kBlobSeedCapacityFraction = 0.01;
     inline constexpr float kFarMaskOrbits = 2.0f;
+
+    // Child rows of one split chunk in parent order: the reused free slots, then the appended rows.
+    lfs::core::Tensor split_child_rows(const lfs::core::Tensor& reused_rows, size_t first_appended_row, size_t appended);
 
     class MRNF : public IStrategy, public ICheckpointStateAdopter {
     public:
@@ -128,6 +132,7 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_DeletedMaskCapacityGrowthPreservesExistingRows_Test;
         friend class ::MRNFStrategyTest_GrowAndSplitReplacementSkipsZeroWeightCandidates_Test;
         friend class ::MRNFStrategyTest_GrowAndSplitReusesFreeSlotsBeforeAppending_Test;
+        friend class ::MRNFStrategyTest_FreeSlotCountIsExactPastFloat32Precision_Test;
         friend class ::MRNFStrategyTest_ChunkedChildPlacementMatchesSingleChunk_Test;
         friend class ::MRNFStrategyTest_SerializeRoundTripPreservesFreeMask_Test;
         friend class ::MRNFStrategyTest_SerializeRoundTripPreservesLrScheduleState_Test;

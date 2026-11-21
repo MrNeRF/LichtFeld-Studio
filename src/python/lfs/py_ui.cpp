@@ -70,6 +70,7 @@
 #include "visualizer/tools/unified_tool_registry.hpp"
 #include "visualizer/training/training_manager.hpp"
 #include "visualizer/visualizer.hpp"
+#include "vr/openxr_runtimes.hpp"
 #include "window/window_manager.hpp"
 #include <RmlUi/Core/Core.h>
 #include <RmlUi/Core/ElementDocument.h>
@@ -6239,6 +6240,7 @@ namespace lfs::python {
                 result["resolution_scale"] = preferences.resolution_scale;
                 result["scene_units_per_meter"] = preferences.scene_units_per_meter;
                 result["move_speed"] = preferences.move_speed;
+                result["show_hands"] = preferences.show_hands;
                 return result;
             },
             "Get the VR preferences");
@@ -6246,18 +6248,47 @@ namespace lfs::python {
         m.def(
             "set_vr_preferences",
             [](const bool enabled, const float resolution_scale, const float scene_units_per_meter,
-               const float move_speed, const bool persist) {
+               const float move_speed, const bool show_hands, const bool persist) {
                 invoke_on_viewer([=] {
                     lfs::core::events::cmd::SetVrPreferences{.enabled = enabled,
                                                              .resolution_scale = resolution_scale,
                                                              .scene_units_per_meter = scene_units_per_meter,
                                                              .move_speed = move_speed,
+                                                             .show_hands = show_hands,
                                                              .persist = persist}
                         .emit();
                 });
             },
             nb::arg("enabled"), nb::arg("resolution_scale"), nb::arg("scene_units_per_meter"), nb::arg("move_speed"),
-            nb::arg("persist") = true, "Set the VR preferences; VR support takes effect after restart");
+            nb::arg("show_hands") = true, nb::arg("persist") = true,
+            "Set the VR preferences; VR support takes effect after restart");
+
+        m.def(
+            "get_vr_runtimes",
+            [] {
+                const auto runtimes = vis::vr::installedOpenXrRuntimes();
+                nb::dict result;
+                result["active"] = runtimes.active;
+                result["selected"] = vis::UserPreferences::instance().vrRuntime();
+                nb::list installed;
+                for (const auto& runtime : runtimes.installed) {
+                    nb::dict entry;
+                    entry["name"] = runtime.name;
+                    entry["manifest"] = runtime.manifest;
+                    installed.append(entry);
+                }
+                result["installed"] = installed;
+                return result;
+            },
+            "Get the OpenXR runtimes installed on this computer, the name of the system's active one, and the "
+            "manifest of the one chosen for VR (empty: the active one)");
+
+        m.def(
+            "set_vr_runtime",
+            [](const std::string& manifest) { vis::UserPreferences::instance().setVrRuntime(manifest); },
+            nb::arg("manifest"),
+            "Choose the OpenXR runtime VR uses by its manifest path; empty follows the system's active runtime. "
+            "Takes effect after restart");
 
         m.def(
             "get_mcp_port_override",

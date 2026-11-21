@@ -4509,9 +4509,37 @@ namespace lfs::io::project {
         const ChunkKey sequencer_key = impl_->key(FOURCC_SEQR);
         const ChunkKey metrics_key = impl_->key(FOURCC_METR);
 
+        std::optional<ReferencesChapter> staged_references;
+        if (!impl_->source_path && !is_autosave && !options.leave_unbound) {
+            // The dataset was captured before this project had a directory.
+            auto dataset = staged_project->dataset_reference();
+            if (!dataset)
+                return std::move(dataset).error();
+            if (*dataset && !find_dataset_source(**dataset)) {
+                auto reference = impl_->references.find(**dataset);
+                if (!reference)
+                    return std::move(reference).error();
+                if (*reference && (*reference)->locator.base == LocatorBase::Absolute) {
+                    const auto live_path = lfs::core::utf8_to_path((*reference)->locator.preferred);
+                    if (live_path.is_absolute()) {
+                        auto locator = make_path_reference_locator(normalized->parent_path(), live_path);
+                        if (locator.base == LocatorBase::Project) {
+                            const auto relative = lfs::core::utf8_to_path(locator.preferred);
+                            if (*relative.begin() != "..") {
+                                if ((*reference)->locator.absolute_fallback)
+                                    locator.absolute_fallback = (*reference)->locator.absolute_fallback;
+                                staged_references = impl_->references;
+                                if (auto updated = staged_references->update_locator(**dataset, locator); !updated)
+                                    return std::move(updated).error();
+                            }
+                        }
+                    }
+                }
+            }
+        }
         if (impl_->dirty_or_new(references_key)) {
-            add_encoded(references_key, impl_->references.to_bytes(),
-                        json_options());
+            const auto& references = staged_references ? *staged_references : impl_->references;
+            add_encoded(references_key, references.to_bytes(), json_options());
         }
         if (impl_->dirty_or_new(scene_key)) {
             add_encoded(scene_key, impl_->scene_graph.to_bytes(),
@@ -5463,6 +5491,8 @@ namespace lfs::io::project {
         }
 
         impl_->project = std::move(*staged_project);
+        if (staged_references)
+            impl_->references = std::move(*staged_references);
         impl_->content_hashes = std::move(hashes);
         if (auto refreshed = impl_->refresh_source_rows(*normalized);
             !refreshed) {

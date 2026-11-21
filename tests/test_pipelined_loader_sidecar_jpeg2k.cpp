@@ -379,35 +379,71 @@ TEST_P(PipelinedDepthDecode, PreservesSamplesOnColdAndCachedReads) {
     request.sequence_id = 1;
     request.aux_target_width = resize ? width / 2 : width;
     request.aux_target_height = resize ? height / 2 : height;
+    // A prior larger than its target is resized to it by the loader, which caches the result;
+    // one no larger travels at its own size and the loss enlarges it.
+    const bool own_size = !resize;
+    request.depth_own_size = own_size;
+    request.normal_own_size = own_size;
+    // What the loader delivers for a larger prior, and the loss's fit for one at its own size.
     const auto reference = lfs::core::resize_depth_prior(
                                lfs::core::Tensor::from_vector(expected, {size_t(height), size_t(width)}, lfs::core::Device::CUDA),
                                request.aux_target_height, request.aux_target_width)
                                .cpu()
                                .to_vector();
+    const auto fitted = [&](const lfs::io::ReadyImage& ready) {
+        if (!own_size) {
+            EXPECT_FALSE(ready.depth_own_size);
+            EXPECT_EQ(ready.depth->shape(),
+                      (lfs::core::TensorShape({size_t(request.aux_target_height), size_t(request.aux_target_width)})));
+            return ready.depth->cpu().to_vector();
+        }
+        EXPECT_EQ(ready.depth->shape(), (lfs::core::TensorShape({size_t(height), size_t(width)})));
+        EXPECT_TRUE(ready.depth_own_size);
+        EXPECT_EQ(ready.prior_target_width, request.aux_target_width);
+        EXPECT_EQ(ready.prior_target_height, request.aux_target_height);
+        return lfs::core::fit_depth_prior(*ready.depth, ready.prior_target_height, ready.prior_target_width,
+                                          request.aux_target_height, request.aux_target_width)
+            .cpu()
+            .to_vector();
+    };
+    std::vector<float> first_visit;
     for (int pass = 0; pass < 2; ++pass) {
         SCOPED_TRACE(pass);
         const auto start = std::chrono::steady_clock::now();
         loader.prefetch({request});
         const auto ready = wait_for_ready(loader);
         ASSERT_TRUE(ready.depth.has_value());
-        const auto values = ready.depth->cpu().to_vector();
+        const auto delivered = ready.depth->cpu().to_vector();
         RecordProperty(pass == 0 ? "cold_ms" : "cached_ms",
                        std::to_string(std::chrono::duration<double, std::milli>(
                                           std::chrono::steady_clock::now() - start)
                                           .count()));
         const auto cache = loader.get_stats();
         RecordProperty("total_cache_bytes", std::to_string(cache.jpeg_cache_bytes + cache.spill_cache_bytes));
-        RecordProperty("depth_bytes", std::to_string(values.size() * sizeof(float)));
+        RecordProperty("depth_bytes", std::to_string(delivered.size() * sizeof(float)));
+        const auto values = fitted(ready);
         ASSERT_EQ(values.size(), reference.size());
+        // A resized prior is cached as 16-bit J2K of [0,1] depth, one rounding step from the first visit.
+        const float tolerance = own_size || pass == 0 ? 1e-6f : 1.0f / 65535.0f;
         for (size_t i = 0; i < values.size(); ++i) {
             if (bits == 32)
                 ASSERT_EQ(values[i], reference[i]) << "sample " << i;
             else
-                ASSERT_NEAR(values[i], reference[i], pass == 0 ? 1e-6f : 1.0f / 65535.0f) << "sample " << i;
+                ASSERT_NEAR(values[i], reference[i], tolerance) << "sample " << i;
         }
         if (pass == 0) {
+            first_visit = delivered;
             ASSERT_TRUE(fs::remove(depth_path));
             ASSERT_FALSE(fs::exists(depth_path));
+        } else if (own_size && (png || bits == 32)) {
+            // A cached visit repeats the first visit's decode.
+            ASSERT_EQ(delivered, first_visit);
+        } else if (own_size) {
+            // Integer TIFF depth: the reader divides by 255 or 65535, the 16-bit cache
+            // multiplies by 1/65535, so the two can differ in the last bit.
+            ASSERT_EQ(delivered.size(), first_visit.size());
+            for (size_t i = 0; i < delivered.size(); ++i)
+                ASSERT_NEAR(delivered[i], first_visit[i], 1.2e-7f) << "sample " << i;
         }
         ++request.sequence_id;
     }
@@ -420,7 +456,7 @@ TEST_P(PipelinedDepthDecode, PreservesSamplesOnColdAndCachedReads) {
             auto ready = wait_for_ready(loader);
             ASSERT_TRUE(ready.depth.has_value());
             ASSERT_TRUE(ready.normal.has_value());
-            EXPECT_EQ(ready.depth->cpu().to_vector(), reference);
+            EXPECT_EQ(fitted(ready), reference);
             if (ready.normal_ready_event) {
                 ASSERT_EQ(cudaEventSynchronize(ready.normal_ready_event), cudaSuccess);
                 ASSERT_EQ(cudaEventDestroy(ready.normal_ready_event), cudaSuccess);

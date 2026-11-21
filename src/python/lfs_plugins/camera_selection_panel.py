@@ -11,6 +11,7 @@ from .ui import RuntimeState, PanelStateBinding, native_value as _native_store_v
 SCRUB_FIELD_DEFS = {
     "percentage": ScrubFieldSpec(0, 100, 1, "%d", data_type=int),
     "overlap": ScrubFieldSpec(0, 100, 1, "%d", data_type=int),
+    "sharpness_threshold": ScrubFieldSpec(0, 100, 1, "%d", data_type=int),
     "coverage": ScrubFieldSpec(0, 100, 1, "%d", data_type=int),
 }
 OPERATION_LABEL_KEYS = {
@@ -18,6 +19,7 @@ OPERATION_LABEL_KEYS = {
     "every_n": "scene.select_every_n_cameras",
     "distinct": "scene.select_distinct_cameras",
     "cropbox_visibility": "scene.select_cropbox_cameras",
+    "blurry": "scene.select_blurry_cameras",
 }
 
 
@@ -28,6 +30,8 @@ class CameraSelectionPanel(Panel):
         self._operation = "random"
         self._camera_group_id = 0
         self._percentage, self._every_n = 25, 2
+        self._sharpness_threshold = 10
+        self._progress = 0
         self._overlap, self._coverage, self._cropbox_id = 65, 40, ""
         self._local_error = ""
         self._task_error = ""
@@ -44,12 +48,14 @@ class CameraSelectionPanel(Panel):
             return
         model.bind_func("panel_label", self._panel_label)
         for name, operation in (("is_random", "random"), ("is_every_n", "every_n"),
-                                ("is_distinct", "distinct"), ("is_cropbox", "cropbox_visibility")):
+                                ("is_distinct", "distinct"), ("is_cropbox", "cropbox_visibility"), ("is_blurry", "blurry")):
             model.bind_func(name, lambda operation=operation: self._operation == operation)
         model.bind("percentage", lambda: str(self._percentage), lambda value: self._set_int("_percentage", value, 0, 100))
         model.bind("every_n", lambda: str(self._every_n), lambda value: self._set_int("_every_n", value, 1, 1000000))
         model.bind("overlap", lambda: str(self._overlap), lambda value: self._set_int("_overlap", value, 0, 100))
         model.bind("coverage", lambda: str(self._coverage), lambda value: self._set_int("_coverage", value, 0, 100))
+        model.bind("sharpness_threshold", lambda: str(self._sharpness_threshold), lambda value: self._set_int("_sharpness_threshold", value, 0, 100))
+        model.bind_func("progress", lambda: str(self._progress))
         model.bind("cropbox_id", lambda: self._cropbox_id, self._set_cropbox)
         model.bind_record_list("cropboxes")
         model.bind_func("message", lambda: self._local_error or self._task_error)
@@ -95,7 +101,7 @@ class CameraSelectionPanel(Panel):
         if operation == self._operation and group_id == self._camera_group_id:
             return False
         self._operation, self._camera_group_id, self._local_error = operation, group_id, ""
-        self._dirty("panel_label", "is_random", "is_every_n", "is_distinct", "is_cropbox", "cropboxes", "message")
+        self._dirty("panel_label", "is_random", "is_every_n", "is_distinct", "is_cropbox", "is_blurry", "cropboxes", "message")
         return True
 
     def _set_int(self, attribute, value, minimum, maximum):
@@ -144,11 +150,13 @@ class CameraSelectionPanel(Panel):
     def _sync_task_state(self, force=False):
         state = self._task_state()
         running = bool(state.get("active", False))
-        error = str(state.get("error", "") or "")
-        if not force and running == self._running and error == self._task_error:
+        notice = state.get("stage") if not running and state.get("status", "completed") == "completed" else ""
+        error = str(state.get("error") or notice or "")
+        progress = round(100 * max(0.0, min(1.0, float(state.get("progress", 0.0)))))
+        if not force and running == self._running and error == self._task_error and progress == self._progress:
             return False
-        self._running, self._task_error = running, error
-        self._dirty("running", "message")
+        self._running, self._task_error, self._progress = running, error, progress
+        self._dirty("running", "message", "progress")
         return True
 
     def _apply(self, *_):
@@ -156,7 +164,7 @@ class CameraSelectionPanel(Panel):
             if self._operation == "cropbox_visibility" and not self._cropbox_id:
                 raise RuntimeError(lf.ui.tr("scene.camera_selection_cropbox_required"))
             lf.camera_selection_start(self._operation, self._camera_group_id, self._percentage, self._every_n,
-                                      self._overlap, self._coverage, int(self._cropbox_id or 0))
+                                      self._overlap, self._coverage, int(self._cropbox_id or 0), self._sharpness_threshold)
         except Exception as error:
             self._local_error = str(error)
             self._dirty("message")

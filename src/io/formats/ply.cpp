@@ -1852,6 +1852,9 @@ namespace lfs::io {
             Tensor staging = Tensor::empty(
                 TensorShape({staging_floats}), Device::CUDA, DataType::Float32, false);
             staging.set_name("ply.shN_q16_staging");
+            // The staging block comes from the current stream's cache; the encode
+            // stream waits for that stream's last users of it before overwriting it.
+            staging.sync_to_stream(stream);
 
             auto* const codes_u16 = static_cast<std::uint16_t*>(
                 lfs::core::resolve_exportable_device_ptr(codes));

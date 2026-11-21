@@ -186,7 +186,8 @@ namespace lfs::vis::gui {
         bool content_dirty_ = true;
 
         std::string base_rcss_;
-        bool base_rcss_loaded_ = false;
+        std::string panel_theme_rcss_;
+        bool stylesheets_loaded_ = false;
         std::size_t last_theme_signature_ = 0;
         bool has_theme_signature_ = false;
         bool has_text_focus_ = false;

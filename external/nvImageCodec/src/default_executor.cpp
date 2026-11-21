@@ -58,7 +58,7 @@ namespace nvimgcodec {
             thread_pool.addWork(task_wrapper);
             if (start_immediately)
                 thread_pool.run();
-        } catch (const std::runtime_error& e) {
+        } catch (const std::exception& e) {
             NVIMGCODEC_LOG_ERROR(logger_, e.what());
             return NVIMGCODEC_STATUS_INTERNAL_ERROR;
         }

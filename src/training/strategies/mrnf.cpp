@@ -499,6 +499,22 @@ namespace lfs::training {
 
     } // namespace
 
+    lfs::core::Tensor split_child_rows(const lfs::core::Tensor& reused_rows, const size_t first_appended_row,
+                                       const size_t appended) {
+        using namespace lfs::core;
+        assert(!reused_rows.is_valid() || (reused_rows.ndim() == 1 && reused_rows.dtype() == DataType::Int64));
+        std::vector<Tensor> rows;
+        if (reused_rows.is_valid() && reused_rows.numel() > 0)
+            rows.push_back(reused_rows);
+        if (appended > 0)
+            rows.push_back(Tensor::arange(static_cast<int64_t>(first_appended_row),
+                                          static_cast<int64_t>(first_appended_row + appended), 1,
+                                          Device::CUDA, DataType::Int64));
+        if (rows.empty())
+            return Tensor::empty({0}, Device::CUDA, DataType::Int64);
+        return (rows.size() == 1 ? rows[0] : Tensor::cat(rows, 0)).contiguous();
+    }
+
     MRNF::MRNF(lfs::core::SplatData& splat_data) : _splat_data(&splat_data) {}
 
     void MRNF::initialize(const lfs::core::param::OptimizationParameters& optimParams) {
@@ -1779,20 +1795,16 @@ namespace lfs::training {
                 &shn_batch);
             n_append += appended;
             if (_ray_depth_state.is_valid() && append_start + appended > 0) {
-                std::vector<Tensor> children;
-                if (append_start > 0)
-                    children.push_back(filled);
-                if (appended > 0)
-                    children.push_back(Tensor::arange(static_cast<float>(rows_before_append),
-                                                      static_cast<float>(rows_before_append + appended), 1.0f,
-                                                      Device::CUDA)
-                                           .to(DataType::Int64));
-                const Tensor child_rows =
-                    (children.size() == 1 ? children[0] : Tensor::cat(children, 0)).contiguous();
-                const Tensor parents = chunk_indices.slice(0, 0, append_start + appended).contiguous();
+                const Tensor child_rows = split_child_rows(filled, rows_before_append, appended);
+                const size_t inherited = append_start + appended;
+                const Tensor parents = chunk_indices.slice(0, 0, inherited).contiguous();
+                LFS_ASSERT_MSG(child_rows.ndim() == 1 && child_rows.numel() == inherited &&
+                                   child_rows.dtype() == DataType::Int64 &&
+                                   parents.ndim() == 1 && parents.numel() == inherited,
+                               "MRNF ray-depth inheritance needs one parent and one child row per split");
                 mrnf_strategy::launch_ray_depth_inherit(
                     _ray_depth_state.ptr<float>(), parents.ptr<int64_t>(), child_rows.ptr<int64_t>(),
-                    append_start + appended);
+                    inherited);
             }
             clear_rendered_support(chunk_indices);
             shn_batch.flush();
@@ -2225,9 +2237,8 @@ namespace lfs::training {
         if (current_size == 0)
             return 0;
 
-        auto active_region = _free_mask.slice(0, 0, current_size);
-        const size_t free_count_val = static_cast<size_t>(active_region.sum_scalar());
-        return current_size - free_count_val;
+        const auto active_region = _free_mask.slice(0, 0, current_size);
+        return current_size - active_region.count_nonzero();
     }
 
     size_t MRNF::free_count() const {
@@ -2239,8 +2250,8 @@ namespace lfs::training {
         if (current_size == 0)
             return 0;
 
-        auto active_region = _free_mask.slice(0, 0, current_size);
-        return static_cast<size_t>(active_region.sum_scalar());
+        const auto active_region = _free_mask.slice(0, 0, current_size);
+        return active_region.count_nonzero();
     }
 
     lfs::core::Tensor MRNF::get_active_indices() const {

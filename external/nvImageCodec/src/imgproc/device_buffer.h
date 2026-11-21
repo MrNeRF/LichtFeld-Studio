@@ -49,6 +49,18 @@ namespace nvimgcodec {
         DeleterBackend backend = DeleterBackend::Unknown;
     };
 
+    // Wraps `data` in a `shared_ptr` whose deleter invokes `strategy->fn` when
+    // the last reference is dropped -- except once `IsProcessExiting()` is true
+    // (see imgproc/exit_guard.h), in which case the deleter intentionally skips
+    // `fn` and leaks `data` instead. This is the single place `DeviceBuffer` and
+    // `PinnedBuffer` release their underlying allocation, so it is also the
+    // single place that needs to know CUDA/the allocator may already be
+    // unavailable near process exit. Callers need not arm the exit guard
+    // themselves: `MakeBufferOwner` calls `IsProcessExiting()` on this normal
+    // allocation path, which registers the guard's atexit handler early enough for
+    // the deleter to observe process exit later.
+    std::shared_ptr<void> MakeBufferOwner(void* data, const std::shared_ptr<DeleterStrategy>& strategy);
+
     struct DeviceBuffer {
         explicit DeviceBuffer(nvimgcodecDeviceAllocator_t* device_allocator = nullptr);
         void resize(size_t new_size, cudaStream_t new_stream);

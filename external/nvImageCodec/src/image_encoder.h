@@ -30,6 +30,7 @@ namespace nvimgcodec {
 
     class ImageEncoder : public IImageEncoder {
     public:
+        // Throws if the plugin fails to create the encoder.
         ImageEncoder(const nvimgcodecEncoderDesc_t* desc, const nvimgcodecExecutionParams_t* exec_params, const char* options);
         ~ImageEncoder() override;
         nvimgcodecBackendKind_t getBackendKind() const override;

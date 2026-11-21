@@ -32,6 +32,7 @@ namespace nvimgcodec {
         std::string getEncoderId() const override;
         std::string getCodecName() const override;
         nvimgcodecBackendKind_t getBackendKind() const override;
+        const nvimgcodecEncoderDesc_t* getEncoderDesc() const override;
         std::unique_ptr<IImageEncoder> createEncoder(
             const nvimgcodecExecutionParams_t* exec_params, const char* options) const override;
 
