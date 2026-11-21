@@ -33,6 +33,7 @@ target_link_libraries(lfs_preprocessing
     PUBLIC
         lfs_core
     PRIVATE
+        lfs_video               # Frame extraction used by video_mask_extraction.cpp
         lfs_io                  # Scene import (Loader) for depth-anchor precompute
         lfs_depth_anchor        # Shared depth-anchor fit + sidecar cache
         CURL::libcurl

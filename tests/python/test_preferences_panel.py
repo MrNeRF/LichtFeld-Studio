@@ -90,7 +90,12 @@ def preferences_panel_module(monkeypatch):
         camera_browse_repeat_rate=5.0,
         zoom_speed=11.0,
         navigation_speed=10.0,
-        vr_preferences={"enabled": False, "resolution_scale": 0.7, "scene_units_per_meter": 1.0, "move_speed": 1.5},
+        vr_preferences={"enabled": False, "resolution_scale": 0.7, "scene_units_per_meter": 1.0, "move_speed": 1.5,
+                        "show_hands": True},
+        vr_runtimes={"active": "SteamVR", "selected": "", "installed": [
+            {"name": "Oculus OpenXR", "manifest": "C:/oculus/oculus_openxr_64.json"},
+            {"name": "SteamVR", "manifest": "C:/steam/steamxr_win64.json"},
+        ]},
         vr_writes=[],
         project_location="",
         embed_dataset_by_default=False,
@@ -181,6 +186,8 @@ def preferences_panel_module(monkeypatch):
             state.vr_preferences.update(zip(state.vr_preferences, values)),
             state.vr_writes.append(persist)),
         get_vr_state=lambda: {"available": False, "active": False, "status": "VR support is off."},
+        get_vr_runtimes=lambda: {**state.vr_runtimes, "installed": list(state.vr_runtimes["installed"])},
+        set_vr_runtime=lambda manifest: state.vr_runtimes.update(selected=manifest),
         get_project_location=lambda: state.project_location or "/home/tester/.lichtfeld/projects",
         get_project_location_preference=lambda: state.project_location,
         get_default_project_location=lambda: "/home/tester/.lichtfeld/projects",
@@ -359,6 +366,8 @@ def preferences_panel_module(monkeypatch):
             TOOL_SCALE_DISTANCE=SimpleNamespace(name="TOOL_SCALE_DISTANCE", value=94),
             PIE_MENU=SimpleNamespace(name="PIE_MENU", value=62),
             TOGGLE_UI=SimpleNamespace(name="TOGGLE_UI", value=63),
+            TOGGLE_LEFT_DOCK=SimpleNamespace(name="TOGGLE_LEFT_DOCK", value=110),
+            TOGGLE_RIGHT_DOCK=SimpleNamespace(name="TOGGLE_RIGHT_DOCK", value=111),
             TOGGLE_FULLSCREEN=SimpleNamespace(name="TOGGLE_FULLSCREEN", value=64),
             OPEN_PREFERENCES=SimpleNamespace(name="OPEN_PREFERENCES", value=65),
             TOGGLE_MCP_SERVER=SimpleNamespace(name="TOGGLE_MCP_SERVER", value=66),
@@ -1470,11 +1479,47 @@ def test_vr_page_edits_all_preferences_and_resets_only_vr(preferences_panel_modu
     assert panel._get_scrub_value("vr_move_speed") == 3.0
     panel._commit_scrub_value("vr_move_speed", 3)
     assert state.vr_writes == [True, False, True]
-    assert state.vr_preferences == {"enabled": True, "resolution_scale": 0.7, "scene_units_per_meter": 1.0, "move_speed": 3.0}
+    assert state.vr_preferences == {"enabled": True, "resolution_scale": 0.7, "scene_units_per_meter": 1.0, "move_speed": 3.0,
+                                    "show_hands": True}
+    panel._set_vr_preference("show_hands", 0)
+    assert state.vr_preferences["show_hands"] is False
     panel._set_zoom_speed(42)
     panel._reset_section("input_vr")
     assert state.vr_preferences == module.PreferencesPanel.VR_PREFERENCE_DEFAULTS
     assert state.zoom_speed == 42
+
+
+def test_vr_page_lists_the_installed_runtimes_after_automatic(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._refresh_selection = lambda: None
+    panel._load_vr_runtimes()
+    # Automatic comes first and names the runtime the system has active.
+    assert [manifest for manifest, _name in panel._vr_runtime_catalog] == [
+        "", "C:/oculus/oculus_openxr_64.json", "C:/steam/steamxr_win64.json"]
+    assert panel._vr_runtime_catalog[0][1] == "preferences.vr_runtime_automatic_named"
+    assert panel._vr_runtime_index() == "0"
+
+    panel._set_vr_runtime_index("1")
+    assert state.vr_runtimes["selected"] == "C:/oculus/oculus_openxr_64.json"
+    assert panel._vr_runtime_index() == "1"
+    panel._set_vr_runtime_index("7")
+    assert state.vr_runtimes["selected"] == "C:/oculus/oculus_openxr_64.json"
+
+    # A chosen runtime that is no longer installed stays visible as the choice.
+    state.vr_runtimes["selected"] = "C:/gone/runtime.json"
+    panel._load_vr_runtimes()
+    assert panel._vr_runtime_catalog[-1] == ("C:/gone/runtime.json", "C:/gone/runtime.json")
+    assert panel._vr_runtime_index() == "3"
+
+    panel._reset_section("input_vr")
+    assert state.vr_runtimes["selected"] == ""
+    assert panel._vr_runtime_index() == "0"
+
+    # Without an active runtime, Automatic has no name to show.
+    state.vr_runtimes["active"] = ""
+    panel._load_vr_runtimes()
+    assert panel._vr_runtime_catalog[0] == ("", "preferences.vr_runtime_automatic")
 
 
 def test_input_group_collapses_without_changing_page_and_children_reopen_it(preferences_panel_module):
@@ -1943,3 +1988,109 @@ def test_draft_change_handler_keeps_draft_until_enter(preferences_panel_module):
     on_change(None, typing, [])
     on_change(None, enter, ["45"])
     assert calls == ["4", "45", "commit"]
+
+
+
+def test_model_preferences_preserves_metadata_and_renders_native_state(preferences_panel_module, monkeypatch):
+    module, _state = preferences_panel_module
+    section = module.ModelPreferencesSection()
+    records = {}
+    section.handle = SimpleNamespace(update_record_list=lambda key, rows: records.update({key: rows}), dirty=lambda key: None)
+    native = {"id": 0, "name": "SAM 2.1", "category_key": "masking", "path": "/cache/sam.lfw",
+              "bytes": 4096, "present": True, "busy": False, "status": "installed", "message": "verified",
+              "can_download": True, "can_verify": True, "can_remove": True}
+    snapshot = {"models": [native], "job": {"model": 0, "action": "verify"}}
+    monkeypatch.setattr(module.lf.ui, "model_cache_snapshot", lambda: snapshot, raising=False)
+    section.sync(force=True)
+    assert records["managed_models"][0]["status"] == module.lf.ui.tr("preferences.models.verified")
+    native.update(busy=True, present=False, bytes=0, status="in_use", message="in_use",
+                  can_download=False, can_verify=False, can_remove=False)
+    section.sync(force=True)
+    row = records["managed_models"][0]
+    assert row["path"] == "/cache/sam.lfw" and row["size"]
+    starts = []
+    monkeypatch.setattr(module.lf.ui, "model_cache_start", lambda *args: starts.append(args), raising=False)
+    section._action(None, None, ["0", "verify"])
+    section._action(None, None, ["0", "remove"])
+    assert not starts
+    native.update(busy=False, status="missing", message="missing", can_download=True)
+    section.sync(force=True)
+    row = records["managed_models"][0]
+    assert not row["path"] and not row["can_open"] and not row["available"] and not row["size"]
+    native.update(status="failed", message="failed", error="bad checksum")
+    section.sync(force=True)
+    assert records["managed_models"][0]["failed"]
+    assert records["managed_models"][0]["detail"] == "bad checksum"
+    native.update(status="working", message="downloading", error="", running=True, show_progress=True, progress=.42)
+    monkeypatch.setattr(module.lf.ui, "tr", lambda key: "{stage} {percent}%" if key == "gallery.status.progress" else key)
+    section.sync(force=True)
+    assert records["managed_models"][0]["status"] == "preferences.models.downloading 42%"
+    native.update(message="verifying", progress=.8)
+    section.sync(force=True)
+    assert records["managed_models"][0]["status"] == "preferences.models.verifying 80%"
+
+
+@pytest.mark.parametrize("retained", [False, True])
+def test_model_preferences_closed_confirmation_does_not_remove(preferences_panel_module, monkeypatch, retained):
+    module, _state = preferences_panel_module
+    section = module.ModelPreferencesSection()
+    section.handle = object()
+    section.rows = [{"id": 0, "name": "SAM 2.1"}]
+    section._records = [{"id": "0", "can_remove": True}]
+    dialogs = []
+    starts = []
+    monkeypatch.setattr(module.lf.ui, "confirm_dialog", lambda *args: dialogs.append(args), raising=False)
+    monkeypatch.setattr(module.lf.ui, "model_cache_start", lambda *args: starts.append(args), raising=False)
+    section._action(None, None, ["0", "remove"])
+    if retained:
+        section.cancel_pending_confirmation()
+    else:
+        section.handle = None
+    title, _message, _buttons, callback = dialogs[0]
+    callback(title)
+    assert starts == []
+
+
+def test_model_preferences_recovery_clears_failure_and_cancel_matches_job(preferences_panel_module, monkeypatch):
+    module, _state = preferences_panel_module
+    section = module.ModelPreferencesSection()
+    section.handle = SimpleNamespace(update_record_list=lambda *args: None, dirty=lambda key: None)
+    snapshot = {"models": [], "job": {"id": 7, "running": False, "error": "disk full"}}
+    monkeypatch.setattr(module.lf.ui, "model_cache_snapshot", lambda: snapshot, raising=False)
+    section.sync(force=True)
+    assert section.error == "disk full"
+    assert "disk full" not in section.message
+    snapshot["job"]["error"] = "SHA-256 mismatch: " + "0123456789abcdef" * 20
+    section.sync(force=True)
+    assert section.error == snapshot["job"]["error"]
+    assert "0123456789abcdef" not in section.message
+    snapshot["job"].update(error="/cache/sam.lfw", error_code="FailedPrecondition")
+    section.sync(force=True)
+    assert section.error == module.lf.ui.tr("preferences.models.locked")
+    snapshot["job"] = {"id": 8, "running": True, "error": ""}
+    section.sync(force=True)
+    assert not section.error
+    canceled = []
+    monkeypatch.setattr(module.lf.ui, "model_cache_cancel", lambda job: canceled.append(job), raising=False)
+    section._cancel()
+    assert canceled == [8]
+
+
+def test_model_preferences_unchanged_poll_preserves_rows_and_focus(preferences_panel_module, monkeypatch):
+    module, _state = preferences_panel_module
+    section = module.ModelPreferencesSection()
+    updates = []
+    dirty = []
+    section.handle = SimpleNamespace(
+        update_record_list=lambda *args: updates.append(args), dirty=dirty.append,
+    )
+    snapshot = {"models": [{"id": 0, "name": "SAM 2.1", "category_key": "masking",
+                            "path": "/cache/sam.lfw", "bytes": 4096, "present": True,
+                            "status": "installed", "message": "installed", "can_download": True,
+                            "can_verify": True, "can_remove": True, "busy": False, "error": ""}], "job": {}}
+    monkeypatch.setattr(module.lf.ui, "model_cache_snapshot", lambda: snapshot, raising=False)
+    section.sync(force=True)
+    changes = list(dirty)
+    section.sync(force=True)
+    assert len(updates) == 1
+    assert dirty == changes

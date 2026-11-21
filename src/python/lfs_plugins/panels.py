@@ -254,8 +254,10 @@ def _build_builtin_panel_steps(lf):
 
     def training_panel():
         from .training_panel import TrainingPanel
+        from .external_training_panel import ExternalTrainingPanel
 
         lf.register_class(TrainingPanel)
+        lf.register_class(ExternalTrainingPanel)
 
     def import_panels():
         _register_lazy_panel(lf, "new_project")
@@ -325,7 +327,12 @@ def _build_builtin_panel_steps(lf):
             from .image_preview_panel import open_camera_preview_by_uid
             return open_camera_preview_by_uid(uid)
 
+        def open_extracted_preview(paths, weights, sequence):
+            from .image_preview_panel import open_extracted_frame_preview
+            return open_extracted_frame_preview(paths, weights, sequence)
+
         lf.ui.on_open_camera_preview(open_camera_preview)
+        lf.ui.on_open_image_preview(open_extracted_preview, include_sequence=True)
 
     def histogram_panel():
         _register_lazy_panel(lf, "histogram")

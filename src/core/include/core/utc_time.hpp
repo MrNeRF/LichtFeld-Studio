@@ -6,11 +6,20 @@
 
 #include <chrono>
 #include <ctime>
+#include <filesystem>
 #include <iomanip>
 #include <sstream>
 #include <string>
 
 namespace lfs::core {
+
+    [[nodiscard]] inline auto file_time_to_system_clock(const std::filesystem::file_time_type value) {
+#if defined(_MSC_VER)
+        return std::chrono::clock_cast<std::chrono::system_clock>(value);
+#else
+        return std::filesystem::file_time_type::clock::to_sys(value);
+#endif
+    }
 
     // ISO-8601 UTC timestamp: YYYY-MM-DDTHH:MM:SSZ
     [[nodiscard]] inline std::string utc_now() {

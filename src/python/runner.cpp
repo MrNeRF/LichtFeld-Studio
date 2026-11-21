@@ -1755,14 +1755,14 @@ _repl_out.close()
         }
     }
 
-    lfs::Result<void> run_scripts(const std::vector<std::filesystem::path>& scripts) {
+    lfs::Result<void> run_scripts(const std::vector<std::filesystem::path>& scripts, const bool load_plugins) {
         if (scripts.empty()) {
             return {};
         }
 
         if (auto status = ensure_initialized(); !status)
             return status;
-        if (!ensure_plugins_loaded())
+        if (load_plugins && !ensure_plugins_loaded())
             return lfs::Status::failure(lfs::make_error({
                 .code = lfs::ErrorCode::Unavailable,
                 .domain = lfs::ErrorDomain::Python,
@@ -1844,7 +1844,50 @@ _repl_out.close()
             }
 
             LOG_INFO("Executing Python script: {}", script_utf8);
-            const int rc = PyRun_SimpleFileEx(fp, script_utf8.c_str(), /*closeit=*/1);
+            PyObject* main = PyImport_AddModule("__main__");             // borrowed
+            PyObject* globals = main ? PyModule_GetDict(main) : nullptr; // borrowed
+            PyObject* filename = PyUnicode_FromString(script_utf8.c_str());
+            PyObject* previous_file = globals ? PyDict_GetItemString(globals, "__file__") : nullptr;
+            Py_XINCREF(previous_file);
+            const bool installed_file = globals && filename && PyDict_SetItemString(globals, "__file__", filename) == 0;
+            Py_XDECREF(filename);
+            PyObject* result = nullptr;
+            if (installed_file)
+                result = PyRun_FileExFlags(fp, script_utf8.c_str(), Py_file_input, globals, globals, 1, nullptr);
+            else
+                std::fclose(fp);
+            int rc = result ? 0 : -1;
+            Py_XDECREF(result);
+            if (!result && PyErr_ExceptionMatches(PyExc_SystemExit)) {
+                PyObject *type = nullptr, *value = nullptr, *traceback = nullptr;
+                PyErr_Fetch(&type, &value, &traceback);
+                PyErr_NormalizeException(&type, &value, &traceback);
+                PyObject* code = value ? PyObject_GetAttrString(value, "code") : nullptr;
+                if (code == Py_None || (code && PyLong_Check(code) && PyLong_AsLongLong(code) == 0 && !PyErr_Occurred()))
+                    rc = 0;
+                else {
+                    PyErr_Clear();
+                    PyObject* description = code ? PyObject_Str(code) : nullptr;
+                    const char* message = description ? PyUnicode_AsUTF8(description) : nullptr;
+                    LOG_ERROR("Python script requested exit {}: {}", message ? message : "unknown", script_utf8);
+                    Py_XDECREF(description);
+                }
+                Py_XDECREF(code);
+                Py_XDECREF(type);
+                Py_XDECREF(value);
+                Py_XDECREF(traceback);
+                PyErr_Clear();
+            } else if (!result) {
+                PyErr_Print();
+            }
+            if (installed_file) {
+                if (previous_file)
+                    PyDict_SetItemString(globals, "__file__", previous_file);
+                else
+                    PyDict_DelItemString(globals, "__file__");
+                PyErr_Clear();
+            }
+            Py_XDECREF(previous_file);
             if (rc != 0) {
                 return lfs::Status::failure(lfs::make_error({
                     .code = lfs::ErrorCode::Internal,

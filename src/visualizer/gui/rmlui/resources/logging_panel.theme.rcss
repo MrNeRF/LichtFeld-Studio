@@ -3,7 +3,7 @@
     border-radius: @{num(size.frame_rounding)}dp;
 }
 .log-search-box input[type="text"]:hover, .log-settings-bar input[type="text"]:hover,
-.log-field select:hover { border-color: @{alpha(primary, 0.5)}; }
+.log-field select:hover { border-color: @{primary}; }
 .log-search-box input[type="text"]:focus, .log-search-box input[type="text"]:focus-visible {
     border-color: @{primary}; background-color: @{surface_bright}; color: @{text};
 }
@@ -12,7 +12,7 @@
 #log-scroll scrollbarvertical sliderbar:hover, #log-scroll scrollbarhorizontal sliderbar:hover { background-color: @{primary}; }
 .log-filter-bar .btn, .log-actions .btn, .log-footer .btn { border-radius: @{num(size.frame_rounding)}dp; }
 .log-column-header { background-color: @{surface_bright}; border-bottom-color: @{border}; }
-.log-row { border-bottom-color: @{alpha(border, 0.4)}; }
+.log-row { border-bottom-color: @{border}; }
 .log-row:hover { background-color: @{alpha(surface_bright, 0.6)}; }
 .log-footer { border-top-color: @{border}; }
 .log-level { color: @{text_dim}; }

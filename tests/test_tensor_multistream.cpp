@@ -1,11 +1,16 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include <algorithm>
 #include <atomic>
+#include <bit>
 #include <chrono>
+#include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
+#include <limits>
 #include <mutex>
 #include <string_view>
 #include <thread>
@@ -120,6 +125,163 @@ protected:
 
     size_t original_cache_limit_ = 0;
 };
+
+TEST_F(TensorMultiStreamTest, DeviceCopyStaysOrderedWithItsNonBlockingStream) {
+    GateStream producer;
+    CUDAStreamGuard guard(producer.get());
+    auto source = Tensor::zeros({1024}, Device::CUDA, DataType::UInt8);
+    auto copied = Tensor::zeros({1024}, Device::CUDA, DataType::UInt8);
+    ASSERT_EQ(cudaStreamSynchronize(producer.get()), cudaSuccess);
+    producer.close();
+    ASSERT_EQ(cudaMemsetAsync(source.data_ptr(), 0x55, source.bytes(), producer.get()), cudaSuccess);
+    ASSERT_EQ(memcpy_ordered(copied.data_ptr(), source.data_ptr(), source.bytes(),
+                             cudaMemcpyDeviceToDevice, producer.get()),
+              cudaSuccess);
+    ASSERT_EQ(cudaMemsetAsync(source.data_ptr(), 0xAA, source.bytes(), producer.get()), cudaSuccess);
+    producer.release();
+    ASSERT_EQ(cudaStreamSynchronize(producer.get()), cudaSuccess);
+    const auto values = copied.to(Device::CPU).to_vector_uint8();
+    for (const auto value : values)
+        ASSERT_EQ(value, 0x55);
+}
+
+TEST_F(TensorMultiStreamTest, VectorUploadWaitsForRecycledDestinationStorage) {
+    GateStream producer;
+    CUDAStreamGuard guard(producer.get());
+    ASSERT_NO_FATAL_FAILURE(seedPinnedCache(16 * sizeof(float)));
+    auto previous = Tensor::empty({16}, Device::CUDA);
+    const void* recycled = previous.data_ptr();
+    ASSERT_EQ(cudaStreamSynchronize(producer.get()), cudaSuccess);
+    producer.close();
+    ASSERT_EQ(cudaMemsetAsync(previous.data_ptr(), 0, previous.bytes(), producer.get()), cudaSuccess);
+    previous = {};
+    // Host allocation may synchronize CUDA. Release independently of upload's
+    // return; the contract under test is the copied value, not host latency.
+    std::jthread release([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        producer.release();
+    });
+    const auto uploaded = Tensor::from_vector(std::vector<float>(16, 5.0f), {16}, Device::CUDA);
+    EXPECT_EQ(uploaded.data_ptr(), recycled);
+    release.join();
+    ASSERT_EQ(cudaStreamSynchronize(producer.get()), cudaSuccess);
+    const auto values = uploaded.to(Device::CPU).to_vector();
+    for (const auto value : values)
+        ASSERT_FLOAT_EQ(value, 5.0f);
+}
+
+TEST_F(TensorMultiStreamTest, HostCopyOwnsItsSourceAndFollowsTheSuppliedStream) {
+    for (const bool fallback : {false, true}) {
+        SCOPED_TRACE(fallback);
+        GateStream producer;
+        CUDAStreamGuard guard(producer.get());
+        ASSERT_NO_FATAL_FAILURE(seedPinnedCache(64 * sizeof(float)));
+        auto destination = Tensor::empty({64}, Device::CUDA);
+        ASSERT_EQ(cudaStreamSynchronize(producer.get()), cudaSuccess);
+        PinnedMemoryAllocator::instance().set_force_fallback_for_testing(fallback);
+        producer.close();
+        ASSERT_EQ(cudaMemsetAsync(destination.data_ptr(), 0, destination.bytes(), producer.get()), cudaSuccess);
+        std::jthread release([&] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            producer.release();
+        });
+        {
+            std::vector<float> source(64, 5.0f);
+            ASSERT_EQ(memcpy_ordered(destination.data_ptr(), source.data(), destination.bytes(),
+                                     cudaMemcpyHostToDevice, producer.get()),
+                      cudaSuccess);
+            std::fill(source.begin(), source.end(), -7.0f);
+        }
+        release.join();
+        ASSERT_EQ(cudaStreamSynchronize(producer.get()), cudaSuccess);
+        for (const float value : destination.cpu().to_vector())
+            EXPECT_FLOAT_EQ(value, 5.0f);
+        PinnedMemoryAllocator::instance().set_force_fallback_for_testing(false);
+    }
+}
+
+TEST_F(TensorMultiStreamTest, DefaultMutationsFollowTheTensorHomeStream) {
+    for (const int operation : {0, 1, 2, 3}) {
+        SCOPED_TRACE(operation);
+        GateStream producer;
+        CUDAStreamGuard guard(producer.get());
+        ASSERT_NO_FATAL_FAILURE(seedPinnedCache(64 * sizeof(float)));
+        auto destination = Tensor::empty({64}, Device::CUDA);
+        auto source = Tensor::from_vector(std::vector<float>(64, 5.0f), {64}, Device::CPU);
+        ASSERT_EQ(cudaStreamSynchronize(producer.get()), cudaSuccess);
+        producer.close();
+        ASSERT_EQ(cudaMemsetAsync(destination.data_ptr(), 0xFF, destination.bytes(), producer.get()), cudaSuccess);
+        std::jthread release([&] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            producer.release();
+        });
+        switch (operation) {
+        case 0: destination.zero_(); break;
+        case 1: destination.fill_(5.0f); break;
+        case 2:
+            destination.copy_from(source);
+            source.fill_(-7.0f);
+            break;
+        case 3: destination.fill_(-0.0f); break;
+        }
+        release.join();
+        ASSERT_EQ(cudaStreamSynchronize(producer.get()), cudaSuccess);
+        for (const float value : destination.cpu().to_vector()) {
+            EXPECT_FLOAT_EQ(value, operation == 1 || operation == 2 ? 5.0f : 0.0f);
+            if (operation == 3)
+                EXPECT_TRUE(std::signbit(value));
+        }
+    }
+}
+
+TEST_F(TensorMultiStreamTest, TemporaryHostCopyRejectsCaptureWithoutInvalidatingIt) {
+    GateStream producer;
+    CUDAStreamGuard guard(producer.get());
+    auto destination = Tensor::empty({1}, Device::CUDA);
+    ASSERT_EQ(cudaStreamSynchronize(producer.get()), cudaSuccess);
+    ASSERT_EQ(cudaStreamBeginCapture(producer.get(), cudaStreamCaptureModeThreadLocal), cudaSuccess);
+    const float value = 5.0f;
+    EXPECT_EQ(memcpy_ordered(destination.data_ptr(), &value, sizeof(value),
+                             cudaMemcpyHostToDevice, producer.get()),
+              cudaErrorStreamCaptureUnsupported);
+    cudaGraph_t graph = nullptr;
+    EXPECT_EQ(cudaStreamEndCapture(producer.get(), &graph), cudaSuccess);
+    if (graph)
+        EXPECT_EQ(cudaGraphDestroy(graph), cudaSuccess);
+}
+
+TEST_F(TensorMultiStreamTest, StackBooleanUploadFollowsTheTensorHomeStream) {
+    GateStream producer;
+    CUDAStreamGuard guard(producer.get());
+    ASSERT_NO_FATAL_FAILURE(seedPinnedCache(1));
+    auto flags = Tensor::empty({8}, Device::CUDA, DataType::Bool);
+    ASSERT_EQ(cudaStreamSynchronize(producer.get()), cudaSuccess);
+    producer.close();
+    ASSERT_EQ(cudaMemsetAsync(flags.data_ptr(), 0, flags.bytes(), producer.get()), cudaSuccess);
+    std::jthread release([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        producer.release();
+    });
+    flags.set_bool({3}, true);
+    release.join();
+    ASSERT_EQ(cudaStreamSynchronize(producer.get()), cudaSuccess);
+    const auto host = flags.cpu();
+    for (size_t index = 0; index < 8; ++index)
+        EXPECT_EQ(host.get_bool({index}), index == 3);
+}
+
+TEST_F(TensorMultiStreamTest, DefaultFillPreservesFloatStorageBits) {
+    GateStream producer;
+    CUDAStreamGuard guard(producer.get());
+    auto destination = Tensor::empty({8}, Device::CUDA);
+    for (const float value : {-0.0f, std::numeric_limits<float>::denorm_min(),
+                              -std::numeric_limits<float>::denorm_min()}) {
+        destination.fill_(value);
+        const auto values = destination.cpu().to_vector();
+        for (const float actual : values)
+            EXPECT_EQ(std::bit_cast<uint32_t>(actual), std::bit_cast<uint32_t>(value));
+    }
+}
 
 TEST_F(TensorMultiStreamTest, SlabSameStreamReuseIsImmediateAndStealFree) {
     cudaStream_t stream;
@@ -363,12 +525,15 @@ TEST_F(TensorMultiStreamTest, PinnedBlockReusedOnlyAfterAllStreamsDone) {
     void* device_buffer = nullptr;
     ASSERT_EQ(cudaMalloc(&device_buffer, kBytes), cudaSuccess);
 
-    h2d_stream.close();
-    ASSERT_EQ(cudaMemcpyAsync(device_buffer, host_block, kBytes, cudaMemcpyHostToDevice, h2d_stream.get()),
-              cudaSuccess);
+    // Finish the earlier D2H use before gating H2D. Opposite transfers on the
+    // same buffers may serialize, making a D2H wait depend on the closed gate.
+    ASSERT_EQ(cudaMemsetAsync(device_buffer, 0, kBytes, d2h_stream), cudaSuccess);
     ASSERT_EQ(cudaMemcpyAsync(host_block, device_buffer, kBytes, cudaMemcpyDeviceToHost, d2h_stream),
               cudaSuccess);
     ASSERT_EQ(cudaStreamSynchronize(d2h_stream), cudaSuccess);
+    h2d_stream.close();
+    ASSERT_EQ(cudaMemcpyAsync(device_buffer, host_block, kBytes, cudaMemcpyHostToDevice, h2d_stream.get()),
+              cudaSuccess);
 
     pinned.record_stream(host_block, h2d_stream.get());
     pinned.deallocate(host_block, d2h_stream);
@@ -563,7 +728,7 @@ TEST_F(TensorMultiStreamTest, ExplicitD2HTransferGuardsDroppedPinnedDestination)
     EXPECT_EQ(reused_after_completion.data_ptr(), destination_ptr);
 }
 
-TEST_F(TensorMultiStreamTest, ExplicitH2DViewCopyFromGuardsDroppedPinnedSource) {
+TEST_F(TensorMultiStreamTest, ExplicitH2DViewCopyFromSurvivesDroppedPinnedSource) {
     auto& pinned = PinnedMemoryAllocator::instance();
     pinned.empty_cache();
     pinned.reset_stats();
@@ -578,20 +743,20 @@ TEST_F(TensorMultiStreamTest, ExplicitH2DViewCopyFromGuardsDroppedPinnedSource) 
     destination_view.set_stream(transfer.get());
     transfer.close();
 
-    void* source_ptr = nullptr;
     {
         auto source = Tensor::full({kElements}, 3.0f, Device::CPU);
-        source_ptr = source.data_ptr();
         ASSERT_EQ(source.shape(), destination_view.shape());
         ASSERT_FLOAT_EQ(source.ptr<float>()[0], 3.0f);
         destination_view.copy_from(source);
         EXPECT_EQ(destination_view.device(), Device::CUDA);
         EXPECT_TRUE(destination_view.is_view());
+        // copy_from owns its staging; the caller can overwrite and release the source.
+        source.fill_(-7.0f);
     }
 
     auto replacement = Tensor::empty({kElements}, Device::CPU);
     ASSERT_NE(replacement.data_ptr(), nullptr);
-    EXPECT_NE(replacement.data_ptr(), source_ptr);
+    replacement.fill_(-11.0f); // Reuse of the original source block is valid.
 
     transfer.release();
     ASSERT_EQ(cudaStreamSynchronize(transfer.get()), cudaSuccess);

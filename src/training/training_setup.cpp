@@ -49,6 +49,7 @@
 #include <optional>
 #include <unordered_map>
 #include <random>
+#include <unordered_set>
 #include <variant>
 
 namespace lfs::training {
@@ -1226,6 +1227,15 @@ namespace lfs::training {
                     }
                 }
 
+                const std::unordered_set<int> disabled_uids(params.disabled_camera_uids.begin(),
+                                                            params.disabled_camera_uids.end());
+                for (const auto* node : scene.getNodes()) {
+                    if (node->type == lfs::core::NodeType::CAMERA && node->camera &&
+                        disabled_uids.contains(node->camera->uid())) {
+                        scene.setCameraTrainingEnabled(node->id, false);
+                    }
+                }
+
                 LOG_INFO("Loaded dataset '{}' into scene: {} train{} cameras{}",
                          dataset_name, train_count,
                          hold_out ? std::format(" + {} val", val_count) : "",
@@ -1821,14 +1831,16 @@ namespace lfs::training {
         // A metadata save can change PRMS after the last CKPT was captured.
         // Explicit command-line overrides still take precedence on resume.
         auto resumed_params = trainer->getParams();
+        // Retain the effective folder used to hydrate cameras and load sidecar masks.
+        resumed_params.dataset.images = params.dataset.images;
         if (!params.overrides.has_optimization_key("keep_all_checkpoints")) {
             auto retention = document.parameters().checkpoint_retention(
                 resumed_params.optimization.strategy, resumed_params.optimization.keep_all_checkpoints);
             if (!retention)
                 return std::unexpected(lfs::format_for_developer(retention.error()));
             resumed_params.optimization.keep_all_checkpoints = *retention;
-            trainer->setParams(resumed_params);
         }
+        trainer->setParams(resumed_params);
         const int restored_iteration = **restored;
         if (restored_iteration != expected_iteration ||
             trainer->get_current_iteration() !=

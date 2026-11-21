@@ -634,6 +634,50 @@ class TestPropertyCallbacks:
         # Unsubscribe by ID
         lf.unsubscribe_property_change(sub_id)
 
+    def test_every_attribute_write_notifies_subscribers(self, lf):
+        """The training panel follows script writes such as params.pose_opt = True only
+        through on_property_change, so every writable attribute must notify."""
+        params = lf.optimization_params()
+        cls = type(params)
+        checked = []
+        silent = []
+        for prop in params.properties():
+            prop_id = prop["id"]
+            attr = getattr(cls, prop_id, None)
+            info = params.prop_info(prop_id)
+            if not isinstance(attr, property) or attr.fset is None or info["readonly"]:
+                continue
+            old = getattr(params, prop_id)
+            if info["type"] == "bool":
+                new = not old
+            elif info["type"] == "enum" and not isinstance(old, str):
+                values = [item["value"] for item in info["items"] if item["value"] != old.value]
+                new = type(old)(values[0])
+            elif info["type"] in {"int", "size_t", "float"}:
+                step = info.get("step") or 1
+                new = old + step if old + step <= info.get("max", old + step) else old - step
+                new = type(old)(new)
+            else:
+                continue
+            seen = []
+            sub_id = lf.on_property_change(
+                f"optimization.{prop_id}", lambda old_val, new_val: seen.append(new_val)
+            )
+            try:
+                setattr(params, prop_id, new)
+            except (ValueError, RuntimeError):
+                continue  # rejected by validation: nothing changed
+            finally:
+                lf.unsubscribe_property_change(sub_id)
+            if getattr(params, prop_id) != old:
+                checked.append(prop_id)
+                if not seen:
+                    silent.append(prop_id)
+            setattr(params, prop_id, old)
+
+        assert "pose_opt" in checked
+        assert not silent, f"attribute writes without a change notification: {silent}"
+
 
 class TestUILayout:
     """Tests for PyUILayout methods (without an active panel draw context)."""

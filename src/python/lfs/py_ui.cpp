@@ -32,6 +32,7 @@
 #include "io/video/video_export_options.hpp"
 #include "mcp/mcp_http_server.hpp"
 #include "preferences.hpp"
+#include "preprocessing/preprocess.hpp"
 #include "py_command.hpp"
 #include "py_gizmo.hpp"
 #include "py_keymap.hpp"
@@ -69,6 +70,7 @@
 #include "visualizer/tools/unified_tool_registry.hpp"
 #include "visualizer/training/training_manager.hpp"
 #include "visualizer/visualizer.hpp"
+#include "vr/openxr_runtimes.hpp"
 #include "window/window_manager.hpp"
 #include <RmlUi/Core/Core.h>
 #include <RmlUi/Core/ElementDocument.h>
@@ -365,6 +367,7 @@ namespace lfs::python {
             g_stop_training_confirmation_callback;
         nb::object g_open_camera_preview_callback;
         nb::object g_open_image_preview_callback;
+        bool g_open_image_preview_with_sequence = false;
         lfs::event::HandlerId g_open_camera_preview_handler_id = 0;
         lfs::event::HandlerId g_open_image_preview_handler_id = 0;
         constexpr std::string_view LEGACY_POPUP_PANEL = "__legacy_popup__";
@@ -2808,6 +2811,77 @@ namespace lfs::python {
 
     // Register UI classes with nanobind module
     void register_ui(nb::module_& m) {
+        m.def("model_cache_snapshot", [] {
+            require_ui_texture_creation_thread();
+            nb::dict result;
+            nb::list models;
+            auto* gui = get_gui_manager();
+            if (gui)
+                for (const auto& entry : gui->asyncTasks().modelCacheEntries()) {
+                    const auto& descriptor = entry.descriptor;
+                    nb::dict row;
+                    row["id"] = static_cast<int>(descriptor.id);
+                    row["name"] = std::string(descriptor.name);
+                    row["category_key"] = std::string(descriptor.category_key);
+                    row["source"] = std::string(descriptor.url);
+                    row["sha256"] = std::string(descriptor.sha256);
+                    row["path"] = core::path_to_utf8(entry.cache.path);
+                    row["bytes"] = entry.cache.bytes;
+                    row["present"] = entry.cache.present;
+                    row["busy"] = entry.cache.busy;
+                    row["status"] = entry.status;
+                    row["message"] = entry.message;
+                    row["error"] = entry.error;
+                    row["error_code"] = entry.error_code;
+                    row["running"] = entry.running;
+                    row["canceling"] = entry.canceling;
+                    row["show_progress"] = entry.show_progress;
+                    row["progress"] = entry.progress;
+                    row["can_download"] = entry.can_download;
+                    row["can_verify"] = entry.can_verify;
+                    row["can_remove"] = entry.can_remove;
+                    models.append(row);
+                }
+            result["models"] = models;
+            nb::dict job;
+            if (auto* gui = get_gui_manager()) {
+                auto& tasks = gui->asyncTasks();
+                if (const auto state = tasks.modelCacheJob()) {
+                    job["id"] = state->handle.id;
+                    job["model"] = static_cast<int>(tasks.modelCacheModel());
+                    job["action"] = std::string(tasks.modelCacheActionName());
+                    job["stage"] = state->stage;
+                    job["progress"] = state->progress;
+                    job["running"] = state->running();
+                    job["cancel_requested"] = state->cancel_requested;
+                    job["canceled"] = state->status == vis::JobStatus::Canceled;
+                    job["completed"] = state->status == vis::JobStatus::Completed;
+                    job["error"] = state->error;
+                    job["error_code"] = state->error_code ? lfs::to_string(*state->error_code) : "";
+                }
+            }
+            result["job"] = job;
+            return result; }, "UI thread: inspect managed model files and the current Preferences operation; no hashing or downloads.");
+        m.def("model_cache_start", [](const int model, const std::string& action) {
+            require_ui_texture_creation_thread();
+            if (model < 0 || static_cast<size_t>(model) >= preprocessing::model_catalog().size())
+                throw nb::value_error("Unknown cached model");
+            using Action = vis::gui::AsyncTaskManager::ModelCacheAction;
+            Action operation;
+            if (action == "download")
+                operation = Action::Download;
+            else if (action == "verify")
+                operation = Action::Verify;
+            else if (action == "remove")
+                operation = Action::Remove;
+            else
+                throw nb::value_error("Unknown model cache action");
+            auto* gui = get_gui_manager();
+            return gui && gui->asyncTasks().startModelCache(static_cast<preprocessing::CachedModel>(model), operation); }, nb::arg("model"), nb::arg("action"), "UI thread: queue download, verification or removal through the shared model cache.");
+        m.def("model_cache_cancel", [](const uint64_t job) {
+            require_ui_texture_creation_thread();
+            if (auto* gui = get_gui_manager())
+                gui->asyncTasks().cancelModelCache(job); }, nb::arg("job"), "UI thread: cancel only the matching Preferences model operation; on-demand callers keep their own cancellation.");
         lfs::python::set_graphics_thread_id(std::this_thread::get_id());
         g_texture_service_alive = true;
 
@@ -3667,7 +3741,8 @@ namespace lfs::python {
             "open_url",
             [](const std::string& url) {
 #ifdef _WIN32
-                ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                const auto wide_url = core::utf8_to_wstring(url);
+                ShellExecuteW(nullptr, L"open", wide_url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 #else
                 std::thread([url] {
                     pid_t child = -1;
@@ -4394,11 +4469,12 @@ namespace lfs::python {
                 switch (rm->getGTComparisonMode()) {
                 case vis::GTComparisonMode::Normal: return "normal";
                 case vis::GTComparisonMode::Depth: return "depth";
+                case vis::GTComparisonMode::Loss: return "loss";
                 case vis::GTComparisonMode::RGB:
                 default: return "rgb";
                 }
             },
-            "Get ground-truth comparison mode: rgb, normal, or depth.");
+            "Get ground-truth comparison mode: rgb, normal, depth, or loss.");
 
         m.def(
             "set_gt_comparison_mode",
@@ -4413,8 +4489,10 @@ namespace lfs::python {
                     settings.gt_comparison_mode = vis::GTComparisonMode::Normal;
                 } else if (mode == "depth") {
                     settings.gt_comparison_mode = vis::GTComparisonMode::Depth;
+                } else if (mode == "loss") {
+                    settings.gt_comparison_mode = vis::GTComparisonMode::Loss;
                 } else {
-                    throw nb::value_error("GT comparison mode must be 'rgb', 'normal', or 'depth'");
+                    throw nb::value_error("GT comparison mode must be 'rgb', 'normal', 'depth', or 'loss'");
                 }
                 rm->updateSettings(settings, vis::DirtyFlag::ALL);
                 markProjectSessionChapterCommitted("VIEW");
@@ -4436,6 +4514,9 @@ namespace lfs::python {
                     settings.gt_comparison_mode = vis::GTComparisonMode::Depth;
                     break;
                 case vis::GTComparisonMode::Depth:
+                    settings.gt_comparison_mode = vis::GTComparisonMode::Loss;
+                    break;
+                case vis::GTComparisonMode::Loss:
                 default:
                     settings.gt_comparison_mode = vis::GTComparisonMode::RGB;
                     break;
@@ -4445,11 +4526,12 @@ namespace lfs::python {
                 switch (settings.gt_comparison_mode) {
                 case vis::GTComparisonMode::Normal: return "normal";
                 case vis::GTComparisonMode::Depth: return "depth";
+                case vis::GTComparisonMode::Loss: return "loss";
                 case vis::GTComparisonMode::RGB:
                 default: return "rgb";
                 }
             },
-            "Cycle ground-truth comparison mode: rgb -> normal -> depth -> rgb.");
+            "Cycle ground-truth comparison mode: rgb -> normal -> depth -> loss -> rgb.");
 
         m.def(
             "reveal_in_file_manager",
@@ -4871,8 +4953,9 @@ namespace lfs::python {
             nb::arg("source"),
             "Release a cached RmlUi texture by source URL");
 
-        m.def("on_open_image_preview", [](nb::object callback) {
+        m.def("on_open_image_preview", [](nb::object callback, bool include_sequence) {
             g_open_image_preview_callback = callback;
+            g_open_image_preview_with_sequence = include_sequence;
             if (g_open_image_preview_handler_id != 0) {
                 lfs::event::EventBridge::instance().unsubscribe(typeid(core::events::cmd::OpenImagePreview), g_open_image_preview_handler_id);
                 g_open_image_preview_handler_id = 0;
@@ -4882,25 +4965,150 @@ namespace lfs::python {
             g_open_image_preview_handler_id = core::events::cmd::OpenImagePreview::when([](const auto& event) {
                 nb::gil_scoped_acquire guard;
                 if (g_open_image_preview_callback && !g_open_image_preview_callback.is_none()) {
+                    bool sequence_opened = false;
                     try {
                         std::vector<std::string> paths;
                         for (const auto& path : event.paths)
                             paths.push_back(core::path_to_utf8(path));
-                        g_open_image_preview_callback(paths, core::path_to_utf8(event.weights));
+                        if (g_open_image_preview_with_sequence) {
+                            nb::object sequence = nb::none();
+                            if (!event.run.is_nil() && !event.frames.empty()) {
+                                require_ui_texture_creation_thread();
+                                auto* gui = get_gui_manager();
+                                if (!gui || event.frames.size() != event.paths.size())
+                                    throw std::runtime_error(LOC("image_preview.sam_sequence_invalid"));
+                                for (size_t i = 0; i < event.frames.size(); ++i)
+                                    if (event.frames[i].path.lexically_normal() != event.paths[i].lexically_normal())
+                                        throw std::runtime_error(LOC("image_preview.sam_sequence_invalid"));
+                                auto& masking = gui->asyncTasks().assistedMasking();
+                                const bool new_sequence = masking.sequenceFrames(event.run, 0, 1).empty();
+                                masking.beginSequence(event.run, event.frames, event.output, event.weights);
+                                sequence_opened = new_sequence;
+                                nb::dict data;
+                                data["run"] = event.run.to_string();
+                                data["video"] = core::path_to_utf8(event.video);
+                                data["output"] = core::path_to_utf8(event.output);
+                                nb::list frames;
+                                for (const auto& frame : event.frames) {
+                                    nb::dict item;
+                                    item["time"] = frame.timestamp;
+                                    item["source_frame"] = frame.source_frame;
+                                    frames.append(std::move(item));
+                                }
+                                data["frames"] = std::move(frames);
+                                sequence = std::move(data);
+                            }
+                            g_open_image_preview_callback(paths, core::path_to_utf8(event.weights), sequence);
+                        } else {
+                            g_open_image_preview_callback(paths, core::path_to_utf8(event.weights));
+                        }
                     } catch (const std::exception& error) {
                         LOG_ERROR("OpenImagePreview callback error: {}", error.what());
+                        if (auto* gui = get_gui_manager()) {
+                            if (sequence_opened)
+                                gui->asyncTasks().assistedMasking().endSequence(event.run);
+                            gui->enqueueToast({.title = LOC("image_preview.sam_title"), .message = error.what(),
+                                               .level = vis::gui::ErrorNoticeLevel::Error});
+                        }
                     }
                 }
-            }); }, nb::arg("callback"), "Register the preview callback for extracted images.");
+            }); }, nb::arg("callback"), nb::arg("include_sequence") = false, "Register the preview callback for extracted images; optionally receive extraction-run metadata as a third argument.");
 
-        m.def("sam_preview_submit", [](const std::string& path, const std::string& revision, int64_t mtime_ns, uint64_t size_bytes, std::vector<std::array<float, 3>> points, std::optional<std::array<float, 4>> box, uint64_t refine_request, int refine_candidate, const std::string& weights, int export_candidate, bool exclude) {
+        m.def("sam_preview_submit", [](const std::string& path, const std::string& revision, int64_t mtime_ns, uint64_t size_bytes, std::vector<std::array<float, 3>> points, std::optional<std::array<float, 4>> box, uint64_t refine_request, int refine_candidate, const std::string& weights, int export_candidate, bool exclude, nb::object sequence, nb::object semantic) {
             require_ui_texture_creation_thread();
             auto* gui = get_gui_manager();
             if (!gui)
                 throw std::runtime_error(LOC("runtime.video_gui_manager_unavailable"));
-            return gui->asyncTasks().assistedMasking().submit({.image = core::utf8_to_path(path), .weights = core::utf8_to_path(weights), .revision = revision,
+            vis::gui::AssistedMaskRequest input{.image = core::utf8_to_path(path), .weights = core::utf8_to_path(weights), .revision = revision,
                 .mtime_ns = mtime_ns, .size_bytes = size_bytes, .points = std::move(points), .box = box,
-                .refine_request = refine_request, .refine_candidate = refine_candidate, .export_candidate = export_candidate, .exclude = exclude}); }, nb::arg("path"), nb::arg("revision"), nb::arg("mtime_ns"), nb::arg("size_bytes"), nb::arg("points"), nb::arg("box") = nb::none(), nb::arg("refine_request") = 0, nb::arg("refine_candidate") = -1, nb::arg("weights") = "", nb::arg("export_candidate") = -1, nb::arg("exclude") = false, "UI thread: queue native SAM inference or render a selected original-resolution mask. Apply is a separate explicit action.");
+                .refine_request = refine_request, .refine_candidate = refine_candidate, .export_candidate = export_candidate, .exclude = exclude};
+            if (!sequence.is_none()) {
+                const auto context = nb::cast<nb::dict>(sequence);
+                const auto run = core::Uuid::from_string(nb::cast<std::string>(context["run"]));
+                if (!run || run->is_nil())
+                    throw std::invalid_argument(LOC("image_preview.sam_sequence_invalid"));
+                input.run = *run;
+                if (context.contains("inspect"))
+                    input.review_frame = nb::cast<int>(context["inspect"]);
+                if (context.contains("retain"))
+                    input.retain_frame = nb::cast<bool>(context["retain"]);
+                if (context.contains("publish"))
+                    input.publish_approved = nb::cast<bool>(context["publish"]);
+                if (context.contains("first")) {
+                    const auto direction = nb::cast<std::string>(context["direction"]);
+                    if (direction != "both" && direction != "forward" && direction != "reverse")
+                        throw std::invalid_argument(LOC("image_preview.sam_sequence_invalid"));
+                    input.tracking = vis::gui::AssistedMaskTracking{
+                        .first = nb::cast<int>(context["first"]),
+                        .last = nb::cast<int>(context["last"]),
+                        .seed = nb::cast<int>(context["seed"]),
+                        .direction = direction == "both" ? preprocessing::VideoMaskDirection::Both : direction == "forward" ? preprocessing::VideoMaskDirection::Forward
+                                                                                                                            : preprocessing::VideoMaskDirection::Reverse,
+                    };
+                }
+            }
+            if (!semantic.is_none()) {
+                const auto context = nb::cast<nb::dict>(semantic);
+                if (!context.contains("descriptions"))
+                    throw std::invalid_argument(LOC("image_preview.sam_semantic_invalid"));
+                vis::gui::AssistedMaskSemantic selection;
+                selection.prepare_weights = [](const std::function<bool()>& cancelled) {
+                    return preprocessing::ensure_llmdet_weights(true, cancelled);
+                };
+                const auto rows = nb::cast<nb::list>(context["descriptions"]);
+                if (rows.empty() || rows.size() > 16)
+                    throw std::invalid_argument(LOC("image_preview.sam_semantic_invalid"));
+                for (const auto row : rows) {
+                    if (nb::len(row) > 256)
+                        throw std::invalid_argument(LOC("image_preview.sam_semantic_invalid"));
+                    selection.descriptions.push_back(nb::cast<std::vector<int>>(row));
+                }
+                if (context.contains("confidence"))
+                    selection.confidence = nb::cast<float>(context["confidence"]);
+                input.semantic = std::move(selection);
+            }
+            return gui->asyncTasks().assistedMasking().submit(std::move(input)); }, nb::arg("path"), nb::arg("revision"), nb::arg("mtime_ns"), nb::arg("size_bytes"), nb::arg("points"), nb::arg("box") = nb::none(), nb::arg("refine_request") = 0, nb::arg("refine_candidate") = -1, nb::arg("weights") = "", nb::arg("export_candidate") = -1, nb::arg("exclude") = false, nb::arg("sequence") = nb::none(), nb::arg("semantic") = nb::none(), "UI thread: queue native SAM inference, bounded text/category detection, sequence tracking/inspection, or render a selected original-resolution mask. Semantic descriptions are BERT token ID lists; the shared cache downloads the verified native LLMDet Tiny archive. Apply is a separate explicit action.");
+        m.def("sam_preview_sequence_frames", [](const std::string& run, size_t first, size_t count) {
+            require_ui_texture_creation_thread();
+            nb::list result;
+            auto* gui = get_gui_manager();
+            const auto id = core::Uuid::from_string(run);
+            if (gui && id) {
+                for (const auto& frame : gui->asyncTasks().assistedMasking().sequenceFrames(*id, first, count)) {
+                    nb::dict item;
+                    item["revision"] = frame.revision;
+                    item["score"] = frame.score;
+                    item["reliable"] = frame.reliable;
+                    item["approved"] = frame.approved;
+                    item["mask_path"] = core::path_to_utf8(frame.mask_path);
+                    item["keyframe"] = frame.keyframe;
+                    item["matched_objects"] = frame.matched_objects;
+                    item["semantic_limited"] = frame.semantic_limited;
+                    result.append(std::move(item));
+                }
+            }
+            return result; }, nb::arg("run"), nb::arg("first") = 0, nb::arg("count") = 64, "UI thread: read at most 256 current frame summaries from an extraction run.");
+        m.def("sam_preview_approve_frames", [](const std::string& run, const std::vector<std::tuple<size_t, uint64_t, bool>>& updates) {
+            require_ui_texture_creation_thread();
+            auto* gui = get_gui_manager();
+            const auto id = core::Uuid::from_string(run);
+            if (!gui || !id)
+                return false;
+            std::vector<vis::gui::AssistedMaskApproval> approvals;
+            approvals.reserve(updates.size());
+            for (const auto& [index, revision, approved] : updates)
+                approvals.push_back({index, revision, approved});
+            return gui->asyncTasks().assistedMasking().approveFrames(*id, approvals); }, nb::arg("run"), nb::arg("updates"), "UI thread: atomically approve/revoke a group of (index, revision, approved) updates. Missing, duplicate or stale frames reject the whole group.");
+        m.def("sam_preview_end_sequence", [](const std::string& run) {
+            require_ui_texture_creation_thread();
+            const auto id = core::Uuid::from_string(run);
+            if (auto* gui = get_gui_manager(); gui && id)
+                gui->asyncTasks().assistedMasking().endSequence(*id); }, nb::arg("run"), "UI thread: release an extraction review document; old run IDs cannot close a new document.");
+        m.def("sam_preview_invalidate_frame", [](const std::string& run, size_t index) {
+            require_ui_texture_creation_thread();
+            const auto id = core::Uuid::from_string(run);
+            if (auto* gui = get_gui_manager(); gui && id)
+                gui->asyncTasks().assistedMasking().invalidateFrame(*id, index); }, nb::arg("run"), nb::arg("index"), "UI thread: revoke a changed frame's proposal/approval while idle. Reject active work and preserve saved masks.");
         m.def("sam_preview_poll", [] {
             require_ui_texture_creation_thread();
             nb::dict result;
@@ -4913,6 +5121,13 @@ namespace lfs::python {
             result["phase"] = state.phase;
             result["error"] = state.error;
             result["scores"] = state.scores;
+            result["sequence_revision"] = state.sequence_revision;
+            result["completed"] = state.completed;
+            result["total"] = state.total;
+            result["approved"] = state.approved;
+            result["empty_approved"] = state.empty_approved;
+            result["matched_objects"] = state.matched_objects;
+            result["semantic_limited"] = state.semantic_limited;
             nb::list overlays;
             for (const auto& mask : state.overlays)
                 overlays.append(nb::cast(PyTensor(mask)));
@@ -6025,6 +6240,7 @@ namespace lfs::python {
                 result["resolution_scale"] = preferences.resolution_scale;
                 result["scene_units_per_meter"] = preferences.scene_units_per_meter;
                 result["move_speed"] = preferences.move_speed;
+                result["show_hands"] = preferences.show_hands;
                 return result;
             },
             "Get the VR preferences");
@@ -6032,18 +6248,47 @@ namespace lfs::python {
         m.def(
             "set_vr_preferences",
             [](const bool enabled, const float resolution_scale, const float scene_units_per_meter,
-               const float move_speed, const bool persist) {
+               const float move_speed, const bool show_hands, const bool persist) {
                 invoke_on_viewer([=] {
                     lfs::core::events::cmd::SetVrPreferences{.enabled = enabled,
                                                              .resolution_scale = resolution_scale,
                                                              .scene_units_per_meter = scene_units_per_meter,
                                                              .move_speed = move_speed,
+                                                             .show_hands = show_hands,
                                                              .persist = persist}
                         .emit();
                 });
             },
             nb::arg("enabled"), nb::arg("resolution_scale"), nb::arg("scene_units_per_meter"), nb::arg("move_speed"),
-            nb::arg("persist") = true, "Set the VR preferences; VR support takes effect after restart");
+            nb::arg("show_hands") = true, nb::arg("persist") = true,
+            "Set the VR preferences; VR support takes effect after restart");
+
+        m.def(
+            "get_vr_runtimes",
+            [] {
+                const auto runtimes = vis::vr::installedOpenXrRuntimes();
+                nb::dict result;
+                result["active"] = runtimes.active;
+                result["selected"] = vis::UserPreferences::instance().vrRuntime();
+                nb::list installed;
+                for (const auto& runtime : runtimes.installed) {
+                    nb::dict entry;
+                    entry["name"] = runtime.name;
+                    entry["manifest"] = runtime.manifest;
+                    installed.append(entry);
+                }
+                result["installed"] = installed;
+                return result;
+            },
+            "Get the OpenXR runtimes installed on this computer, the name of the system's active one, and the "
+            "manifest of the one chosen for VR (empty: the active one)");
+
+        m.def(
+            "set_vr_runtime",
+            [](const std::string& manifest) { vis::UserPreferences::instance().setVrRuntime(manifest); },
+            nb::arg("manifest"),
+            "Choose the OpenXR runtime VR uses by its manifest path; empty follows the system's active runtime. "
+            "Takes effect after restart");
 
         m.def(
             "get_mcp_port_override",
@@ -6364,6 +6609,9 @@ namespace lfs::python {
             PyModalRegistry::instance().set_enqueue_callback(enqueue_cb);
         bridge.shutdown_ui_resources = []() { shutdown_dynamic_textures(); };
         bridge.cleanup = []() {
+            auto observer = nb::module_::import_("sys").attr("modules").attr("get")("lfs_plugins.external_training");
+            if (!observer.is_none())
+                observer.attr("shutdown")();
             PyPanelRegistry::instance().unregister_all();
             PyUIHookRegistry::instance().clear_all();
             PyMenuRegistry::instance().unregister_all();
@@ -6394,6 +6642,7 @@ namespace lfs::python {
                 nb::object();
             g_open_camera_preview_callback = nb::object();
             g_open_image_preview_callback = nb::object();
+            g_open_image_preview_with_sequence = false;
             if (g_open_camera_preview_handler_id != 0) {
                 lfs::event::EventBridge::instance().unsubscribe(typeid(core::events::cmd::OpenCameraPreview), g_open_camera_preview_handler_id);
                 g_open_camera_preview_handler_id = 0;

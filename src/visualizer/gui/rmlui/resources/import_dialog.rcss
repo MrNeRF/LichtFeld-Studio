@@ -24,7 +24,7 @@
 
 .impdlg-badge {
     font-size: 12dp;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .impdlg-pipe,
@@ -143,7 +143,7 @@
     margin: 4dp 0 8dp 0;
     cursor: pointer;
     font-size: 12dp;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .impdlg-advanced-header .section-arrow {

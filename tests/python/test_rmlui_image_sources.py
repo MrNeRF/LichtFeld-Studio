@@ -35,6 +35,7 @@ def _install_lf_stub(monkeypatch):
         open_url=lambda _url: None,
         get_ui_scale=lambda: 1.0,
         set_panel_enabled=lambda _panel_id, _enabled: None,
+        is_panel_enabled=lambda _panel_id: False,
         get_panel_object=lambda _panel_id: None,
         get_image_info=lambda _path: (0, 0, 0),
         preview_texture_status=lambda _source, _document=None: "ready",
@@ -101,7 +102,6 @@ def test_preview_url_percent_encodes_image_paths(panel_modules, tmp_path):
 
 def test_first_preview_request_survives_lazy_panel_creation(panel_modules, tmp_path):
     image_preview, _ = panel_modules
-    image_preview._instance = None
     image_preview._pending_open = None
     image_path = tmp_path / "first.jpg"
 
@@ -117,7 +117,6 @@ def test_first_preview_request_survives_lazy_panel_creation(panel_modules, tmp_p
 def test_first_preview_request_opens_once_during_lazy_reentry(
         panel_modules, tmp_path, monkeypatch):
     image_preview, _ = panel_modules
-    image_preview._instance = None
     image_preview._pending_open = None
     image_path = tmp_path / "first.jpg"
     open_calls = []
@@ -129,10 +128,14 @@ def test_first_preview_request_opens_once_during_lazy_reentry(
 
     monkeypatch.setattr(image_preview.ImagePreviewPanel, "open", track_open)
 
+    instances = []
+
     class LazyPanel:
         @property
         def open(self):
-            return image_preview.ImagePreviewPanel().open
+            panel = image_preview.ImagePreviewPanel()
+            instances.append(panel)
+            return panel.open
 
     sys.modules["lichtfeld"].ui.get_panel_object = lambda _panel_id: LazyPanel()
 
@@ -140,8 +143,22 @@ def test_first_preview_request_opens_once_during_lazy_reentry(
 
     assert image_preview._pending_open is None
     assert open_calls == [([image_path], [None], 0, [17])]
-    assert image_preview._instance._image_paths == [image_path.resolve()]
-    assert image_preview._instance._camera_uids == [17]
+    assert len(instances) == 1
+    assert instances[0]._image_paths == [image_path.resolve()]
+    assert instances[0]._camera_uids == [17]
+
+
+def test_preview_request_uses_the_current_registered_panel_after_replacement(panel_modules, tmp_path, monkeypatch):
+    image_preview, _ = panel_modules
+    old_panel = image_preview.ImagePreviewPanel()
+    new_panel = image_preview.ImagePreviewPanel()
+    monkeypatch.setattr(image_preview.lf.ui, "get_panel_object", lambda _id: new_panel)
+    image_path = tmp_path / "replacement.jpg"
+
+    image_preview.open_image_preview([image_path], [None], 0)
+
+    assert new_panel._image_paths == [image_path.resolve()]
+    assert old_panel._image_paths == []
 
 
 def test_image_preview_discards_info_for_previous_image_sets(panel_modules, tmp_path):
@@ -203,6 +220,13 @@ class _DocumentStub:
         if "main-image-a" in elements:
             self._elements.setdefault("main-image-b", _ElementStub())
         self.removed_models = []
+        self.attributes = {}
+
+    def has_attribute(self, name):
+        return name in self.attributes
+
+    def set_attribute(self, name, value):
+        self.attributes[name] = value
 
     def get_element_by_id(self, element_id):
         return self._elements.get(element_id)
@@ -376,3 +400,22 @@ def test_getting_started_ignores_thumbnail_completion_after_unmount(panel_module
     assert panel._thumb_card_map == {}
     assert old_handle.request_update_count == 0
     assert new_handle.request_update_count == 0
+
+
+def test_getting_started_defaults_to_editing_and_switches_all_tabs(panel_modules):
+    _, getting_started = panel_modules
+    panel = getting_started.GettingStartedPanel()
+    views, events, dirty = {}, {}, []
+    model = SimpleNamespace(
+        bind_func=lambda name, getter: views.update({name: getter}),
+        bind_event=lambda name, callback: events.update({name: callback}),
+        get_handle=lambda: SimpleNamespace(dirty=dirty.append),
+    )
+    panel.on_bind_model(SimpleNamespace(create_data_model=lambda _name: model))
+    assert views["show_editing"]()
+    tab_fields = {name for name in views if name.startswith("show_")}
+    for selected in ("highlights", "training", "datasets", "editing"):
+        dirty.clear()
+        events[f"show_{selected}"]()
+        assert {name for name in tab_fields if views[name]()} == {f"show_{selected}"}
+        assert set(dirty) == tab_fields

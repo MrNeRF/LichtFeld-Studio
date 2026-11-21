@@ -8,6 +8,7 @@
 #include "core/native_fs.hpp"
 
 #include "core/path_utils.hpp"
+#include "core/utc_time.hpp"
 
 #include <xxhash.h>
 
@@ -611,12 +612,7 @@ namespace lfs::io::project {
         }
 
         std::int64_t file_time_ns(const std::filesystem::file_time_type value) {
-#if defined(_MSC_VER)
-            const auto system_time =
-                std::chrono::clock_cast<std::chrono::system_clock>(value);
-#else
-            const auto system_time = std::filesystem::file_time_type::clock::to_sys(value);
-#endif
+            const auto system_time = core::file_time_to_system_clock(value);
             constexpr std::int64_t NS_PER_SECOND = 1'000'000'000;
             constexpr auto MIN_NS = std::numeric_limits<std::int64_t>::min();
             constexpr auto MAX_NS = std::numeric_limits<std::int64_t>::max();
@@ -1939,6 +1935,21 @@ namespace lfs::io::project {
         return element->set("unresolved", record.unresolved);
     }
 
+    lfs::Result<void> ReferencesChapter::update_locator(const lfs::core::Uuid& uuid, const ReferenceLocator& locator) {
+        auto element = dom_.array_find("references", uuid.to_string());
+        if (!element) {
+            return fail<void>(
+                lfs::ErrorCode::NotFound, "The external reference record is missing.",
+                std::format("REFS UUID {} does not exist", uuid.to_string()), "REFS",
+                "references.uuid");
+        }
+        auto value = element->get_json("locator").value_or(Json::object());
+        value.update(locator_json(locator));
+        if (!locator.absolute_fallback)
+            value.erase("absolute_fallback");
+        return element->set_json("locator", std::move(value));
+    }
+
     lfs::Result<bool> ReferencesChapter::remove(const lfs::core::Uuid& uuid) {
         if (uuid.is_nil()) {
             return fail<bool>(
@@ -2123,6 +2134,29 @@ namespace lfs::io::project {
 
     } // namespace
 
+    ReferenceLocator make_path_reference_locator(
+        const std::filesystem::path& project_root,
+        const std::filesystem::path& live_path) {
+        const auto absolute = absolute_lexically(live_path);
+        const auto absolute_text = lfs::core::path_to_utf8(absolute);
+        ReferenceLocator locator{
+            .preferred = absolute_text,
+            .base = LocatorBase::Absolute,
+            .absolute_fallback = absolute_text,
+        };
+        if (!project_root.empty()) {
+            const auto root = absolute_lexically(project_root);
+            const auto relative = absolute.lexically_relative(root);
+            if (!relative.empty() && relative != "." &&
+                relative.is_relative()) {
+                locator.preferred =
+                    lfs::core::path_to_generic_utf8(relative);
+                locator.base = LocatorBase::Project;
+            }
+        }
+        return locator;
+    }
+
     lfs::Result<lfs::core::Uuid> upsert_path_reference(
         ReferencesChapter& references,
         const std::filesystem::path& project_root,
@@ -2148,23 +2182,7 @@ namespace lfs::io::project {
         if (!fingerprint) {
             return std::move(fingerprint).error();
         }
-        const auto absolute = absolute_lexically(live_path);
-        const auto absolute_text = lfs::core::path_to_utf8(absolute);
-        ReferenceLocator locator{
-            .preferred = absolute_text,
-            .base = LocatorBase::Absolute,
-            .absolute_fallback = absolute_text,
-        };
-        if (!project_root.empty()) {
-            const auto root = absolute_lexically(project_root);
-            const auto relative = absolute.lexically_relative(root);
-            if (!relative.empty() && relative != "." &&
-                relative.is_relative()) {
-                locator.preferred =
-                    lfs::core::path_to_generic_utf8(relative);
-                locator.base = LocatorBase::Project;
-            }
-        }
+        auto locator = make_path_reference_locator(project_root, live_path);
 
         auto records = references.records();
         if (!records) {
@@ -2941,6 +2959,28 @@ namespace lfs::io::project {
         }
         cached_nodes_ = std::move(result);
         return *cached_nodes_;
+    }
+
+    lfs::Result<std::optional<PublishedSplatMetadata>> SceneGraphChapter::published_splat_metadata(
+        const lfs::core::Uuid& uuid) const {
+        const auto element = dom_.array_find("nodes", uuid.to_string());
+        const auto metadata = element ? element->get_json("publication") : std::nullopt;
+        if (!metadata)
+            return std::optional<PublishedSplatMetadata>{};
+        const auto invalid = [] {
+            return fail<std::optional<PublishedSplatMetadata>>(
+                lfs::ErrorCode::DataLoss, "The published splat metadata is invalid.",
+                "Invalid publication count or SH degree", "SCNG", "nodes.publication");
+        };
+        if (!metadata->is_object() || !metadata->contains("count") ||
+            !metadata->contains("sh_degree") || !metadata->at("count").is_number_integer() ||
+            !metadata->at("sh_degree").is_number_integer())
+            return invalid();
+        const auto count = metadata->at("count").get<std::int64_t>();
+        const auto degree = metadata->at("sh_degree").get<std::int64_t>();
+        if (count <= 0 || degree < 0 || degree > 3)
+            return invalid();
+        return std::optional<PublishedSplatMetadata>{PublishedSplatMetadata{static_cast<std::uint64_t>(count), static_cast<int>(degree)}};
     }
 
     lfs::Result<std::optional<SceneNodeRecord>> SceneGraphChapter::find(
@@ -4212,6 +4252,19 @@ namespace lfs::io::project {
         params.optimization = std::move(optimization);
 
         lfs::core::param::apply_explicit_training_overrides(params, params.overrides);
+    }
+
+    lfs::Result<std::vector<int>> disabled_camera_uids(const SceneGraphChapter& scene_graph) {
+        auto nodes = scene_graph.nodes();
+        if (!nodes) {
+            return std::move(nodes).error();
+        }
+        std::vector<int> uids;
+        for (const auto& node : *nodes) {
+            if (node.camera && !node.training_enabled)
+                uids.push_back(node.camera->uid);
+        }
+        return uids;
     }
 
 } // namespace lfs::io::project

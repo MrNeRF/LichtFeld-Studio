@@ -101,6 +101,9 @@ def load(root, descriptor):
         return None
     if not isinstance(descriptor, dict) or descriptor.get("path") != "view_geometry.json":
         raise ValueError("Invalid session geometry reference")
+    revision = descriptor.get("revision")
+    if not isinstance(revision, str) or not 0 < len(revision) <= 128:
+        raise ValueError("Invalid session geometry revision")
     size = descriptor.get("bytes")
     if type(size) is not int or not 0 < size <= MAX_BYTES:
         raise ValueError("Invalid session geometry size")

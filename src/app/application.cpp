@@ -40,6 +40,7 @@
 #include "app/mcp_gui_tools.hpp"
 #include "gui/gpu_memory_query.hpp"
 #include "io/loader.hpp"
+#include "io/loaders/missing_dataset_images.hpp"
 #include "io/video/video_encoder.hpp"
 #include "io/video/video_export_schedule.hpp"
 #include "mcp/mcp_http_server.hpp"
@@ -77,10 +78,10 @@
 
 namespace lfs::app {
 
-    std::optional<std::filesystem::path> prepare_lpips_weights(const bool allow_download) {
-        if (const auto path = core::environment::value("LFS_LPIPS_WEIGHTS"))
-            return core::utf8_to_path(*path);
-        auto result = lfs::preprocessing::ensure_lpips_weights(allow_download);
+    std::optional<core::nn::WeightFile> prepare_lpips_weights(const bool allow_download) {
+        const auto custom = core::environment::value("LFS_LPIPS_WEIGHTS");
+        auto result = custom ? core::nn::WeightFile::open(core::utf8_to_path(*custom))
+                             : lfs::preprocessing::ensure_lpips_weights(allow_download);
         if (result)
             return std::move(*result);
         LOG_WARN("LPIPS unavailable: {}", result.error().detail());
@@ -155,7 +156,8 @@ namespace lfs::app {
         [[nodiscard]] lfs::Error training_project_error(
             const lfs::ErrorCode code,
             std::string detail,
-            const lfs::core::SourceSite source) {
+            const lfs::core::SourceSite source,
+            lfs::SmallFields fields = {}) {
             return lfs::make_error(lfs::ErrorInit{
                 .code = code,
                 .domain = lfs::ErrorDomain::App,
@@ -163,6 +165,7 @@ namespace lfs::app {
                     "The training project could not be restored.",
                 .detail = std::move(detail),
                 .detection = source,
+                .fields = std::move(fields),
             });
         }
 
@@ -280,6 +283,16 @@ namespace lfs::app {
             io::project::adopt_project_training_parameters(
                 params, std::move(*snapshot), std::move(*dataset_root),
                 std::move(images_folder), document->references(), path.parent_path());
+            // The dataset load disables these cameras again, matched by uid
+            // as for a checkpoint's disabled cameras.
+            auto disabled = io::project::disabled_camera_uids(document->scene_graph());
+            if (!disabled) {
+                return lfs::Status::failure(
+                    std::move(disabled).error().with_context(
+                        "read training project cameras",
+                        LFS_SOURCE_SITE_CURRENT()));
+            }
+            params.disabled_camera_uids = std::move(*disabled);
             // dataset_project stays set: it is the save destination unless
             // -o redirects the result, exactly like --resume.
             LOG_INFO(
@@ -517,6 +530,8 @@ namespace lfs::app {
                 std::move(**parsed_params);
             const auto checkpoint_dataset_path =
                 checkpoint_params.dataset.data_path;
+            checkpoint_params.dataset.images = core::path_to_generic_utf8(core::path_from_source_format(
+                core::utf8_to_path(checkpoint_params.dataset.images), checkpoint_dataset_path));
             const auto checkpoint_images_folder =
                 checkpoint_params.dataset.images;
 
@@ -644,16 +659,24 @@ namespace lfs::app {
             }
             if (images_folder_changed) {
                 scene.rebaseCameraAssetPaths(
-                    checkpoint_params.dataset.data_path / checkpoint_images_folder,
-                    checkpoint_params.dataset.data_path / checkpoint_params.dataset.images);
+                    checkpoint_params.dataset.data_path / core::utf8_to_path(checkpoint_images_folder),
+                    checkpoint_params.dataset.data_path / core::utf8_to_path(checkpoint_params.dataset.images));
             }
             if (dataset_root_changed || images_folder_changed) {
                 const auto missing_images = scene.revalidateCameraImagePresence();
                 if (!missing_images.empty()) {
+                    std::vector<std::string> missing_paths;
+                    for (const auto& camera : scene.getAllCameras()) {
+                        if (!camera->has_image() && !camera->image_path().empty())
+                            missing_paths.push_back(core::path_to_utf8(camera->image_path()));
+                    }
+                    lfs::SmallFields fields;
+                    fields.add("missing_count", static_cast<std::int64_t>(missing_images.size()));
+                    fields.add("examples", io::join_missing_dataset_image_examples(missing_paths));
                     return training_project_error(
                         lfs::ErrorCode::InvalidArgument,
                         "The supplied dataset is not compatible with the resumed project's cameras",
-                        LFS_SOURCE_SITE_CURRENT());
+                        LFS_SOURCE_SITE_CURRENT(), std::move(fields));
                 }
             }
             if (checkpoint_params.optimization.mask_mode != core::param::MaskMode::None) {
@@ -1059,7 +1082,7 @@ namespace lfs::app {
                     auto trainer =
                         std::move(installed->trainer);
                     if (project->params.optimization.enable_eval)
-                        trainer->set_lpips_weights_path(prepare_lpips_weights(!params->no_download));
+                        trainer->set_lpips_weights_preparer([allow_download = !params->no_download] { return prepare_lpips_weights(allow_download); });
                     training::grant_headless_project_saves(
                         *trainer, project->params,
                         headless_project_save_destination(
@@ -1127,7 +1150,7 @@ namespace lfs::app {
                     }
                     LOG_INFO("Resumed from iteration {}", *ckpt_result);
                     if (ckpt_params_result->optimization.enable_eval)
-                        trainer->set_lpips_weights_path(prepare_lpips_weights(!params->no_download));
+                        trainer->set_lpips_weights_preparer([allow_download = !params->no_download] { return prepare_lpips_weights(allow_download); });
 
                     core::Tensor::trim_memory_pool();
 
@@ -1170,7 +1193,7 @@ namespace lfs::app {
                         return 1;
                     }
                     if (params->optimization.enable_eval)
-                        trainer->set_lpips_weights_path(prepare_lpips_weights(!params->no_download));
+                        trainer->set_lpips_weights_preparer([allow_download = !params->no_download] { return prepare_lpips_weights(allow_download); });
                     training::grant_headless_project_saves(
                         *trainer, *params,
                         headless_dataset_project_destination(*params),
@@ -1263,7 +1286,7 @@ namespace lfs::app {
                 model.set_active_sh_degree(model.get_max_sh_degree());
             }
 
-            trainer->set_lpips_weights_path(prepare_lpips_weights(!params->no_download));
+            trainer->set_lpips_weights_preparer([allow_download = !params->no_download] { return prepare_lpips_weights(allow_download); });
             core::Tensor::trim_memory_pool();
             const auto result = trainer->evaluate_current_model();
             trainer->shutdown();

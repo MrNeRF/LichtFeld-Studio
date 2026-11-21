@@ -45,7 +45,6 @@ body.docked-panel {
     gap: 8dp;
     padding: 0 12dp 0 14dp;
     border-bottom-width: 1dp;
-    border-bottom-color: rgba(88, 91, 112, 128);
 }
 
 #title-text {
@@ -65,12 +64,150 @@ body.docked-panel {
     font-size: 15dp;
     line-height: 20dp;
     text-align: center;
-    border-radius: 5dp;
+
     cursor: pointer;
 }
 
 #close-btn:hover {
     background-color: rgba(255, 255, 255, 18);
+}
+
+.window-icon {
+    position: relative;
+    width: 18dp;
+    height: 18dp;
+    flex-shrink: 0;
+}
+
+.window-minimize-line {
+    position: absolute;
+    left: 3dp;
+    top: 9dp;
+    width: 12dp;
+    height: 1dp;
+}
+
+.window-maximize-box {
+    position: absolute;
+    left: 3dp;
+    top: 3dp;
+    width: 12dp;
+    height: 12dp;
+    border-width: 1dp;
+}
+
+.window-icon-restore {
+    display: none;
+}
+
+.window-restore-box {
+    position: absolute;
+    width: 10dp;
+    height: 10dp;
+    border-width: 1dp;
+}
+
+.window-restore-back {
+    width: 11dp;
+    height: 11dp;
+    border-width: 1dp 1dp 0 0;
+    left: 5dp;
+    top: 3dp;
+}
+
+.window-restore-front {
+    left: 3dp;
+    top: 5dp;
+}
+
+/* Window actions are installed by the floating panel host. */
+button.window-control {
+    display: none;
+    width: 22dp;
+    min-width: 22dp;
+    height: 22dp;
+    min-height: 22dp;
+    flex-shrink: 0;
+    margin: 0;
+    padding: 0;
+    border-width: 0;
+    font-size: 15dp;
+    line-height: 20dp;
+    text-align: center;
+    cursor: pointer;
+}
+body.window-controls button.window-control {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+body.window-controls #pin-btn {
+    display: none;
+}
+body.window-controls #pin-btn.available {
+    display: flex;
+}
+.window-pin-icon {
+    width: 14dp;
+    height: 14dp;
+}
+button.window-control.maximized .window-icon-maximize {
+    display: none;
+}
+button.window-control.maximized .window-icon-restore {
+    display: block;
+}
+button.window-control .window-icon {
+    width: 14dp;
+    height: 14dp;
+}
+button.window-control .window-minimize-line {
+    left: 3dp;
+    top: 7dp;
+    width: 9dp;
+}
+button.window-control .window-maximize-box {
+    width: 9dp;
+    height: 9dp;
+}
+button.window-control .window-restore-box {
+    width: 8dp;
+    height: 8dp;
+}
+button.window-control .window-restore-back {
+    width: 9dp;
+    height: 9dp;
+    left: 4dp;
+    top: 2dp;
+}
+button.window-control .window-restore-front {
+    left: 2dp;
+    top: 4dp;
+}
+body.window-minimized #minimize-btn {
+    display: none;
+}
+body.window-minimized #window-frame > * {
+    display: none;
+}
+body.window-minimized #window-frame > #title-bar {
+    display: flex;
+}
+body.window-minimized #title-text {
+    cursor: pointer;
+}
+body.window-controls #title-text {
+    text-overflow: ellipsis;
+    overflow: hidden;
+    white-space: nowrap;
+}
+body.window-minimized,
+body.window-maximized,
+body.window-minimized #window-frame,
+body.window-maximized #window-frame {
+    min-height: 0;
+    height: 100%;
+    max-height: none;
 }
 
 #content-wrap {
@@ -90,13 +227,12 @@ scrollbarvertical {
 
 scrollbarvertical slidertrack {
     background-color: rgba(30, 30, 46, 128);
-    border-radius: 6dp;
 }
 
 scrollbarvertical sliderbar {
     background-color: rgba(108, 112, 134, 160);
     min-height: 12dp;
-    border-radius: 6dp;
+
     transition: background-color 0.12s quadratic-out;
 }
 
@@ -110,13 +246,12 @@ scrollbarhorizontal {
 
 scrollbarhorizontal slidertrack {
     background-color: rgba(30, 30, 46, 128);
-    border-radius: 6dp;
 }
 
 scrollbarhorizontal sliderbar {
     background-color: rgba(108, 112, 134, 160);
     min-width: 12dp;
-    border-radius: 6dp;
+
     transition: background-color 0.12s quadratic-out;
 }
 
@@ -145,7 +280,7 @@ input[type="checkbox"] {
     width: 13dp;
     height: 13dp;
     border-width: 1dp;
-    border-color: #585b70;
+
     margin: 0 6dp 0 0;
     padding: 0;
     transition: background-color 0.12s quadratic-out, border-color 0.12s quadratic-out;
@@ -157,8 +292,7 @@ input[type="radio"] {
     width: 14dp;
     height: 14dp;
     border-width: 1dp;
-    border-radius: 7dp;
-    border-color: #585b70;
+
     background-color: #313244;
     margin: 0 6dp 0 0;
     padding: 0;
@@ -166,12 +300,10 @@ input[type="radio"] {
 
 input[type="radio"]:checked {
     background-color: #89b4fa;
-    border-color: #89b4fa;
 }
 
 input[type="checkbox"]:checked {
     background-color: #94e2d5;
-    border-color: #94e2d5;
 }
 
 /* ── Form: Range Slider ─────────────────────────────────── */
@@ -180,20 +312,18 @@ input[type="range"] slidertrack {
     height: 4dp;
     background-color: #45475a;
     border-width: 0;
-    border-radius: 6dp;
 }
 
 input[type="range"] sliderprogress {
     height: 4dp;
     background-color: #89b4fa;
-    border-radius: 6dp;
 }
 
 input[type="range"] sliderbar {
     width: 10dp;
     height: 10dp;
     background-color: #89b4fa;
-    border-radius: 6dp;
+
     margin-top: -3dp;
     transition: background-color 0.12s quadratic-out;
 }
@@ -214,7 +344,7 @@ input[type="text"] {
     color: #cdd6f4;
     background-color: #313244;
     border-width: 1dp;
-    border-color: #45475a;
+
     height: 18dp;
     min-height: 18dp;
     padding: 1dp 4dp;
@@ -227,7 +357,7 @@ textarea {
     color: #cdd6f4;
     background-color: #313244;
     border-width: 1dp;
-    border-color: #45475a;
+
     padding: 2dp 4dp;
     transition: border-color 0.12s quadratic-out;
 }
@@ -236,18 +366,17 @@ textarea:focus,
 textarea:focus-visible {
     color: #cdd6f4;
     background-color: #313244;
-    border-color: #89b4fa;
+
     box-shadow: none;
 }
 
 input[type="text"]:focus {
-    border-color: #89b4fa;
 }
 
 input[type="text"]:focus-visible {
     color: #cdd6f4;
     background-color: #313244;
-    border-color: #89b4fa;
+
     box-shadow: none;
 }
 
@@ -258,7 +387,7 @@ button:focus-visible,
 .section-header:focus-visible,
 .asset-filter-row:focus-visible,
 .asset-sidebar-title:focus-visible {
-    border-color: #89b4fa;
+
     box-shadow: 0 0 0 1dp rgba(137, 180, 250, 160);
 }
 
@@ -269,7 +398,7 @@ select {
     color: #cdd6f4;
     background-color: #313244;
     border-width: 1dp;
-    border-color: #45475a;
+
     height: 18dp;
     min-height: 18dp;
     padding: 0;
@@ -279,13 +408,12 @@ select {
 }
 
 select:hover {
-    border-color: #89b4fa;
 }
 
 selectbox {
     background-color: #313244;
     border-width: 1dp;
-    border-color: #45475a;
+
     position: absolute;
     z-index: 10000;
     min-width: 100%;
@@ -339,7 +467,6 @@ progress {
     box-sizing: border-box;
     background-color: #313244;
     border-width: 1dp;
-    border-color: #45475a;
 }
 
 progress fill {
@@ -567,8 +694,7 @@ progress fill {
     decorator: vertical-gradient(#3a3c52 #2c2d3e);
     background-color: #313244;
     border-width: 1dp;
-    border-color: #45475a;
-    border-radius: 6dp;
+
     font-size: 12dp;
     cursor: ew-resize;
     transition: border-color 0.12s quadratic-out, background-color 0.12s quadratic-out;
@@ -578,7 +704,6 @@ progress fill {
 .scrub-field:hover,
 .scrub-field.is-dragging,
 .scrub-field.is-editing {
-    border-color: #89b4fa;
 }
 
 .scrub-field.is-editing {
@@ -593,7 +718,6 @@ progress fill {
     width: 0%;
     decorator: horizontal-gradient(rgba(116,168,249,110) rgba(137,180,250,140));
     background-color: rgba(137, 180, 250, 90);
-    border-radius: 5dp;
 }
 
 .scrub-field-display,
@@ -642,14 +766,12 @@ progress fill {
     gap: 4dp;
     padding: 5dp 6dp;
     margin: 0 -6dp;
-    font-weight: bold;
+    font-weight: 600;
     color: #cdd6f4;
     cursor: pointer;
     font-size: 12dp;
     border-width: 0;
-    border-top-width: 4dp;
-    border-radius: 0;
-    border-color: #1e1e2e;
+
     background-color: transparent;
 }
 
@@ -697,7 +819,6 @@ progress fill {
     padding: 0 6dp;
     border-width: 0;
     border-bottom-width: 4dp;
-    border-color: #1e1e2e;
 }
 
 .section-content.collapsed {
@@ -712,10 +833,10 @@ progress fill {
 
 .section-gap {
     border-width: 0;
-    border-top-width: 4dp;
-    border-color: #1e1e2e;
+
     margin: 0 -6dp;
     padding: 0 6dp;
+    border-top-width: 4dp;
 }
 
 /* ── Color Controls ─────────────────────────────────────── */
@@ -724,7 +845,7 @@ progress fill {
     width: 18dp;
     height: 18dp;
     border-width: 1dp;
-    border-color: #45475a;
+
     cursor: pointer;
     margin-right: 4dp;
     flex-shrink: 0;
@@ -738,7 +859,7 @@ progress fill {
     color: #a6adc8;
     background-color: #313244;
     border-width: 1dp;
-    border-color: #45475a;
+
     padding: 1dp 4dp;
     margin-right: 2dp;
     text-align: right;
@@ -751,7 +872,7 @@ progress fill {
     color: #cdd6f4;
     background-color: #313244;
     border-width: 1dp;
-    border-color: #45475a;
+
     padding: 1dp 3dp;
     text-align: right;
     transition: border-color 0.12s quadratic-out;
@@ -764,7 +885,7 @@ progress fill {
     color: #cdd6f4;
     background-color: #313244;
     border-width: 1dp;
-    border-color: #45475a;
+
     display: none;
     transition: border-color 0.12s quadratic-out;
 }
@@ -775,7 +896,6 @@ progress fill {
 
 .color-channel:focus,
 .color-hex:focus {
-    border-color: #89b4fa;
 }
 
 /* ── Context Menu ───────────────────────────────────────── */
@@ -787,7 +907,7 @@ progress fill {
     box-sizing: border-box;
     background-color: #313244;
     border-width: 1dp;
-    border-color: #45475a;
+
     padding: 4dp 0;
     min-width: 150dp;
     max-height: 80%;
@@ -818,7 +938,7 @@ progress fill {
 }
 
 .context-menu-item.active {
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .context-menu-item.submenu-item {
@@ -850,7 +970,7 @@ progress fill {
 
 .panel-title {
     font-size: 12dp;
-    font-weight: bold;
+    font-weight: 600;
     margin-bottom: 6dp;
 }
 
@@ -873,7 +993,7 @@ progress fill {
     color: #cdd6f4;
     background-color: #45475a;
     border-width: 1dp;
-    border-color: #585b70;
+
     cursor: pointer;
     text-align: center;
     transition: background-color 0.12s quadratic-out, border-color 0.12s quadratic-out;
@@ -889,7 +1009,13 @@ progress fill {
 
 /* <button> is no form control in RmlUi: its disabled attribute sets no :disabled. */
 .btn:disabled,
-.btn[disabled] {
+.btn[disabled],
+button:disabled,
+button[disabled],
+input:disabled,
+select:disabled,
+.control:disabled,
+.control[disabled] {
     opacity: 0.5;
     cursor: default;
 }
@@ -900,75 +1026,67 @@ progress fill {
 
 .btn--primary {
     background-color: #89b4fa;
-    border-color: #89b4fa;
+
     color: #1e1e2e;
     transition: background-color 0.12s quadratic-out, border-color 0.12s quadratic-out;
 }
 
 .btn--primary:hover {
     background-color: #b4d0fb;
-    border-color: #b4d0fb;
 }
 
 .btn--primary:active {
     background-color: #74a8f9;
-    border-color: #74a8f9;
 }
 
 .btn--success {
     background-color: #a6e3a1;
-    border-color: #a6e3a1;
+
     color: #1e1e2e;
     transition: background-color 0.12s quadratic-out, border-color 0.12s quadratic-out;
 }
 
 .btn--success:hover {
     background-color: #c0eabc;
-    border-color: #c0eabc;
 }
 
 .btn--success:active {
     background-color: #8cda86;
-    border-color: #8cda86;
 }
 
 .btn--warning {
     background-color: #f9e2af;
-    border-color: #f9e2af;
+
     color: #1e1e2e;
     transition: background-color 0.12s quadratic-out, border-color 0.12s quadratic-out;
 }
 
 .btn--warning:hover {
     background-color: #faebc4;
-    border-color: #faebc4;
 }
 
 .btn--warning:active {
     background-color: #f7d99a;
-    border-color: #f7d99a;
 }
 
 .btn--error {
     background-color: #f38ba8;
-    border-color: #f38ba8;
+
     color: #1e1e2e;
     transition: background-color 0.12s quadratic-out, border-color 0.12s quadratic-out;
 }
 
 .btn--error:hover {
     background-color: #f6a8be;
-    border-color: #f6a8be;
 }
 
 .btn--error:active {
     background-color: #f06e92;
-    border-color: #f06e92;
 }
 
 .btn--secondary {
     background-color: transparent;
-    border-color: #585b70;
+
     color: #cdd6f4;
     transition: background-color 0.12s quadratic-out;
 }
@@ -1183,7 +1301,6 @@ crf-curve {
 }
 
 .border-error {
-    border-color: #f38ba8;
 }
 
 .status-success {
@@ -1238,7 +1355,7 @@ crf-curve {
     position: absolute;
     z-index: 100;
     border-width: 1dp;
-    border-radius: 3dp;
+
     padding: 4dp 8dp;
     font-size: 12dp;
     max-width: 320dp;

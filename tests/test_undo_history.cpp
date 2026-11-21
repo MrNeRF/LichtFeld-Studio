@@ -32,6 +32,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <numeric>
 #include <optional>
 #include <ranges>
 #include <stdexcept>
@@ -1118,6 +1119,77 @@ TEST_F(UndoHistoryTest, SceneSnapshotRejectsTopologyChangedReplayWithoutMutating
     EXPECT_EQ(selection_mask_values(scene_manager->getScene()), selection_before_replay);
 }
 
+TEST_F(UndoHistoryTest, SelectionUndoSurvivesExternalPreviewGrowthShrinkAndRemoval) {
+    auto manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(manager.get());
+    lfs::vis::services().set(rendering.get());
+    auto& scene = manager->getScene();
+    const auto preview = scene.addExternalPreview("Trainer", "Preview");
+    const auto uuid = scene.getNodeUuid(preview);
+    (void)scene.updateExternalPreview(uuid, make_linear_test_splat(3), glm::mat4(1), {});
+    scene.addSplat("Local", make_linear_test_splat(2));
+    scene.setSelectionMask(std::make_shared<Tensor>(make_uint8_mask({0, 0, 0, 1, 0})));
+    auto snapshot = std::make_unique<lfs::vis::op::SceneSnapshot>(*manager, "selection.preview");
+    snapshot->captureSelection();
+    scene.setSelectionMask(std::make_shared<Tensor>(make_uint8_mask({0, 0, 0, 0, 1})));
+    snapshot->captureAfter();
+    snapshot->offloadToCPU();
+    lfs::vis::op::undoHistory().push(std::move(snapshot));
+    for (const size_t count : {5u, 1u, 0u}) {
+        if (count) {
+            (void)scene.updateExternalPreview(uuid, make_linear_test_splat(count), glm::mat4(1), {});
+            scene.setNodeVisibility(preview, count != 1);
+        } else {
+            (void)scene.removeExternalPreview(uuid);
+        }
+        std::vector<uint8_t> expected(count + 2, 0);
+        expected[count] = 1;
+        ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+        EXPECT_EQ(selection_mask_values(scene), expected);
+        expected[count] = 0;
+        expected[count + 1] = 1;
+        ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+        EXPECT_EQ(selection_mask_values(scene), expected);
+    }
+}
+
+TEST_F(UndoHistoryTest, ExternalPreviewDoesNotInvalidateLocalCollisionSource) {
+    lfs::vis::SceneManager manager;
+    auto& scene = manager.getScene();
+    const auto local = scene.addSplat("Local", make_linear_test_splat(2));
+    const auto identity = scene.collisionSourceIdentity(local);
+    ASSERT_TRUE(identity);
+    const auto root = scene.addExternalPreview("Trainer", "Preview");
+    const auto uuid = scene.getNodeUuid(root);
+    (void)scene.updateExternalPreview(uuid, make_linear_test_splat(3), glm::mat4(1), {});
+    EXPECT_EQ(scene.collisionSourceIdentity(local), identity);
+    (void)scene.updateExternalPreview(uuid, make_linear_test_splat(5), glm::mat4(1), {});
+    EXPECT_EQ(scene.collisionSourceIdentity(local), identity);
+    (void)scene.removeExternalPreview(uuid);
+    EXPECT_EQ(scene.collisionSourceIdentity(local), identity);
+    ASSERT_TRUE(lfs::vis::cap::writeGaussianField(manager, nullptr, "Local", "opacity_raw", {0}, {0.75f}));
+    EXPECT_NE(scene.collisionSourceIdentity(local), identity);
+}
+
+TEST_F(UndoHistoryTest, GaussianWritesRespectExternalOwnershipAndInheritedLocks) {
+    lfs::vis::SceneManager manager;
+    auto& scene = manager.getScene();
+    const auto root = scene.addExternalPreview("Trainer", "Preview");
+    (void)scene.updateExternalPreview(scene.getNodeUuid(root), make_linear_test_splat(2), glm::mat4(1), {});
+    const auto group = scene.addGroup("Locked");
+    scene.addSplat("Local", make_linear_test_splat(2), group);
+    scene.setNodeLocked("Locked", true);
+    for (const auto* name : {"Preview", "Local"}) {
+        const auto before = scene.getNode(name)->model->opacity_raw().clone();
+        EXPECT_FALSE(lfs::vis::cap::writeGaussianField(manager, nullptr, name, "opacity_raw", {0}, {0.75f}));
+        EXPECT_TRUE((scene.getNode(name)->model->opacity_raw() == before).all().item<bool>());
+    }
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
+    scene.setNodeLocked("Locked", false);
+    EXPECT_TRUE(lfs::vis::cap::writeGaussianField(manager, nullptr, "Local", "opacity_raw", {0}, {0.75f}));
+}
+
 TEST_F(UndoHistoryTest, CropBoxUndoEntryRoundTripsAndRejectsDeletedNodeReplay) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
@@ -1309,6 +1381,40 @@ TEST_F(UndoHistoryTest, GaussianFieldWritePushesUndoableTensorEntries) {
     undo_result = lfs::vis::op::undoHistory().undo();
     EXPECT_TRUE(undo_result.success);
     EXPECT_TRUE((node->model->means_raw() == original_means).all().item<bool>());
+}
+
+TEST_F(UndoHistoryTest, GaussianFieldUndoWritesIntoTheModelStorage) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addSplat("model", make_linear_test_splat(64));
+    auto* node = scene_manager->getScene().getMutableNode("model");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->model, nullptr);
+    const auto original = node->model->opacity_raw().clone();
+    const float* const storage = node->model->opacity_raw().ptr<float>();
+
+    // One row is replayed as a sparse swap, every row as a dense one.
+    std::vector<int> every_row(64);
+    std::iota(every_row.begin(), every_row.end(), 0);
+    for (const auto& rows : {std::vector<int>{7}, every_row}) {
+        auto write_result = lfs::vis::cap::writeGaussianField(
+            *scene_manager, rendering_manager.get(), "model", "opacity_raw", rows,
+            std::vector<float>(rows.size(), 0.75f));
+        ASSERT_TRUE(write_result) << write_result.error();
+
+        ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+        EXPECT_EQ(node->model->opacity_raw().ptr<float>(), storage);
+        EXPECT_TRUE((node->model->opacity_raw() == original).all().item<bool>());
+
+        ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+        EXPECT_EQ(node->model->opacity_raw().ptr<float>(), storage);
+        EXPECT_FLOAT_EQ(node->model->opacity_raw().cpu().to_vector()[rows.back()], 0.75f);
+
+        ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+    }
 }
 
 TEST_F(UndoHistoryTest, GaussianFieldWriteRejectsInvalidRawStateWithoutMutation) {
@@ -3567,6 +3673,80 @@ TEST_F(UndoHistoryTest, CameraDeleteUndoRepublishesCameraCount) {
     EXPECT_EQ(scene.getNode("a.png"), nullptr);
     EXPECT_EQ(scene.getAllCameras().size(), 1u);
     EXPECT_EQ(lfs::vis::app_store().import_overlay_state.get().num_images, 1u);
+}
+
+TEST_F(UndoHistoryTest, RemoveDisabledCamerasRemovesOnlyDirectDisabledCameras) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    const auto group = scene.addCameraGroup("Training", lfs::core::NULL_NODE, 4);
+    const auto enabled = scene.addCamera("enabled.png", group, make_test_camera("enabled.png", 1));
+    const auto first_disabled = scene.addCamera("first-disabled.png", group, make_test_camera("first-disabled.png", 2));
+    const auto second_disabled = scene.addCamera("second-disabled.png", group, make_test_camera("second-disabled.png", 3));
+    const auto nested_group = scene.addCameraGroup("Nested", group, 1);
+    const auto nested_disabled = scene.addCamera("nested.png", nested_group, make_test_camera("nested.png", 4));
+    ASSERT_NE(group, lfs::core::NULL_NODE);
+    ASSERT_NE(enabled, lfs::core::NULL_NODE);
+    ASSERT_NE(first_disabled, lfs::core::NULL_NODE);
+    ASSERT_NE(second_disabled, lfs::core::NULL_NODE);
+    ASSERT_NE(nested_group, lfs::core::NULL_NODE);
+    ASSERT_NE(nested_disabled, lfs::core::NULL_NODE);
+    scene.setCameraTrainingEnabled(first_disabled, false);
+    scene.setCameraTrainingEnabled(second_disabled, false);
+    scene.setCameraTrainingEnabled(nested_disabled, false);
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
+
+    const auto invalid_group = scene_manager->removeDisabledCamerasWithResult(enabled);
+    ASSERT_FALSE(invalid_group);
+    EXPECT_EQ(invalid_group.error().code(), lfs::ErrorCode::InvalidArgument);
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
+    EXPECT_NE(scene.getNodeById(enabled), nullptr);
+    EXPECT_NE(scene.getNodeById(first_disabled), nullptr);
+    EXPECT_NE(scene.getNodeById(second_disabled), nullptr);
+    EXPECT_NE(scene.getNodeById(nested_disabled), nullptr);
+
+    const auto removal = scene_manager->removeDisabledCamerasWithResult(group);
+    ASSERT_TRUE(removal) << (removal ? "" : lfs::format_for_developer(removal.error()));
+    EXPECT_EQ(*removal, 2u);
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 1u);
+    EXPECT_NE(scene.getNodeById(enabled), nullptr);
+    EXPECT_EQ(scene.getNodeById(first_disabled), nullptr);
+    EXPECT_EQ(scene.getNodeById(second_disabled), nullptr);
+    EXPECT_NE(scene.getNodeById(nested_disabled), nullptr);
+
+    const auto undo = lfs::vis::op::undoHistory().undo();
+    ASSERT_TRUE(undo.success) << undo.error;
+    const auto* restored_first = scene.getNode("first-disabled.png");
+    const auto* restored_second = scene.getNode("second-disabled.png");
+    ASSERT_NE(restored_first, nullptr);
+    ASSERT_NE(restored_second, nullptr);
+    EXPECT_FALSE(restored_first->training_enabled);
+    EXPECT_FALSE(restored_second->training_enabled);
+
+    const auto redo = lfs::vis::op::undoHistory().redo();
+    ASSERT_TRUE(redo.success) << redo.error;
+    EXPECT_EQ(scene.getNode("first-disabled.png"), nullptr);
+    EXPECT_EQ(scene.getNode("second-disabled.png"), nullptr);
+
+    const auto second_undo = lfs::vis::op::undoHistory().undo();
+    ASSERT_TRUE(second_undo.success) << second_undo.error;
+    restored_first = scene.getNode("first-disabled.png");
+    restored_second = scene.getNode("second-disabled.png");
+    ASSERT_NE(restored_first, nullptr);
+    ASSERT_NE(restored_second, nullptr);
+
+    scene.setCameraTrainingEnabled(restored_first->id, true);
+    scene.setCameraTrainingEnabled(restored_second->id, true);
+    const auto no_op = scene_manager->removeDisabledCamerasWithResult(group);
+    ASSERT_TRUE(no_op) << (no_op ? "" : lfs::format_for_developer(no_op.error()));
+    EXPECT_EQ(*no_op, 0u);
+    EXPECT_NE(scene.getNodeById(enabled), nullptr);
+    EXPECT_NE(scene.getNode("first-disabled.png"), nullptr);
+    EXPECT_NE(scene.getNode("second-disabled.png"), nullptr);
+    EXPECT_NE(scene.getNodeById(nested_disabled), nullptr);
 }
 
 TEST_F(UndoHistoryTest, CameraBatchDeleteUndoRestoresOrderAndId) {

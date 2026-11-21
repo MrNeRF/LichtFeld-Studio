@@ -476,6 +476,24 @@ namespace lfs::vis::gui {
         return cursor_request_;
     }
 
+    void RmlRightPanel::suspendInput() {
+        if (rml_manager_) {
+            rml_manager_->deactivateInput(rml_context_);
+            rml_manager_->setContextNeedsPassiveMouseMoveFrames(rml_context_, false);
+            rml_manager_->setContextTooltipRevealDeadline(rml_context_, std::nullopt);
+        }
+        blurFocus();
+        if (rml_context_)
+            rml_context_->ProcessMouseLeave();
+        tooltip_.setHover({}, nullptr);
+        wants_input_ = wants_keyboard_ = false;
+        rml_pointer_inside_ = last_over_interactive_ = last_over_resize_handle_ = false;
+        last_hover_element_ = nullptr;
+        input_dirty_ = true;
+        resize_dragging_ = splitter_dragging_ = tab_scroll_dragging_ = false;
+        cursor_request_ = CursorRequest::None;
+    }
+
     void RmlRightPanel::blurFocus() {
         if (!rml_context_)
             return;

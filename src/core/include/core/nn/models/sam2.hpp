@@ -21,12 +21,13 @@
 namespace lfs::core::nn::models {
 
     enum class Sam2MaskOutput { OriginalResolution,
-                                LowResolutionOnly };
+                                LowResolutionOnly,
+                                RawLowResolution };
 
     struct Sam2Prediction {
         Tensor masks;          // [num_masks, H, W] fp32 logits; absent for LowResolutionOnly
         Tensor iou;            // [num_masks] fp32 predicted mask quality
-        Tensor low_res_logits; // [num_masks, 256, 256] fp32
+        Tensor low_res_logits; // [num_masks, 256, 256] fp32; unclamped for RawLowResolution
         Tensor object_pointer;
         Tensor object_score_logits;
     };
@@ -44,6 +45,8 @@ namespace lfs::core::nn::models {
     public:
         static lfs::Result<Sam2> load(const std::filesystem::path& weights, Device device,
                                       std::optional<DataType> compute = std::nullopt);
+        static lfs::Result<Sam2> load(const WeightFile& file, Device device,
+                                      std::optional<DataType> compute = std::nullopt);
 
         // NCHW RGB in [0, 1], any H/W. Resizes to 1024x1024 internally (squash, like the
         // official predictor), normalizes, runs the image encoder, caches embeddings.
@@ -57,10 +60,14 @@ namespace lfs::core::nn::models {
                                             bool multimask = true, const Tensor* mask_logits = nullptr,
                                             Sam2MaskOutput output = Sam2MaskOutput::OriginalResolution);
 
+        // Upsample unclamped [num_masks, 256, 256] logits for the current image.
+        // Compare low-resolution proposals first, then upsample only the selected one.
+        lfs::Result<Tensor> postprocess_masks(const Tensor& logits) const;
+
         // One object and one automatic seed per sequence. A reverse pass starts a fresh bank from that seed.
         lfs::Result<void> set_video_image(const Tensor& image);
         lfs::Result<Sam2Prediction> seed_video(const Tensor& mask, int frame_index, int frame_count,
-                                               bool reverse);
+                                               bool reverse, float max_area = kSam2MaxArea);
         lfs::Result<Sam2Prediction> track_video(int frame_index);
         void reset_video();
         [[nodiscard]] bool supports_video() const;
@@ -118,6 +125,7 @@ namespace lfs::core::nn::models {
         bool video_reverse_ = false;
         bool video_image_ = false;
         bool video_oversized_ = false;
+        float video_max_area_ = kSam2MaxArea;
         Tensor raw_image_embed_;
         Tensor video_image_position_;
         Tensor video_memory_position_;

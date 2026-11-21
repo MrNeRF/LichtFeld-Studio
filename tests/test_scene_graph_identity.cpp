@@ -5,6 +5,7 @@
 #include "core/error_bus.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/memory_pressure.hpp"
 #include "core/mesh_data.hpp"
@@ -35,6 +36,91 @@
 using lfs::core::DataType;
 using lfs::core::Device;
 using lfs::core::Tensor;
+
+TEST(SceneExternalPreview, OwnershipCannotBeRemovedByUserLocksOrGraphOperations) {
+    lfs::core::Scene scene;
+    const auto root_id = scene.addExternalPreview("Trainer", "Preview");
+    const auto uuid = scene.getNodeUuid(root_id);
+    auto* root = scene.getNodeById(root_id);
+    ASSERT_NE(root, nullptr);
+    ASSERT_EQ(root->children.size(), 1);
+    const auto model_id = root->children.front();
+    auto* model = scene.getNodeById(model_id);
+    ASSERT_NE(model, nullptr);
+    EXPECT_TRUE(root->transient);
+    EXPECT_TRUE(model->transient);
+    EXPECT_TRUE(model->isExternalPreview());
+    root->locked = false;
+    model->locked = false;
+    scene.setNodeLocked(root->name, false);
+    EXPECT_TRUE(root->locked.get());
+    EXPECT_TRUE(scene.isNodeEffectivelyLocked(model_id));
+    auto transform = glm::mat4(1.0f);
+    transform[3][0] = 12.0f;
+    EXPECT_FALSE(scene.updateExternalPreview(uuid, nullptr, transform, {}).get());
+    EXPECT_EQ(model->local_transform.get(), transform);
+    model->local_transform = glm::mat4(1.0f);
+    scene.setNodeTransform(model_id, glm::mat4(1.0f));
+    EXPECT_EQ(model->local_transform.get(), transform);
+    EXPECT_FALSE(scene.renameNode(model_id, "Renamed"));
+    EXPECT_FALSE(scene.reparent(model_id, lfs::core::NULL_NODE));
+    const auto local = scene.addGroup("Local");
+    EXPECT_FALSE(scene.reparent(local, root_id));
+    EXPECT_EQ(scene.addGroup("Foreign child", root_id), lfs::core::NULL_NODE);
+    EXPECT_EQ(scene.addCropBox("Crop", model_id), lfs::core::NULL_NODE);
+    scene.setTrainingModelNode(model_id);
+    EXPECT_EQ(scene.getTrainingModelNodeId(), lfs::core::NULL_NODE);
+    scene.removeNodeById(root_id);
+    scene.removeNodeById(model_id);
+    EXPECT_NE(scene.getNodeByUuid(uuid), nullptr);
+    EXPECT_TRUE(scene.detachSplatModelsForRemoval(root_id).empty());
+    scene.setNodeVisibility(root_id, false);
+    EXPECT_FALSE(scene.isNodeEffectivelyVisible(model_id));
+    scene.removeExternalPreview(scene.getNodeUuid(local));
+    EXPECT_NE(scene.getNodeById(local), nullptr);
+    scene.removeExternalPreview(uuid);
+    EXPECT_EQ(scene.getNodeByUuid(uuid), nullptr);
+    EXPECT_FALSE(scene.hasExternalPreview());
+    EXPECT_NE(scene.getNodeById(local), nullptr);
+}
+
+TEST(SceneExternalPreview, SceneClearInvalidatesTheOldOwner) {
+    lfs::core::Scene scene;
+    const auto id = scene.addExternalPreview("Trainer", "Preview");
+    const auto uuid = scene.getNodeUuid(id);
+    scene.clear();
+    const auto replacement = scene.addExternalPreview("Trainer", "Preview");
+    EXPECT_NE(scene.getNodeUuid(replacement), uuid);
+    scene.removeExternalPreview(uuid);
+    EXPECT_NE(scene.getNodeById(replacement), nullptr);
+}
+
+TEST(SceneExternalPreview, ViewerUpdatesInvalidateRenderingWithoutDirtyingTheDocument) {
+    lfs::core::Scene scene;
+    std::vector<bool> document_changes;
+    lfs::event::ScopedHandler handlers;
+    handlers.subscribe<lfs::core::events::state::SceneChanged>([&](const auto& event) {
+        EXPECT_NE(event.mutation_flags, 0u);
+        document_changes.push_back(event.document_changed);
+    });
+    const auto id = scene.addExternalPreview("Trainer", "Preview");
+    const auto uuid = scene.getNodeUuid(id);
+    scene.setNodeVisibility(id, false);
+    auto transform = glm::mat4(1.0f);
+    transform[3][0] = 2.0f;
+    (void)scene.updateExternalPreview(uuid, nullptr, transform, {});
+    scene.removeExternalPreview(uuid);
+    ASSERT_EQ(document_changes.size(), 4);
+    EXPECT_TRUE(std::ranges::none_of(document_changes, [](const bool value) { return value; }));
+    document_changes.clear();
+    {
+        lfs::core::Scene::Transaction mixed(scene);
+        scene.addExternalPreview("Trainer", "Preview");
+        scene.addGroup("Local edit");
+    }
+    ASSERT_EQ(document_changes.size(), 1);
+    EXPECT_TRUE(document_changes.front());
+}
 
 namespace {
 
@@ -1175,6 +1261,89 @@ TEST(SceneCameraAssetPathTest, RebaseRewritesUnderOldRootAndRefreshesNodeMirrors
     ASSERT_NE(outside_node, nullptr);
     EXPECT_EQ(outside_node->image_path, lfs::core::path_to_utf8(outside));
     EXPECT_TRUE(outside_node->mask_path.empty());
+}
+
+TEST(SceneCameraAssetPathTest, RebaseSourceFormatsAndImageFolderOverrides) {
+    int device_count = 0;
+    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count <= 0)
+        GTEST_SKIP() << "CUDA device unavailable";
+
+    struct Source {
+        const char* root;
+        const char* images;
+        const char* separator;
+        const char* expected_images;
+    };
+    const Source sources[] = {
+        {R"(D:\datasets\zandspêeltuin)", R"(images\original)", "\\", "images/original"},
+        {"D:/datasets/zandspêeltuin/", "images/original", "/", "images/original"},
+        {R"(\\server\share\dataset)", R"(images\original)", "\\", "images/original"},
+        {"/datasets/zandspêeltuin", "images/original", "/", "images/original"},
+#ifndef _WIN32
+        {R"(/datasets/literal\name)", R"(images/literal\folder)", "/", R"(images/literal\folder)"},
+#endif
+    };
+    const auto destination = std::filesystem::temp_directory_path() / "lfs-rebased";
+    for (const auto& source : sources) {
+        SCOPED_TRACE(source.root);
+        const auto root = lfs::core::utf8_to_path(source.root);
+        auto path = [&](const std::string& suffix) {
+            return lfs::core::utf8_to_path(std::string(source.root) + source.separator + suffix);
+        };
+        auto camera = std::make_shared<lfs::core::Camera>(
+            Tensor::eye(3, Device::CPU), Tensor::zeros({3}, Device::CPU),
+            100.0f, 100.0f, 32.0f, 32.0f, Tensor(), Tensor(),
+            lfs::core::CameraModelType::PINHOLE, "frame.png",
+            path(std::string(source.images) + source.separator + "rigA" + source.separator + "frame.png"),
+            path("masks/rigA/frame.png"), 64, 64, 1, 0,
+            path("depth/rigA/frame.exr"), path("normals/rigA/frame.png"));
+        lfs::core::Scene scene;
+        const auto group = scene.addCameraGroup("Training", scene.addGroup("Cameras"), 2);
+        scene.addCamera("frame.png", group, camera);
+        auto other_camera = std::make_shared<lfs::core::Camera>(
+            Tensor::eye(3, Device::CPU), Tensor::zeros({3}, Device::CPU),
+            100.0f, 100.0f, 32.0f, 32.0f, Tensor(), Tensor(),
+            lfs::core::CameraModelType::PINHOLE, "frame.png",
+            path(std::string(source.images) + source.separator + "rigB" + source.separator + "frame.png"),
+            std::filesystem::path(), 64, 64, 2, 0);
+        scene.addCamera("other-frame.png", group, other_camera);
+        scene.rebaseCameraAssetPaths(root, destination);
+        const auto original_images = destination / source.expected_images;
+        EXPECT_EQ(camera->image_path(), destination / source.expected_images / "rigA/frame.png");
+        EXPECT_EQ(camera->mask_path(), destination / "masks/rigA/frame.png");
+        EXPECT_EQ(camera->depth_path(), destination / "depth/rigA/frame.exr");
+        EXPECT_EQ(camera->normal_path(), destination / "normals/rigA/frame.png");
+
+        scene.rebaseCameraAssetPaths(original_images, destination / "photos");
+        EXPECT_EQ(camera->image_path(), destination / "photos/rigA/frame.png");
+        EXPECT_EQ(other_camera->image_path(), destination / "photos/rigB/frame.png");
+        EXPECT_EQ(camera->mask_path(), destination / "masks/rigA/frame.png");
+        EXPECT_EQ(lfs::core::utf8_to_path(scene.getNode("frame.png")->image_path),
+                  destination / "photos/rigA/frame.png");
+
+        // A sibling prefix and an escaping path must not be captured by root rebasing.
+        auto sibling = std::string(source.root);
+        while (sibling.ends_with('/'))
+            sibling.pop_back();
+        const auto outside = lfs::core::utf8_to_path(sibling + "-other/frame.png");
+        camera->set_depth_path(outside);
+        camera->set_normal_path(path("../elsewhere/frame.png"));
+        const auto normal = camera->normal_path();
+        const auto embedded_mask = lfs::core::generate_uuid_v4();
+        const auto mask = path("masks/embedded.png");
+        camera->set_mask_path(mask, embedded_mask);
+        scene.rebaseCameraAssetPaths(root, destination);
+        EXPECT_EQ(camera->depth_path(), outside);
+        EXPECT_EQ(camera->normal_path(), normal);
+        EXPECT_EQ(camera->mask_path(), mask);
+        EXPECT_EQ(camera->mask_asset_uuid(), embedded_mask);
+        if (std::string_view(source.root).starts_with("\\\\")) {
+            const std::filesystem::path external("/server/share/dataset/external.png");
+            camera->set_normal_path(external);
+            scene.rebaseCameraAssetPaths(root, destination);
+            EXPECT_EQ(camera->normal_path(), external);
+        }
+    }
 }
 
 // Fails when the camera caches are rebuilt without a lock: the training thread and the UI thread both rebuild them

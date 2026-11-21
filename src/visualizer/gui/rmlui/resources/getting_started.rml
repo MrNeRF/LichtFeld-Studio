@@ -7,9 +7,79 @@
   <p class="description">@tr:getting_started.description</p>
 
   <div class="guide-tabs">
+    <button id="tab-editing" class="btn guide-tab" data-class-active="show_editing" data-event-click="show_editing">@tr:getting_started.tab_editing</button>
     <button id="tab-highlights" class="btn guide-tab" data-class-active="show_highlights" data-event-click="show_highlights">@tr:getting_started.tab_highlights</button>
     <button id="tab-training" class="btn guide-tab" data-class-active="show_training" data-event-click="show_training">@tr:getting_started.tab_training</button>
     <button id="tab-datasets" class="btn guide-tab" data-class-active="show_datasets" data-event-click="show_datasets">@tr:getting_started.tab_datasets</button>
+  </div>
+
+  <div id="section-editing" class="guide-section" data-if="show_editing">
+    <div class="video-grid">
+      <button class="video-card" id="card-editing-navigation"
+              data-url="https://www.youtube.com/watch?v=IoRvYpMJt6E"
+              data-event-click="open_url">
+        <div class="card-body">
+          <span class="play-icon">&#x25B6;</span>
+        </div>
+        <span class="card-title">@tr:getting_started.video_editing_navigation</span>
+      </button>
+      <button class="video-card" id="card-editing-align"
+              data-url="https://www.youtube.com/watch?v=IqPTm01PH-4"
+              data-event-click="open_url">
+        <div class="card-body">
+          <span class="play-icon">&#x25B6;</span>
+        </div>
+        <span class="card-title">@tr:getting_started.video_editing_align</span>
+      </button>
+      <button class="video-card" id="card-editing-crop"
+              data-url="https://www.youtube.com/watch?v=-HHbckhaAEs"
+              data-event-click="open_url">
+        <div class="card-body">
+          <span class="play-icon">&#x25B6;</span>
+        </div>
+        <span class="card-title">@tr:getting_started.video_editing_crop</span>
+      </button>
+      <button class="video-card" id="card-editing-transform"
+              data-url="https://www.youtube.com/watch?v=AOGYAAzOqSM"
+              data-event-click="open_url">
+        <div class="card-body">
+          <span class="play-icon">&#x25B6;</span>
+        </div>
+        <span class="card-title">@tr:getting_started.video_editing_transform</span>
+      </button>
+      <button class="video-card" id="card-editing-selection"
+              data-url="https://www.youtube.com/watch?v=Xg1lPo24NkM"
+              data-event-click="open_url">
+        <div class="card-body">
+          <span class="play-icon">&#x25B6;</span>
+        </div>
+        <span class="card-title">@tr:getting_started.video_editing_selection</span>
+      </button>
+      <button class="video-card" id="card-editing-depth-selection"
+              data-url="https://www.youtube.com/watch?v=Zhp2OWK9L2Q"
+              data-event-click="open_url">
+        <div class="card-body">
+          <span class="play-icon">&#x25B6;</span>
+        </div>
+        <span class="card-title">@tr:getting_started.video_editing_depth_selection</span>
+      </button>
+      <button class="video-card" id="card-editing-publish"
+              data-url="https://www.youtube.com/watch?v=0deVhRq0IwM"
+              data-event-click="open_url">
+        <div class="card-body">
+          <span class="play-icon">&#x25B6;</span>
+        </div>
+        <span class="card-title">@tr:getting_started.video_editing_publish</span>
+      </button>
+      <button class="video-card" id="card-blender"
+              data-url="https://www.youtube.com/watch?v=K8Y8BvWNndk"
+              data-event-click="open_url">
+        <div class="card-body">
+          <span class="play-icon">&#x25B6;</span>
+        </div>
+        <span class="card-title">@tr:getting_started.video_blender</span>
+      </button>
+    </div>
   </div>
 
   <div id="section-highlights" class="guide-section" data-if="show_highlights">
@@ -51,6 +121,14 @@
 
   <div id="section-training" class="guide-section" data-if="show_training">
     <div class="video-grid">
+      <button class="video-card" id="card-normals"
+              data-url="https://www.youtube.com/watch?v=BuchveUjkUk"
+              data-event-click="open_url">
+        <div class="card-body">
+          <span class="play-icon">&#x25B6;</span>
+        </div>
+        <span class="card-title">@tr:getting_started.video_normals</span>
+      </button>
       <button class="video-card" id="card-intro"
               data-url="https://www.youtube.com/watch?v=b1Olu_IU1sM"
               data-event-click="open_url">
@@ -100,6 +178,9 @@
   </div>
 
   <div class="guide-footer">
+    <button id="channel-link" class="btn wiki-link"
+            data-url="https://www.youtube.com/@LichtFeldStudio/videos"
+            data-event-click="open_url">@tr:getting_started.more_videos</button>
     <button id="wiki-section" class="btn wiki-link"
             data-url="https://github.com/MrNeRF/LichtFeld-Studio/wiki"
             data-event-click="open_url">@tr:getting_started.documentation</button>

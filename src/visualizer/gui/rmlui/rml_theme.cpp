@@ -9,6 +9,7 @@
 #include "gui/rmlui/rml_path_utils.hpp"
 #include "internal/resource_paths.hpp"
 #include "preferences.hpp"
+#include "theme/style_tokens.hpp"
 #include "theme/theme.hpp"
 
 #include <RmlUi/Core/ElementDocument.h>
@@ -462,6 +463,12 @@ namespace lfs::vis::gui::rml_theme {
         }
 
         float numericThemeValue(const Theme& t, const std::string& name) {
+            if (name == "font.base_size")
+                return t.fonts.base_size;
+            if (name == "font.small_size")
+                return t.fonts.small_size;
+            if (name == "font.large_size")
+                return t.fonts.large_size;
             if (name == "button.tint_normal")
                 return t.button.tint_normal;
             if (name == "button.tint_hover")
@@ -827,6 +834,13 @@ namespace lfs::vis::gui::rml_theme {
             const float window_shadow_padding = layeredShadowPadding(t, 4);
 
             std::unordered_map<std::string, std::string> tokens{
+                {"stroke.normal", std::format("{}", ui_style::normal_stroke)},
+                {"stroke.emphasis", std::format("{}", ui_style::emphasis_stroke)},
+                // Two authored corner sizes per theme. Circles/pills are geometry,
+                // rather than a third decorative corner size.
+                {"radius.control", std::format("{}", std::max(0.0f, t.sizes.frame_rounding))},
+                {"radius.surface", std::format("{}", std::max(t.sizes.frame_rounding, t.sizes.window_rounding))},
+                {"radius.round", "999"},
                 {"window.surface", window_surface},
                 {"window.body_decor", window_body_decor},
                 {"panel.body_decor", panel_body_decor},
@@ -837,6 +851,9 @@ namespace lfs::vis::gui::rml_theme {
                 {"components.header_decor", header_decor},
                 {"components.header_hover_decor", header_hover_decor},
                 {"components.header_shape", header_shape},
+                {"components.header_focus_padding_top",
+                 std::format("{}", std::max(0.0f, t.sizes.frame_padding.y +
+                                                      (t.gradients.section_header ? -3.0f : 0.0f)))},
                 {"components.header_state_border",
                  t.gradients.section_header ? colorToRmlAlpha(p.border, 0.72f)
                                             : colorToRml(t.menu_background())},
@@ -1048,34 +1065,33 @@ namespace lfs::vis::gui::rml_theme {
         if (theme_template.empty())
             return {};
 
-        std::string result;
-        visitThemePresets([&](const std::string_view theme_id, const Theme& theme) {
-            auto rules = expandThemeTemplate(theme_template, theme);
-            if (!rules.empty())
-                result += std::format("@media (theme: {}) {{\n{}}}\n", theme_id, rules);
-        });
-        return result;
+        // Theme changes invalidate each document through currentThemeSignature().
+        // Expand the active variant only, so startup does not parse unused rules.
+        return std::format("@media (theme: {}) {{\n{}}}\n",
+                           currentThemeId(), expandThemeTemplate(theme_template, theme()));
     }
 
     namespace {
         std::string components_theme_media_cache;
-        bool components_theme_media_valid = false;
+        std::optional<std::size_t> components_theme_signature;
         std::mutex cache_mutex;
     } // namespace
 
     const std::string& getComponentsThemeMedia() {
         std::lock_guard lock(cache_mutex);
-        if (!components_theme_media_valid) {
+        const auto signature = currentThemeSignature();
+        if (components_theme_signature != signature) {
             components_theme_media_cache =
-                generateThemeMediaFromTemplate(loadBaseRCSS("rmlui/components.theme.rcss"));
-            components_theme_media_valid = true;
+                generateThemeMediaFromTemplate(loadBaseRCSS("rmlui/components.theme.rcss") + "\n" +
+                                               loadBaseRCSS("rmlui/im_mode_panel.theme.rcss"));
+            components_theme_signature = signature;
         }
         return components_theme_media_cache;
     }
 
     void invalidateThemeMediaCache() {
         std::lock_guard lock(cache_mutex);
-        components_theme_media_valid = false;
+        components_theme_signature.reset();
     }
 
     std::string generateSpriteSheetRCSS() {
@@ -1142,6 +1158,7 @@ namespace lfs::vis::gui::rml_theme {
 
         std::size_t seed = 0;
         hashCombine(seed, lfs::vis::getThemeDpiScale());
+        hashCombine(seed, currentThemeId());
         hashCombine(seed, t.name);
 
         hashColor(seed, p.background);

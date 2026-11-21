@@ -592,6 +592,7 @@ if(BUILD_PORTABLE)
         "${CMAKE_CURRENT_SOURCE_DIR}/lichtfeld_sessions"
         DESTINATION "${CMAKE_INSTALL_BINDIR}"
         FILES_MATCHING PATTERN "*.py" PATTERN "*.pem"
+        PATTERN "vocab.txt.gz" PATTERN "LLMDET-LICENSE.txt" PATTERN "TRANSFORMERS-LICENSE.txt"
     )
     install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/_lfs_panel_contract.py"
         "${CMAKE_CURRENT_SOURCE_DIR}/_lfs_path_io.py"
@@ -602,6 +603,7 @@ else()
         "${CMAKE_CURRENT_SOURCE_DIR}/lichtfeld_sessions"
         DESTINATION "${PYTHON_INSTALL_DIR}"
         FILES_MATCHING PATTERN "*.py" PATTERN "*.pem"
+        PATTERN "vocab.txt.gz" PATTERN "LLMDET-LICENSE.txt" PATTERN "TRANSFORMERS-LICENSE.txt"
     )
     install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/_lfs_panel_contract.py"
         "${CMAKE_CURRENT_SOURCE_DIR}/_lfs_path_io.py"

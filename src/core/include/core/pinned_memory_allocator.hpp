@@ -12,7 +12,6 @@
 #include <list>
 #include <mutex>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 namespace lfs::core {
@@ -215,12 +214,6 @@ namespace lfs::core {
 
         // Track all allocated blocks (for deallocation lookup)
         std::unordered_map<void*, AllocationInfo> allocated_blocks_;
-
-        // Streams severed via release_stream(): synchronized and about to be
-        // destroyed. Recording an event on such a handle is use-after-free
-        // inside the driver, so deallocate() must skip them. A recycled handle
-        // value re-enters service (and leaves this set) through record_stream().
-        std::unordered_set<cudaStream_t> severed_streams_;
 
         void update_peaks_locked();
         void publish_stats_locked() const;

@@ -1,33 +1,18 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Explicitly installed trainer publisher. No Blender or observer UI dependency."""
-import importlib
 import json
 from _lfs_path_io import Path
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+from . import ensure_numpy
 from .capture import capture
 from . import geometry
 from .transport import MAX_BYTES, TERMINAL, SessionPublisher, read_text_shared
 
 _stream = None
-
-
-def ensure_numpy(lf):
-    """Prepare numerical dependencies on a worker, never in a capture callback."""
-    try:
-        import numpy
-    except ImportError:
-        lf.packages.init()
-        lf.packages.install("numpy>=2,<3")
-        site = lf.packages.site_packages_dir()
-        if site not in sys.path:
-            sys.path.insert(0, site)
-        importlib.invalidate_caches()
-        import numpy
-    return numpy
 
 
 class TrainingPublisher:

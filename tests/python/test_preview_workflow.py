@@ -13,6 +13,44 @@ from test_rmlui_image_sources import panel_modules, _DocumentStub, _ElementStub
 from test_preview_file_revision import settle_metadata
 
 
+def test_extracted_review_hides_extractor_only_after_success_and_can_retry(panel_modules, monkeypatch):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    monkeypatch.setattr(module.lf.ui, "get_panel_object", lambda _panel_id: panel)
+    changes = []
+    monkeypatch.setattr(module.lf.ui, "set_panel_enabled", lambda *args: changes.append(args))
+    with monkeypatch.context() as patch:
+        def fail():
+            raise RuntimeError("preview initialization failed")
+        patch.setattr(panel, "_reset_preview", fail)
+        with pytest.raises(RuntimeError, match="preview initialization failed"):
+            module.open_extracted_frame_preview(["frame.png"])
+    assert ("native.video_extractor", False) not in changes
+    module.open_extracted_frame_preview(["frame.png"])
+    assert panel._image_paths == [module.Path("frame.png")]
+    assert panel._mask_editor.enabled
+    assert changes[-1] == ("native.video_extractor", False)
+    panel._metadata.close()
+
+
+def test_pending_or_empty_review_keeps_extractor_available(panel_modules, monkeypatch):
+    module, _ = panel_modules
+    changes = []
+    monkeypatch.setattr(module.lf.ui, "set_panel_enabled", lambda *args: changes.append(args))
+    empty = module.ImagePreviewPanel()
+    empty.open([], [], 0, assisted=True)
+    assert not changes
+    empty._metadata.close()
+    monkeypatch.setattr(module.lf.ui, "get_panel_object", lambda _panel_id: None)
+    module.open_extracted_frame_preview(["frame.png"])
+    assert changes == [("lfs.image_preview", True)]
+    panel = module.ImagePreviewPanel()
+    assert module._pending_open is None
+    assert panel._image_paths == [module.Path("frame.png")]
+    assert changes[-1] == ("native.video_extractor", False)
+    panel._metadata.close()
+
+
 class Element(_ElementStub):
     def __init__(self, tag="div"):
         super().__init__()
@@ -85,7 +123,8 @@ def test_remount_populates_the_new_filmstrip_model_without_navigation(panel_modu
     panel.on_unmount(doc)
     new_records = []
     handle = SimpleNamespace(update_record_list=lambda _, rows: new_records.append(rows), dirty=lambda _: None)
-    model = SimpleNamespace(bind_func=lambda *args: None, bind_record_list=lambda *args: None, get_handle=lambda: handle)
+    model = SimpleNamespace(bind_func=lambda *args: None, bind=lambda *args: None,
+                            bind_event=lambda *args: None, bind_record_list=lambda *args: None, get_handle=lambda: handle)
     panel.on_bind_model(SimpleNamespace(create_data_model=lambda _: model))
     panel._update_filmstrip(doc, True)
     assert new_records == [expected]
@@ -305,6 +344,19 @@ def test_open_has_no_filesystem_reads_and_metadata_runs_off_ui_thread(panel_modu
     settle_metadata(panel)
     assert threads and all(thread != ui_thread for thread in threads)
     assert panel._get_image_info(path) == (320, 240, 3)
+    panel._metadata.close()
+
+
+def test_saved_view_keeps_the_requested_image_on_first_open(panel_modules):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel.apply_chrome({"camera_index": 0, "zoom": 2.0, "fit_to_window": False, "show_filmstrip": False})
+    panel.open([module.Path(f"frame_{i}.png") for i in range(8)], [], 5)
+    assert panel._current_index == 5
+    assert (panel._zoom, panel._fit_to_window, panel._show_filmstrip) == (2.0, False, False)
+
+    panel.apply_chrome({"camera_index": 2})
+    assert panel._current_index == 2
     panel._metadata.close()
 
 

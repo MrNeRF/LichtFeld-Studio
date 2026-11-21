@@ -8,6 +8,7 @@
 #include "core/error_bus.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
+#include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
 #include "core/native_fs.hpp"
@@ -35,6 +36,7 @@
 #include "io/exporter.hpp"
 #include "io/formats/colmap.hpp"
 #include "io/video/video_export_schedule.hpp"
+#include "io/video_frame_extractor.hpp"
 #include "nanoflann.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
@@ -47,6 +49,7 @@
 #include "rendering/passes/vulkan_mesh_pass.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "rendering/vulkan_external_tensor.hpp"
 #include "scene/scene_manager.hpp"
 #include "scene/scene_render_state.hpp"
 #include "sequencer/keyframe.hpp"
@@ -80,6 +83,9 @@
 #include <random>
 #include <shared_mutex>
 #include <string_view>
+#include <tbb/info.h>
+#include <tbb/parallel_for.h>
+#include <tbb/task_arena.h>
 #include <type_traits>
 #include <typeinfo>
 #include <unordered_map>
@@ -873,11 +879,136 @@ namespace lfs::vis::gui {
           assisted_masking_(std::make_unique<AssistedMasking>(jobs_, [this] {
               const auto* trainer = viewer_->getTrainerManager();
               return !viewer_->isTrainingStartPending() && !viewer_->projectTrainingSessionState().restoring && (!trainer || trainer->isDatasetEditable()) &&
-                     !jobs_.anyRunning(JobType::Import) && !jobs_.anyRunning(JobType::VideoExport);
-          })) {}
+                     !jobs_.anyRunning(JobType::Import) && !jobs_.anyRunning(JobType::VideoExport); }, [this]() -> std::optional<std::array<uint64_t, 2>> {
+              if (const auto& project = viewer_->project_lifecycle_)
+                  return project->documentSceneRevision();
+              return std::nullopt; })) {}
 
     AsyncTaskManager::~AsyncTaskManager() {
         shutdown();
+    }
+
+    bool AsyncTaskManager::uploadExternalPreview(std::shared_ptr<ExternalPreviewUpdate> update) {
+        return update && startExternalPreviewWorker(std::move(update));
+    }
+
+    bool AsyncTaskManager::startExternalPreviewWorker(std::shared_ptr<ExternalPreviewUpdate> update) {
+        if ((update && update->submitted) || external_preview_uploading_.load(std::memory_order_acquire))
+            return false;
+        // Upload and retirement work is done; join also waits for the worker's
+        // native capture destructors, which must not acquire the GIL.
+        external_preview_thread_.reset();
+        auto allocator = makeViewerSplatTensorAllocator(true);
+        int first_uid = 0;
+        if (update && update->replace_cameras) {
+            for (const auto& camera : *viewer_->getSceneManager()->getScene().getAllCamerasCached()) {
+                if (camera->uid() >= std::numeric_limits<int>::max() - 10000)
+                    return false;
+                first_uid = std::max(first_uid, camera->uid() + 1);
+            }
+        }
+        if (update)
+            update->submitted = true;
+        external_preview_uploading_.store(true, std::memory_order_release);
+        // A retirement-only pass must not invalidate another connection's upload.
+        auto retired = update ? std::exchange(external_preview_update_, update) : nullptr;
+        const bool was_invalidated = retired && retired->invalidated.exchange(true, std::memory_order_acq_rel);
+        try {
+            external_preview_thread_.emplace([this, update, retired,
+                                              allocator = std::move(allocator), first_uid](const std::stop_token stop) {
+                // Large retired buffers are reclaimed here, never in the panel tick.
+                if (retired) {
+                    retired->model.reset();
+                    retired->cameras.clear();
+                }
+                try {
+                    if (update && update->model && !stop.stop_requested()) {
+                        if (auto migrated = io::migrateSplatTensorsToAllocator(*update->model, allocator); !migrated)
+                            throw std::runtime_error(migrated.error().format());
+                    }
+                    if (update && update->replace_cameras && !stop.stop_requested()) {
+                        auto rows = update->camera_rows.accessor<float, 2>();
+                        for (size_t i = 0; i < update->camera_rows.size(0) && !stop.stop_requested(); ++i) {
+                            glm::mat4 pose(1.0f);
+                            for (int row = 0; row < 4; ++row)
+                                for (int col = 0; col < 4; ++col)
+                                    pose[col][row] = rows(i, row * 4 + col);
+                            const auto name = std::to_string(i + 1);
+                            auto camera = std::make_shared<core::Camera>(
+                                core::Tensor::from_vector({1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f}, {3, 3}, core::Device::CUDA),
+                                core::Tensor::zeros({3}, core::Device::CUDA),
+                                rows(i, 16), rows(i, 17), rows(i, 18), rows(i, 19),
+                                core::Tensor{}, core::Tensor{}, core::CameraModelType::PINHOLE,
+                                name, std::filesystem::path{}, std::filesystem::path{},
+                                static_cast<int>(rows(i, 20)), static_cast<int>(rows(i, 21)), first_uid + static_cast<int>(i));
+                            update->cameras.push_back({std::move(camera), pose});
+                        }
+                    }
+                    if (update && stop.stop_requested()) {
+                        update->model.reset();
+                        update->cameras.clear();
+                        update->error = "Preview upload cancelled";
+                    }
+                } catch (const std::exception& error) {
+                    LOG_WARN("External preview upload failed: {}", error.what());
+                    if (update)
+                        update->error = error.what();
+                }
+                if (update)
+                    update->ready.store(true, std::memory_order_release);
+                for (;;) {
+                    std::vector<std::shared_ptr<ExternalPreviewUpdate>> releases;
+                    {
+                        std::lock_guard lock(external_preview_retirement_mutex_);
+                        releases.swap(external_preview_retired_);
+                        if (releases.empty()) {
+                            external_preview_uploading_.store(false, std::memory_order_release);
+                            break;
+                        }
+                    }
+                    // Deletion and upload share the same worker and resource owner.
+                    for (const auto& resources : releases) {
+                        resources->model.reset();
+                        resources->cameras.clear();
+                    }
+                }
+            });
+        } catch (const std::exception& error) {
+            LOG_WARN("Could not start external preview upload: {}", error.what());
+            if (update)
+                external_preview_update_ = std::move(retired);
+            if (update && external_preview_update_)
+                external_preview_update_->invalidated.store(was_invalidated, std::memory_order_release);
+            if (update)
+                update->submitted = false;
+            external_preview_uploading_.store(false, std::memory_order_release);
+            throw;
+        }
+        return true;
+    }
+
+    void AsyncTaskManager::removeExternalPreview(const core::Uuid& uuid) {
+        auto resources = std::make_shared<ExternalPreviewUpdate>();
+        auto [model, cameras] = viewer_->getSceneManager()->getScene().removeExternalPreview(uuid);
+        resources->model = std::move(model);
+        resources->cameras = std::move(cameras);
+        if (!resources->model && resources->cameras.empty())
+            return;
+        {
+            std::lock_guard lock(external_preview_retirement_mutex_);
+            external_preview_retired_.push_back(std::move(resources));
+        }
+        if (!external_preview_uploading_.load(std::memory_order_acquire))
+            (void)startExternalPreviewWorker(nullptr);
+    }
+
+    void AsyncTaskManager::cancelExternalPreviewUpload() {
+        if (external_preview_update_)
+            external_preview_update_->invalidated.store(true, std::memory_order_release);
+        if (external_preview_thread_)
+            external_preview_thread_->request_stop();
+        if (!external_preview_uploading_.load(std::memory_order_acquire))
+            (void)uploadExternalPreview(std::make_shared<ExternalPreviewUpdate>());
     }
 
     float AsyncTaskManager::jobProgress(
@@ -941,6 +1072,133 @@ namespace lfs::vis::gui {
         return true;
     }
 
+    std::string_view AsyncTaskManager::modelCacheActionName() const {
+        switch (model_cache_action_) {
+        case ModelCacheAction::Download: return "download";
+        case ModelCacheAction::Verify: return "verify";
+        case ModelCacheAction::Remove: return "remove";
+        }
+        return {};
+    }
+
+    std::vector<AsyncTaskManager::ModelCacheEntry> AsyncTaskManager::modelCacheEntries() const {
+        const auto job = modelCacheJob();
+        const bool running = job && job->running();
+        std::vector<ModelCacheEntry> entries;
+        for (const auto& descriptor : preprocessing::model_catalog()) {
+            ModelCacheEntry entry{.descriptor = descriptor};
+            const auto cache = preprocessing::inspect_cached_model(descriptor.id);
+            if (cache) {
+                entry.cache = *cache;
+                entry.status = cache->busy ? "in_use" : cache->present ? "installed"
+                                                                       : "missing";
+            } else {
+                entry.status = "failed";
+                entry.error = cache.error().detail();
+                entry.error_code = lfs::to_string(cache.error().code());
+            }
+            entry.message = entry.status;
+            const bool owns_job = job && model_cache_model_ == descriptor.id;
+            if (owns_job) {
+                entry.running = running;
+                entry.canceling = running && job->cancel_requested;
+                if (running) {
+                    entry.status = "working";
+                    entry.message = entry.canceling ? "canceling" : model_cache_action_ == ModelCacheAction::Verify ? "verifying"
+                                                                : model_cache_action_ == ModelCacheAction::Remove   ? "removing"
+                                                                                                                    : "working";
+                    if (!entry.canceling) {
+                        if (job->stage.starts_with("downloading"))
+                            entry.message = "downloading";
+                        else if (job->stage.starts_with("verifying"))
+                            entry.message = "verifying";
+                        entry.show_progress = job->stage.ends_with("_progress");
+                        entry.progress = job->progress;
+                    }
+                } else if (job->status == JobStatus::Canceled) {
+                    entry.message = "canceled";
+                } else if (cache && !job->error.empty() && (entry.cache.present || model_cache_action_ != ModelCacheAction::Verify)) {
+                    entry.status = entry.message = "failed";
+                    entry.error = job->error;
+                    entry.error_code = job->error_code ? lfs::to_string(*job->error_code) : "";
+                } else if (job->status == JobStatus::Completed && entry.error.empty()) {
+                    if (entry.cache.present && model_cache_action_ != ModelCacheAction::Remove)
+                        entry.message = model_cache_action_ == ModelCacheAction::Verify ? "verified" : "ready";
+                    else if (!entry.cache.present && model_cache_action_ == ModelCacheAction::Remove)
+                        entry.message = "removed";
+                }
+            }
+            const bool available = !running && !entry.cache.busy && cache.has_value();
+            entry.can_download = available;
+            entry.can_verify = entry.can_remove = available && entry.cache.present;
+            entries.push_back(std::move(entry));
+        }
+        return entries;
+    }
+
+    bool AsyncTaskManager::startModelCache(const preprocessing::CachedModel model, const ModelCacheAction action) {
+        if (!beginJob(model_cache_job_, JobType::ModelCache, "working"))
+            return false;
+        model_cache_thread_.reset();
+        model_cache_model_ = model;
+        model_cache_action_ = action;
+        const auto job = model_cache_job_;
+        try {
+            model_cache_thread_.emplace([this, job, model, action](const std::stop_token stop) {
+                jobs_.work(job);
+                try {
+                    const auto canceled = [this, job, stop] { return stop.stop_requested() || jobs_.cancelRequested(job); };
+                    if (canceled()) {
+                        jobs_.finishWork(job, true);
+                        return;
+                    }
+                    if (action == ModelCacheAction::Remove) {
+                        const auto result = preprocessing::remove_cached_model(model);
+                        if (!result) {
+                            jobs_.finishWork(job, false, std::string(result.error().detail()), result.error().code(), result.error());
+                            return;
+                        }
+                        jobs_.finishPublishedWork(job, *result);
+                    } else {
+                        const auto progress = [this, job](preprocessing::ModelPreparationPhase phase, std::uintmax_t done, std::uintmax_t total) {
+                            using Phase = preprocessing::ModelPreparationPhase;
+                            std::string stage = phase == Phase::Downloading ? "downloading" : phase == Phase::Verifying ? "verifying"
+                                                                                                                        : "waiting";
+                            if (total)
+                                stage += "_progress";
+                            jobs_.report(job, total ? static_cast<float>(static_cast<double>(done) / static_cast<double>(total)) : 0.0f, std::move(stage));
+                        };
+                        const auto mode = action == ModelCacheAction::Verify ? preprocessing::ModelPreparationMode::Verify : preprocessing::ModelPreparationMode::Acquire;
+                        if (const auto result = preprocessing::prepare_cached_model(model, action == ModelCacheAction::Download, canceled, progress, mode); !result) {
+                            jobs_.finishWork(job, result.error().code() == lfs::ErrorCode::Cancelled,
+                                             std::string(result.error().detail()), result.error().code(), result.error());
+                            return;
+                        }
+                        jobs_.finishPublishedWork(job, action == ModelCacheAction::Download);
+                    }
+                } catch (const std::exception& error) {
+                    // LFS-CENSUS-OK(empty-catch): publish the failure to the existing job lifecycle; never escape a worker thread.
+                    jobs_.finishWork(job, false, error.what(), lfs::ErrorCode::Internal);
+                }
+            });
+        } catch (const std::exception& error) {
+            // LFS-CENSUS-OK(empty-catch): thread creation failed; release the active job slot through its Failed transition.
+            jobs_.failed(job, error.what());
+            return false;
+        }
+        return true;
+    }
+
+    void AsyncTaskManager::cancelModelCache(const uint64_t expected_job) {
+        if (expected_job && model_cache_job_.id != expected_job)
+            return;
+        if (const auto state = modelCacheJob(); state && state->running()) {
+            jobs_.requestCancel(model_cache_job_);
+            if (model_cache_thread_)
+                model_cache_thread_->request_stop();
+        }
+    }
+
     void AsyncTaskManager::settlePendingJobs() {
         const auto settle =
             [this](const JobHandle handle) {
@@ -962,6 +1220,7 @@ namespace lfs::vis::gui {
                 }
                 return true;
             };
+        settle(model_cache_job_);
         if (settle(export_state_.job)) {
             publishExportState();
         }
@@ -984,7 +1243,19 @@ namespace lfs::vis::gui {
     }
 
     void AsyncTaskManager::shutdown() {
+        cancelModelCache();
+        model_cache_thread_.reset();
+        if (external_preview_update_)
+            external_preview_update_->invalidated.store(true, std::memory_order_release);
+        if (external_preview_thread_)
+            external_preview_thread_->request_stop();
         assisted_masking_->shutdown();
+        external_preview_thread_.reset();
+        if (external_preview_update_) {
+            external_preview_update_->model.reset();
+            external_preview_update_->cameras.clear();
+            external_preview_update_.reset();
+        }
         shutdownAprilTagScan();
 
         cancelCollision();
@@ -1949,6 +2220,8 @@ namespace lfs::vis::gui {
     }
 
     bool AsyncTaskManager::hasPendingMainThreadCompletions() const {
+        if (const auto job = modelCacheJob(); job && job->status == JobStatus::CompletionPending)
+            return true;
         if (const auto job = jobs_.active(JobType::AssistedMask); job && job->status == JobStatus::CompletionPending)
             return true;
         if (const auto job = collisionJob(); job && job->status == JobStatus::CompletionPending)
@@ -2056,6 +2329,10 @@ namespace lfs::vis::gui {
         splats.reserve(node_names.size());
         for (const auto& name : node_names) {
             const auto* node = scene.getNode(name);
+            if (node && node->isExternalPreview()) {
+                publishExportFailureState(format, path, LOC("external_training.export_unavailable"));
+                return;
+            }
             if (node && node->type == core::NodeType::SPLAT && node->model) {
                 if (const auto& tree = node->model->lod_tree;
                     tree && tree->has_tree() && node->model->size() < tree->total_nodes()) {
@@ -2909,7 +3186,7 @@ namespace lfs::vis::gui {
         const auto job = jobs_.peek(camera_selection_state_.job);
         state.active = job && job->running();
         state.progress = job ? job->progress : 0.0F;
-        state.stage = job ? job->stage : std::string{};
+        state.stage = job && (state.active || job->status == JobStatus::Completed) ? job->stage : std::string{};
         state.error = job ? job->error : std::string{};
         lfs::vis::app_store().camera_selection_state.set(std::move(state));
     }
@@ -4015,7 +4292,10 @@ namespace lfs::vis::gui {
     }
 
     void AsyncTaskManager::cancelCollision() {
-        jobs_.requestCancel(collision_job_, LOC("common.cancel"));
+        // Look the label up only for a live job: shutdown also runs from the
+        // destructor, after the localization tables are gone.
+        if (const auto state = collisionJob(); state && state->running())
+            jobs_.requestCancel(collision_job_, LOC("common.cancel"));
         collision_stop_.request_stop();
         publish_viewport_toolbar_generation();
     }
@@ -4448,6 +4728,9 @@ namespace lfs::vis::gui {
             camera_selection_state_.thread->join();
             camera_selection_state_.thread.reset();
         }
+        if (options.operation == CameraSelectionOperation::Blurry &&
+            (!std::isfinite(options.sharpness_threshold) || options.sharpness_threshold < 0.0 || options.sharpness_threshold > 100.0))
+            return selection_error(LOC("scene.camera_sharpness_threshold_invalid"));
         auto* const manager = viewer_->getSceneManager();
         if (!manager || !viewer_->project_lifecycle_)
             return selection_error(LOC(lichtfeld::Strings::Runtime::SCENE_MANAGER_NOT_INITIALIZED));
@@ -4462,7 +4745,15 @@ namespace lfs::vis::gui {
             if (const auto* node = scene.getNodeById(child_id); node && node->type == core::NodeType::CAMERA && node->camera) {
                 uuids.push_back(node->uuid);
                 enabled.push_back(node->training_enabled);
-                CameraSelectionState::CameraSnapshot snapshot{.uuid = node->uuid};
+                CameraSelectionState::CameraSnapshot snapshot{};
+                snapshot.uuid = node->uuid;
+                if (options.operation == CameraSelectionOperation::Blurry) {
+                    snapshot.image_path = node->camera->image_path();
+                    snapshot.has_image = node->camera->has_image();
+                    snapshot.training_enabled = node->training_enabled;
+                    cameras.push_back(std::move(snapshot));
+                    continue;
+                }
                 const auto rotation = node->camera->R().cpu().contiguous().to_vector();
                 const auto translation = node->camera->T().cpu().contiguous().to_vector();
                 snapshot.focal_x = node->camera->focal_x();
@@ -4522,6 +4813,10 @@ namespace lfs::vis::gui {
         {
             const std::lock_guard lock(camera_selection_state_.mutex);
             camera_selection_state_.document_epoch = viewer_->project_lifecycle_->documentEpoch();
+            if (camera_selection_state_.sharpness_epoch != camera_selection_state_.document_epoch) {
+                camera_selection_state_.sharpness_scores.clear();
+                camera_selection_state_.sharpness_epoch = camera_selection_state_.document_epoch;
+            }
             camera_selection_state_.scene_generation = scene.renderGeneration();
             camera_selection_state_.camera_uuids = std::move(uuids);
             camera_selection_state_.cameras = std::move(cameras);
@@ -4534,6 +4829,7 @@ namespace lfs::vis::gui {
                 camera_selection_state_.cropbox_max = cropbox->cropbox->max;
             }
             camera_selection_state_.has_cropbox = has_cropbox;
+            camera_selection_state_.select_nodes = options.operation == CameraSelectionOperation::Blurry;
             camera_selection_state_.selected_indices.clear();
         }
         const auto job = camera_selection_state_.job;
@@ -4555,6 +4851,20 @@ namespace lfs::vis::gui {
             std::vector<size_t> selected;
             std::string error;
             const auto count = snapshot_enabled.size();
+            size_t scored = 0;
+            size_t skipped = 0;
+            const auto score_image = [](const std::filesystem::path& path) -> std::optional<double> {
+                try {
+                    const auto [data, width, height, channels] = core::load_image(path);
+                    const std::unique_ptr<unsigned char, decltype(&core::free_image)> pixels(data, &core::free_image);
+                    return io::computeSharpnessScore(pixels.get(), width, height, io::SharpnessAlgorithm::COMBINED);
+                } catch (const std::runtime_error&) {
+                    std::error_code ec;
+                    if (!core::native_fs::exists(path, ec) && (!ec || ec == std::errc::no_such_file_or_directory))
+                        return std::nullopt;
+                    throw;
+                }
+            };
             const auto cancelled = [&] { return stop.stop_requested() || jobs_.cancelRequested(job); };
             try {
                 if (options.operation == CameraSelectionOperation::EnableAll) {
@@ -4566,6 +4876,77 @@ namespace lfs::vis::gui {
                             break;
                         if (!snapshot_enabled[index])
                             selected.push_back(index);
+                    }
+                } else if (options.operation == CameraSelectionOperation::Blurry) {
+                    std::vector<size_t> eligible;
+                    for (size_t index = 0; index < count; ++index)
+                        if (snapshot_enabled[index]) {
+                            if (cameras[index].has_image)
+                                eligible.push_back(index);
+                            else
+                                ++skipped;
+                        }
+                    std::vector<unsigned char> matches(eligible.size(), 0);
+                    std::vector<std::optional<CameraSelectionState::SharpnessEntry>> fresh(eligible.size());
+                    auto& scores = camera_selection_state_.sharpness_scores;
+                    const auto read_stamp = [](const std::filesystem::path& path) -> std::optional<CameraSelectionState::SharpnessStamp> {
+                        std::error_code ec;
+                        const auto size = core::native_fs::file_size(path, ec);
+                        if (ec)
+                            return std::nullopt;
+                        const auto modified = core::native_fs::last_write_time(path, ec);
+                        if (ec)
+                            return std::nullopt;
+                        return CameraSelectionState::SharpnessStamp{size, modified};
+                    };
+                    std::mutex progress_mutex;
+                    size_t completed = count - eligible.size();
+                    const auto analyze = [&](const size_t item) {
+                        if (cancelled())
+                            return;
+                        const auto& camera = cameras[eligible[item]];
+                        const auto stamp = read_stamp(camera.image_path);
+                        const auto cached = std::as_const(scores).find(camera.uuid);
+                        std::optional<double> score;
+                        if (stamp && cached != scores.cend() &&
+                            cached->second.image_path == camera.image_path && cached->second.stamp == *stamp) {
+                            score = cached->second.score;
+                        } else {
+                            score = score_image(camera.image_path);
+                            if (score && stamp) {
+                                if (read_stamp(camera.image_path) != stamp)
+                                    throw std::runtime_error(LOC("scene.camera_selection_stale"));
+                                fresh[item].emplace(camera.image_path, *stamp, *score);
+                            }
+                        }
+                        matches[item] = score && *score < options.sharpness_threshold;
+                        const std::lock_guard lock(progress_mutex);
+                        if (score)
+                            ++scored;
+                        else
+                            ++skipped;
+                        jobs_.report(job, static_cast<float>(++completed) / static_cast<float>(count), LOC("scene.camera_selection_progress"));
+                        publishCameraSelectionState();
+                    };
+                    if (eligible.size() > 1) {
+                        // Bound simultaneous full-resolution decodes and reuse TBB's existing pool.
+                        constexpr size_t MAX_CONCURRENT_BLURRY_IMAGES = 8;
+                        const auto concurrency = static_cast<int>(std::min(MAX_CONCURRENT_BLURRY_IMAGES, eligible.size()));
+                        tbb::task_arena arena(std::min(concurrency, tbb::info::default_concurrency()));
+                        arena.execute([&] {
+                            tbb::parallel_for(size_t{0}, eligible.size(), [&](const size_t item) {
+                                // Nested image/scoring tasks must not admit another full decode on this thread.
+                                tbb::this_task_arena::isolate([&] { analyze(item); });
+                            });
+                        });
+                    } else if (!eligible.empty()) {
+                        analyze(0);
+                    }
+                    for (size_t item = 0; item < eligible.size(); ++item) {
+                        if (fresh[item])
+                            scores.insert_or_assign(cameras[eligible[item]].uuid, std::move(*fresh[item]));
+                        if (matches[item])
+                            selected.push_back(eligible[item]);
                     }
                 } else if (options.operation == CameraSelectionOperation::Random) {
                     std::mt19937 generator{std::random_device{}()};
@@ -4600,11 +4981,14 @@ namespace lfs::vis::gui {
                 LOG_ERROR("{}", error);
             }
             const bool was_cancelled = cancelled();
-            const bool ready = camera_selection::apply_if_ready(was_cancelled, !error.empty(), [&] {
-                const std::lock_guard lock(camera_selection_state_.mutex);
-                camera_selection_state_.selected_indices = std::move(selected);
-                jobs_.report(job, 1.0F, LOC(lichtfeld::Strings::Runtime::TASK_APPLYING));
-            });
+            const bool has_results = options.operation != CameraSelectionOperation::Blurry || scored != 0;
+            const bool ready = has_results && camera_selection::apply_if_ready(was_cancelled, !error.empty(), [&] {
+                                   const std::lock_guard lock(camera_selection_state_.mutex);
+                                   camera_selection_state_.selected_indices = std::move(selected);
+                               });
+            if (!was_cancelled && error.empty()) {
+                jobs_.report(job, 1.0F, skipped ? LOCF("scene.camera_selection_images_skipped", skipped) : std::string{});
+            }
             jobs_.finishWork(job, was_cancelled, error);
             camera_selection_state_.completion.store(
                 ready ? CameraSelectionState::Completion::Apply : CameraSelectionState::Completion::Settle,
@@ -4626,6 +5010,7 @@ namespace lfs::vis::gui {
         }
         if (completion == CameraSelectionState::Completion::Apply) {
             std::vector<core::Uuid> uuids;
+            std::vector<CameraSelectionState::CameraSnapshot> blurry_inputs;
             std::vector<size_t> selected_indices;
             uint64_t epoch = 0;
             uint64_t scene_generation = 0;
@@ -4633,6 +5018,7 @@ namespace lfs::vis::gui {
             core::Uuid cropbox_uuid;
             std::vector<glm::vec3> cropbox_points;
             bool has_cropbox = false;
+            bool select_nodes = false;
             {
                 const std::lock_guard lock(camera_selection_state_.mutex);
                 uuids = camera_selection_state_.camera_uuids;
@@ -4643,12 +5029,15 @@ namespace lfs::vis::gui {
                 cropbox_uuid = camera_selection_state_.cropbox_uuid;
                 cropbox_points = camera_selection_state_.cropbox_points;
                 has_cropbox = camera_selection_state_.has_cropbox;
+                select_nodes = camera_selection_state_.select_nodes;
+                if (select_nodes)
+                    blurry_inputs = std::move(camera_selection_state_.cameras);
             }
             auto* const manager = viewer_->getSceneManager();
             const bool cancel_requested = jobs_.cancelRequested(camera_selection_state_.job);
             bool valid = manager && viewer_->project_lifecycle_ &&
                          viewer_->project_lifecycle_->documentEpoch() == epoch &&
-                         manager->getScene().renderGeneration() == scene_generation &&
+                         (select_nodes || manager->getScene().renderGeneration() == scene_generation) &&
                          !cancel_requested;
             std::unordered_set<core::NodeId> selected;
             if (valid) {
@@ -4662,6 +5051,16 @@ namespace lfs::vis::gui {
                             current.insert(node->uuid);
                 valid = valid && current.size() == uuids.size() &&
                         std::ranges::all_of(uuids, [&current](const auto& uuid) { return current.contains(uuid); });
+                if (valid && select_nodes) {
+                    // Training can change Gaussian topology without changing any image inputs.
+                    valid = std::ranges::all_of(blurry_inputs, [&](const auto& input) {
+                        const auto* node = manager->getScene().getNodeByUuid(input.uuid);
+                        return node && node->camera &&
+                               node->training_enabled == input.training_enabled &&
+                               node->camera->has_image() == input.has_image &&
+                               node->camera->image_path() == input.image_path;
+                    });
+                }
             }
             if (valid && has_cropbox) {
                 const auto* cropbox = manager->getScene().getNodeByUuid(cropbox_uuid);
@@ -4684,10 +5083,13 @@ namespace lfs::vis::gui {
                 jobs_.canceled(camera_selection_state_.job);
             } else if (!valid || (selected.empty() && !selected_indices.empty())) {
                 jobs_.failed(camera_selection_state_.job, LOC("scene.camera_selection_stale"),
-                             LOC(lichtfeld::Strings::Runtime::TASK_APPLYING));
+                             std::string{});
             } else {
                 const auto* group = manager->getScene().getNodeByUuid(camera_group_uuid);
-                static_cast<void>(manager->getScene().setCameraGroupTrainingSelection(group->id, selected));
+                if (select_nodes)
+                    manager->selectNodesById(std::vector<core::NodeId>(selected.begin(), selected.end()));
+                else
+                    static_cast<void>(manager->getScene().setCameraGroupTrainingSelection(group->id, selected));
                 jobs_.completed(camera_selection_state_.job);
             }
             publishCameraSelectionState();
@@ -4705,7 +5107,8 @@ namespace lfs::vis::gui {
     }
 
     void AsyncTaskManager::cancelCameraSelection() {
-        jobs_.requestCancel(camera_selection_state_.job, LOC(lichtfeld::Strings::Runtime::TASK_CANCELLING));
+        if (const auto state = cameraSelectionStatus(); state && state->running())
+            jobs_.requestCancel(camera_selection_state_.job, LOC(lichtfeld::Strings::Runtime::TASK_CANCELLING));
         publishCameraSelectionState();
         if (camera_selection_state_.thread)
             camera_selection_state_.thread->request_stop();

@@ -8,6 +8,7 @@ from .ui import RuntimeState
 
 
 _DEFAULT_MODE = "rgb"
+_DEFAULT_DEPTH_MODE = "palette"
 
 
 def _ui_label(key: str, fallback: str) -> str:
@@ -29,19 +30,28 @@ def _normalize_mode(value):
         return "normal"
     if value == "depth":
         return "depth"
+    if value == "loss":
+        return "loss"
     return _DEFAULT_MODE
+
+
+def _normalize_depth_mode(value):
+    value = str(value or "").strip().lower()
+    return "gray" if value in {"gray", "grayscale"} else _DEFAULT_DEPTH_MODE
 
 
 class GTCompareControlsController:
     _DIRTY_FIELDS = (
         "gt_compare_tool_label",
         "gt_compare_mode_value",
+        "gt_compare_depth_mode_value",
     )
 
     def __init__(self):
         self._handle = None
         self._visible = False
         self._mode = _DEFAULT_MODE
+        self._depth_mode = _DEFAULT_DEPTH_MODE
         self._last_state_key = None
 
     @property
@@ -55,6 +65,7 @@ class GTCompareControlsController:
             lambda: self._mode,
             self._set_mode,
         )
+        model.bind_func("gt_compare_depth_mode_value", lambda: self._depth_mode)
         self._handle = model.get_handle()
 
     def mount(self, doc):
@@ -82,7 +93,8 @@ class GTCompareControlsController:
             return ",".join(dirty_reasons) if dirty else None
 
         self._mode = self._read_mode()
-        state_key = (RuntimeState.language_generation.value, self._mode)
+        self._depth_mode = self._read_depth_mode()
+        state_key = (RuntimeState.language_generation.value, self._mode, self._depth_mode)
         if state_key != self._last_state_key:
             self._last_state_key = state_key
             self._dirty_all()
@@ -125,6 +137,15 @@ class GTCompareControlsController:
         else:
             self._mode = _DEFAULT_MODE
         self._dirty_all()
+
+    def _read_depth_mode(self):
+        getter = getattr(lf, "get_depth_view_mode", None)
+        if not callable(getter):
+            return _DEFAULT_DEPTH_MODE
+        try:
+            return _normalize_depth_mode(getter())
+        except Exception:
+            return _DEFAULT_DEPTH_MODE
 
     def _dirty_all(self):
         if not self._handle:

@@ -62,8 +62,10 @@ def _download_thumbnail(video_id, on_done):
 class GettingStartedPanel(Panel):
     """Floating panel displaying tutorial videos and documentation."""
 
+    SECTIONS = ("editing", "highlights", "training", "datasets")
+
     def __init__(self):
-        self._section = "highlights"
+        self._section = "editing"
         self._handle = None
         self._ready_lock = threading.Lock()
         self._ready_queue = []
@@ -78,7 +80,7 @@ class GettingStartedPanel(Panel):
             return
 
         model.bind_func("panel_label", lambda: lf.ui.tr("getting_started.title"))
-        for section in ("highlights", "training", "datasets"):
+        for section in self.SECTIONS:
             binding_name = f"show_{section}"
             model.bind_func(binding_name,
                             lambda section=section: self._section == section)
@@ -92,8 +94,8 @@ class GettingStartedPanel(Panel):
             return
         self._section = section
         if self._handle:
-            for name in ("show_highlights", "show_training", "show_datasets"):
-                self._handle.dirty(name)
+            for section in self.SECTIONS:
+                self._handle.dirty(f"show_{section}")
 
     def on_mount(self, doc):
         super().on_mount(doc)

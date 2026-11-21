@@ -1,14 +1,17 @@
-# Copyright (c) 2022-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2022-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
 #
-# SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 # this is needed because cmake caching behavior was
 # preventing finding multiple packages of python 
@@ -138,8 +141,10 @@ endfunction()
 # PUBLIC_LIBS - list of libraries that should be linked in as a public one
 # PRIV_LIBS - list of libraries that should be linked in as a private one
 # SRC - list of source code files
+# VERSION_SCRIPT - optional file name under cmake/version_scripts/ restricting the exported
+#              symbols of every version-specific library (see nvimgcodec_apply_version_script)
 function(build_per_python_lib)
-    set(oneValueArgs TARGET_NAME OUTPUT_NAME OUTPUT_DIR PREFIX)
+    set(oneValueArgs TARGET_NAME OUTPUT_NAME OUTPUT_DIR PREFIX VERSION_SCRIPT)
     set(multiValueArgs PRIV_LIBS PUBLIC_LIBS SRC EXCLUDE_LIBS)
     
     cmake_parse_arguments(PARSE_ARGV 1 PYTHON_LIB_ARG "${options}" "${oneValueArgs}" "${multiValueArgs}")
@@ -163,9 +168,9 @@ function(build_per_python_lib)
 
     if(NOT DEFINED PYTHON_VERSIONS)
       if (UNIX)
-          set (PYTHON_VERSIONS "3.9;3.10;3.11;3.12;3.13;3.13t;3.14;3.14t")
+          set (PYTHON_VERSIONS "3.9;3.10;3.11;3.12;3.13;3.14;3.14t;3.15;3.15t")
       else()
-          set (PYTHON_VERSIONS "3.9;3.10;3.11;3.12;3.13;3.14")
+          set (PYTHON_VERSIONS "3.9;3.10;3.11;3.12;3.13;3.14;3.15")
       endif()
     endif(NOT DEFINED PYTHON_VERSIONS)
 
@@ -240,7 +245,25 @@ function(build_per_python_lib)
               target_link_libraries(${PYTHON_LIB_TARGET_FOR_PYVER} PUBLIC "${PYTHON_LIBRARY}")
             endif()
             
+            if (PYTHON_LIB_ARG_VERSION_SCRIPT)
+                nvimgcodec_apply_version_script(${PYTHON_LIB_TARGET_FOR_PYVER} ${PYTHON_LIB_ARG_VERSION_SCRIPT})
+            endif()
+
             add_dependencies(${PYTHON_LIB_ARG_TARGET_NAME} ${PYTHON_LIB_TARGET_FOR_PYVER})
+        else()
+            # Silence here means a wheel that quietly ships one fewer ABI than
+            # PYTHON_VERSIONS advertises, which is invisible until a user on that
+            # interpreter hits an ImportError. Say so.
+            if (NVIMGCODEC_PYTHON_VERSIONS_STRICT)
+              message(FATAL_ERROR
+                "PYTHON_VERSIONS lists ${PYVER} but no interpreter for it was found - "
+                "no extension module will be built for it.")
+            else()
+              message(WARNING
+                "PYTHON_VERSIONS lists ${PYVER} but no interpreter for it was found - "
+                "no extension module will be built for it. Set "
+                "-DNVIMGCODEC_PYTHON_VERSIONS_STRICT=ON to make this fatal.")
+            endif()
         endif()
 
     endforeach(PYVER)
@@ -366,3 +389,32 @@ function(propagate_option_as_definition BUILD_OPTION_NAME)
     add_compile_definitions(${BUILD_OPTION_NAME})
   endif()
 endfunction(propagate_option_as_definition)
+
+# Restrict a shared target's dynamic symbol table to an explicit allowlist.
+#
+# ``script`` names a file in cmake/version_scripts/. The script's ``local: *;``
+# clause demotes every symbol outside its allowlist to LOCAL, which is the only
+# way to suppress the libstdc++ vague-linkage weak symbols that our own
+# translation units emit for std::string / std::vector / std::map / ... Neither
+# -fvisibility=hidden nor --exclude-libs,ALL can reach those: the former does not
+# apply to libstdc++ header definitions, and the latter only filters symbols
+# originating from .a archives.
+#
+# Linux-only. Windows exports nothing by default, and Apple's ld uses a different
+# (-exported_symbols_list) mechanism; neither needs this and neither is shipped.
+function(nvimgcodec_apply_version_script target script)
+    if(NOT UNIX OR APPLE)
+        return()
+    endif()
+    # CMAKE_CURRENT_FUNCTION_LIST_DIR is this file's directory (cmake/), which
+    # resolves correctly whether the caller is the top-level build or the
+    # standalone python-bindings build.
+    set(_vs "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/version_scripts/${script}")
+    if(NOT EXISTS "${_vs}")
+        message(FATAL_ERROR "nvimgcodec_apply_version_script: no such version script: ${_vs}")
+    endif()
+    target_link_options(${target} PRIVATE "-Wl,--version-script=${_vs}")
+    # Relink when the allowlist changes; target_link_options alone does not
+    # establish a file-level dependency.
+    set_property(TARGET ${target} APPEND PROPERTY LINK_DEPENDS "${_vs}")
+endfunction()

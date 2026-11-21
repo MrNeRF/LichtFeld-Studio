@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/cuda_vulkan_device_identity.hpp"
 #include "core/tensor.hpp"
 #include <array>
 #include <cstddef>
@@ -56,17 +57,6 @@ namespace lfs::rendering {
         CudaVulkanExternalHandle semaphore_handle = kInvalidCudaVulkanExternalHandle;
         std::uint64_t initial_value = 0;
     };
-
-    // Records the Vulkan physical-device UUID expected to back any subsequent
-    // CUDA/Vulkan interop. Call once at startup, after Vulkan device selection.
-    // The first interop init() then verifies the current CUDA device matches;
-    // mismatch is a hard failure (returns false from init() with a clear error).
-    void setExpectedVulkanDeviceUuid(const std::array<std::uint8_t, 16>& uuid);
-
-    // Lazily verifies the CUDA current device's UUID against the value passed
-    // to setExpectedVulkanDeviceUuid(). Returns std::nullopt on success, or an
-    // error message on mismatch / missing setup. Result is cached.
-    [[nodiscard]] std::optional<std::string> verifyCudaMatchesVulkanDevice();
 
     // One explicitly non-blocking CUDA lane for image copies that are ordered into Vulkan by an
     // external timeline semaphore. Never silently substitute the legacy NULL stream: that stream

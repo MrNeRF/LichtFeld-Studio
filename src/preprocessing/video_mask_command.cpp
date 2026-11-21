@@ -60,7 +60,10 @@ namespace lfs::preprocessing {
                 const auto weights = ensure_sam2_weights(!params.no_download);
                 if (!weights)
                     throw std::runtime_error(std::string(weights.error().user_message()));
-                std::cout << core::path_to_utf8(*weights) << '\n';
+                const auto state = inspect_cached_model(CachedModel::Sam2);
+                if (!state)
+                    throw lfs::Exception(state.error());
+                std::cout << core::path_to_utf8(state->path) << '\n';
                 return 0;
             }
             const auto started = std::chrono::steady_clock::now();

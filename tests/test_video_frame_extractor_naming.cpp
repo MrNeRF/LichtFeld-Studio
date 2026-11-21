@@ -3,7 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/image_io.hpp"
+#include "core/path_utils.hpp"
 #include "gui/windows/video_extractor_dialog.hpp"
+#include "io/cuda/sharpness_score.cuh"
 #include "io/video/frame_color_range.hpp"
 #include "io/video/probed_stream_rewind.hpp"
 #include "io/video/video_encoder.hpp"
@@ -15,6 +17,9 @@
 #include <RmlUi/Core/Elements/ElementFormControlSelect.h>
 #include <RmlUi/Core/RenderInterface.h>
 #include <gtest/gtest.h>
+#include <tbb/global_control.h>
+#include <tbb/task_arena.h>
+#include <tbb/task_scheduler_observer.h>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -29,12 +34,14 @@ extern "C" {
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <chrono>
 #include <cstddef>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <limits>
 #include <memory>
 #include <set>
@@ -195,13 +202,6 @@ namespace {
                 ++count;
         }
         return count;
-    }
-
-    uint64_t hashPixels(const unsigned char* pixels, const std::size_t size) {
-        uint64_t hash = 14695981039346656037ull;
-        for (std::size_t index = 0; index < size; ++index)
-            hash = (hash ^ pixels[index]) * 1099511628211ull;
-        return hash;
     }
 
     nlohmann::json readMetadata(const std::filesystem::path& output_dir) {
@@ -1116,6 +1116,8 @@ TEST(VideoFrameExtractorSegments, ExtractsOnlyTheKeptStretches) {
     auto params = extractionParams(source, temp.path / "frames");
     params.end_time = -1.0;
     params.segments = {{1.0, 2.0}, {6.0, 7.5}};
+    std::vector<VideoFrameExtractor::WrittenFrame> written;
+    params.frame_written = [&](const auto& frame) { written.push_back(frame); };
     std::filesystem::create_directories(params.output_dir);
     VideoFrameExtractor extractor;
     std::string error;
@@ -1134,6 +1136,17 @@ TEST(VideoFrameExtractorSegments, ExtractsOnlyTheKeptStretches) {
     EXPECT_NEAR(static_cast<double>(first), 10.0, 1.0);
     EXPECT_NEAR(static_cast<double>(second), 15.0, 1.0);
     EXPECT_EQ(countPngFiles(params.output_dir), metadata["frames"].size());
+    ASSERT_EQ(written.size(), metadata["frames"].size());
+    for (std::size_t i = 0; i < written.size(); ++i) {
+        const auto& frame = metadata["frames"][i];
+        EXPECT_EQ(written[i].path.filename(), frame["file"].get<std::string>());
+        EXPECT_DOUBLE_EQ(written[i].timestamp, frame["timestamp"].get<double>());
+        EXPECT_EQ(written[i].source_frame, frame["source_frame"].get<int>());
+        EXPECT_EQ(written[i].width, 64);
+        EXPECT_EQ(written[i].height, 48);
+        if (i > 0)
+            EXPECT_GT(written[i].source_frame, written[i - 1].source_frame);
+    }
     EXPECT_EQ(metadata["performance"]["written_frames"].get<std::size_t>(), metadata["frames"].size());
 }
 
@@ -2191,7 +2204,7 @@ namespace {
         ASSERT_NE(first, nullptr);
         const auto tooltip = first->GetAttribute<Rml::String>("title", "");
         EXPECT_NE(tooltip.find("capture_a/clip.mp4"), std::string::npos);
-        EXPECT_NE(tooltip.find("batch_output/clip"), std::string::npos);
+        EXPECT_NE(tooltip.find(lfs::core::path_to_utf8(std::filesystem::path("batch_output") / "clip")), std::string::npos);
     }
 
     TEST_F(VideoExtractorNamingUiTest, BatchProgressIsGlobalAcrossVideos) {
@@ -2205,6 +2218,82 @@ namespace {
         ASSERT_NE(progress, nullptr);
         EXPECT_NEAR(std::stof(progress->GetAttribute<Rml::String>("value", "")), 1.25f / 3.0f, 1.0e-4f);
         EXPECT_NE(document->GetElementById("progress-text")->GetInnerRML().find("2/3"), std::string::npos);
+    }
+
+    TEST_F(VideoExtractorNamingUiTest, BatchFailurePolicyIsContextualAndRetainsItsValue) {
+        auto* const row = document->GetElementById("batch-failure-options");
+        auto* const toggle = document->GetElementById("continue-batch-on-failure");
+        ASSERT_NE(row, nullptr);
+        ASSERT_NE(toggle, nullptr);
+        EXPECT_FALSE(row->IsVisible());
+        NamingAccess::configureBatch(*dialog, {"capture/a.mp4", "capture/b.mp4"}, "batch_output");
+        sync();
+        EXPECT_TRUE(row->IsVisible());
+        toggle->RemoveAttribute("checked");
+        toggle->DispatchEvent(Rml::EventId::Change, {});
+        NamingAccess::configureBatch(*dialog, {"capture/a.mp4"}, "batch_output");
+        sync();
+        EXPECT_FALSE(row->IsVisible());
+        NamingAccess::configureBatch(*dialog, {"capture/a.mp4", "capture/b.mp4"}, "batch_output");
+        sync();
+        EXPECT_TRUE(row->IsVisible());
+        EXPECT_FALSE(toggle->HasAttribute("checked"));
+        EXPECT_EQ(document->GetElementById("output-value")->GetAttribute<Rml::String>("title", ""), "batch_output");
+    }
+
+    TEST_F(VideoExtractorNamingUiTest, SingleVideoCanBeClearedAndFooterReservesProgressSpace) {
+        TempDir temp("single_video_clear");
+        const auto source = temp.path / "source.mp4";
+        ASSERT_TRUE(writeProbedVideo(source, "mp4", AV_CODEC_ID_MPEG4, 5, 0));
+        ASSERT_TRUE(dialog->openVideoPath(source));
+        sync();
+        auto* const clear = document->GetElementById("btn-clear-videos");
+        ASSERT_NE(clear, nullptr);
+        EXPECT_FALSE(clear->HasAttribute("disabled"));
+        EXPECT_EQ(document->GetElementById("video-value")->GetAttribute<Rml::String>("title", ""),
+                  lfs::core::path_to_utf8(source));
+        NamingAccess::syncExtractionStatus(*dialog);
+        context->Update();
+        auto* const footer = document->GetElementById("action-footer");
+        ASSERT_NE(footer, nullptr);
+        const float idle_height = footer->GetBox().GetSize(Rml::BoxArea::Border).y;
+        NamingAccess::batchProgress(*dialog, -1, 1, 10);
+        NamingAccess::syncExtractionStatus(*dialog);
+        context->Update();
+        EXPECT_FLOAT_EQ(footer->GetBox().GetSize(Rml::BoxArea::Border).y, idle_height);
+        NamingAccess::extracting(*dialog, false);
+        NamingAccess::click(*dialog, "btn-clear-videos");
+        sync();
+        EXPECT_TRUE(NamingAccess::videoPath(*dialog).empty());
+        EXPECT_TRUE(clear->HasAttribute("disabled"));
+
+        // Completion warnings can contain long paths without any breakable spaces.
+        NamingAccess::completeWithWarning(*dialog, std::string(256, 'W'));
+        NamingAccess::syncExtractionStatus(*dialog);
+        auto* const section = document->GetElementById("complete-section");
+        auto* const text = document->GetElementById("complete-text");
+        auto* const button = document->GetElementById("btn-complete-ok");
+        ASSERT_NE(section, nullptr);
+        ASSERT_NE(text, nullptr);
+        ASSERT_NE(button, nullptr);
+        for (const int width : {640, 420}) {
+            SCOPED_TRACE(width);
+            context->SetDimensions({width, 900});
+            context->Update();
+            context->Update();
+            ASSERT_TRUE(section->IsVisible());
+            EXPECT_GT(text->GetBox().GetSize(Rml::BoxArea::Border).y, 2 * text->GetLineHeight());
+            const auto origin = section->GetAbsoluteOffset(Rml::BoxArea::Border);
+            const auto size = section->GetBox().GetSize(Rml::BoxArea::Border);
+            for (auto* const child : {text, button}) {
+                const auto position = child->GetAbsoluteOffset(Rml::BoxArea::Border);
+                const auto extent = child->GetBox().GetSize(Rml::BoxArea::Border);
+                EXPECT_GE(position.x, origin.x - 1);
+                EXPECT_GE(position.y, origin.y - 1);
+                EXPECT_LE(position.x + extent.x, origin.x + size.x + 1);
+                EXPECT_LE(position.y + extent.y, origin.y + size.y + 1);
+            }
+        }
     }
 } // namespace
 
@@ -2439,6 +2528,165 @@ TEST(VideoStreamProbe, VideosThatNeedPacketProbingOpenAndExtract) {
     }
 }
 
+TEST(VideoSharpnessScore, LargeImageUsesTbbWorkers) {
+    if (tbb::global_control::active_value(tbb::global_control::max_allowed_parallelism) < 2 ||
+        tbb::info::default_concurrency() < 2)
+        GTEST_SKIP() << "Requires a TBB worker";
+
+    struct WorkerObserver final : tbb::task_scheduler_observer {
+        explicit WorkerObserver(tbb::task_arena& arena) : task_scheduler_observer(arena) {}
+        void on_scheduler_entry(bool worker) override {
+            if (worker)
+                entered.store(true, std::memory_order_relaxed);
+        }
+        std::atomic<bool> entered{false};
+    };
+
+    constexpr int width = 4096;
+    constexpr int height = 2160;
+    std::vector<uint8_t> pixels(static_cast<size_t>(width) * height * 3, 128);
+    tbb::task_arena arena(2);
+    WorkerObserver observer(arena);
+    observer.observe();
+    for (int attempt = 0; attempt < 3 && !observer.entered.load(std::memory_order_relaxed); ++attempt) {
+        const auto score = arena.execute([&] {
+            return lfs::io::computeSharpnessScore(pixels.data(), width, height, lfs::io::SharpnessAlgorithm::COMBINED);
+        });
+        EXPECT_EQ(score, 0.0);
+    }
+    observer.observe(false);
+    EXPECT_TRUE(observer.entered.load(std::memory_order_relaxed));
+}
+
+TEST(VideoSharpnessScore, SharesEdgeRatioAndGreenChannelContract) {
+    std::vector<uint8_t> rgb(8 * 8 * 3, 128);
+    for (const auto algorithm : {lfs::io::SharpnessAlgorithm::LAPLACIAN,
+                                 lfs::io::SharpnessAlgorithm::TENENGRAD,
+                                 lfs::io::SharpnessAlgorithm::COMBINED}) {
+        EXPECT_DOUBLE_EQ(lfs::io::computeSharpnessScore(rgb.data(), 8, 8, algorithm), 0.0);
+        for (const int size : {0, 1, 2})
+            EXPECT_DOUBLE_EQ(lfs::io::computeSharpnessScore(rgb.data(), size, size, algorithm), 0.0);
+    }
+    for (int y = 0; y < 8; ++y)
+        for (int x = 0; x < 8; ++x)
+            rgb[(y * 8 + x) * 3] = (x + y) % 2 ? 255 : 0;
+    EXPECT_DOUBLE_EQ(lfs::io::computeSharpnessScore(rgb.data(), 8, 8, lfs::io::SharpnessAlgorithm::COMBINED), 0.0);
+    for (size_t index = 0; index < rgb.size(); index += 3)
+        rgb[index + 1] = rgb[index];
+    // All 6x6 interior pixels pass the Laplacian threshold; the denominator includes the border.
+    EXPECT_DOUBLE_EQ(lfs::io::computeSharpnessScore(rgb.data(), 8, 8, lfs::io::SharpnessAlgorithm::LAPLACIAN), 56.25);
+    EXPECT_DOUBLE_EQ(lfs::io::computeSharpnessScore(rgb.data(), 8, 8, lfs::io::SharpnessAlgorithm::COMBINED), 56.25);
+    EXPECT_DOUBLE_EQ(lfs::io::computeSharpnessScore(rgb.data(), 8, 8, lfs::io::SharpnessAlgorithm::TENENGRAD), 0.0);
+}
+
+TEST(VideoFrameExtractorTrim, SharpnessWindowsKeepFirstMaximumAndMatchingPixels) {
+    TempDir temp("window_best");
+    for (const auto [pattern_step, codec] : {std::tuple{0, AV_CODEC_ID_MPEG4}, std::tuple{47, AV_CODEC_ID_MPEG4},
+                                             std::tuple{0, AV_CODEC_ID_FFV1}, std::tuple{47, AV_CODEC_ID_FFV1}}) {
+        const auto source = temp.path / ("source_" + std::to_string(pattern_step) + "_" + std::to_string(codec) + ".mkv");
+        ASSERT_TRUE(writeProbedVideoWithRate(source, "matroska", codec, 12, 0, 25, 1, false, pattern_step));
+        for (const auto algorithm : {lfs::io::SharpnessAlgorithm::LAPLACIAN,
+                                     lfs::io::SharpnessAlgorithm::TENENGRAD,
+                                     lfs::io::SharpnessAlgorithm::COMBINED}) {
+            for (const auto image_format : {lfs::io::ImageFormat::PNG, lfs::io::ImageFormat::JPG}) {
+                SCOPED_TRACE(::testing::Message() << "codec=" << codec << " pattern=" << pattern_step << " algorithm=" << static_cast<int>(algorithm)
+                                                  << " format=" << static_cast<int>(image_format));
+                const auto label = std::to_string(codec) + "_" + std::to_string(pattern_step) + "_" + std::to_string(static_cast<int>(algorithm)) +
+                                   "_" + std::to_string(static_cast<int>(image_format));
+                auto reference = extractionParams(source, temp.path / (label + "_all"));
+                reference.end_time = -1.0;
+                reference.format = image_format;
+                reference.rotation = image_format == lfs::io::ImageFormat::PNG ? 90 : 180;
+                reference.sharpness.enabled = true;
+                reference.sharpness.algorithm = algorithm;
+                reference.sharpness.threshold = 0.0;
+                // One-frame windows use the same encoder as the multi-frame windows (including JPEG).
+                reference.sharpness.window_mode = true;
+                reference.sharpness.window_candidates_target = 0;
+                std::string error;
+                VideoFrameExtractor extractor;
+                ASSERT_TRUE(extractor.extract(reference, error)) << error;
+                const auto all = readMetadata(reference.output_dir).at("frames");
+                ASSERT_EQ(all.size(), 12u);
+                for (const auto mode : {ExtractionMode::INTERVAL, ExtractionMode::FPS}) {
+                    SCOPED_TRACE(static_cast<int>(mode));
+                    auto window = reference;
+                    window.output_dir = temp.path / (label + "_window_" + std::to_string(static_cast<int>(mode)));
+                    window.mode = mode;
+                    window.frame_interval = 4;
+                    window.fps = 6.25;
+                    window.sharpness.window_mode = true;
+                    window.sharpness.window_candidates_target = 0;
+                    ASSERT_TRUE(extractor.extract(window, error)) << error;
+                    const auto selected = readMetadata(window.output_dir).at("frames");
+                    ASSERT_EQ(selected.size(), 3u);
+                    bool has_interior_maximum = false;
+                    for (size_t group = 0; group < selected.size(); ++group) {
+                        size_t best = group * 4;
+                        for (size_t index = best + 1; index < (group + 1) * 4; ++index)
+                            if (all[index].at("sharpness_score").get<double>() > all[best].at("sharpness_score").get<double>())
+                                best = index;
+                        if (pattern_step == 0) {
+                            EXPECT_EQ(best, group * 4);
+                            for (size_t index = group * 4; index < (group + 1) * 4; ++index)
+                                ASSERT_EQ(all[index].at("sharpness_score"), all[best].at("sharpness_score"))
+                                    << "Static fixture must produce equal scores";
+                        }
+                        has_interior_maximum |= best > group * 4 && best + 1 < (group + 1) * 4 &&
+                                                all[best + 1].at("sharpness_score").get<double>() < all[best].at("sharpness_score").get<double>();
+                        EXPECT_EQ(selected[group], all[best]);
+                        const auto filename = all[best].at("file").get<std::string>();
+                        std::ifstream expected(reference.output_dir / filename, std::ios::binary);
+                        std::ifstream actual(window.output_dir / filename, std::ios::binary);
+                        ASSERT_TRUE(expected && actual);
+                        EXPECT_EQ(std::string(std::istreambuf_iterator<char>(actual), {}),
+                                  std::string(std::istreambuf_iterator<char>(expected), {}));
+                    }
+                    if (pattern_step != 0)
+                        EXPECT_TRUE(has_interior_maximum) << "Fixture must include a winner followed by a lower score";
+                }
+            }
+        }
+    }
+}
+
+TEST(VideoFrameExtractorTrim, SharpnessWindowMatchesAllCandidatesAt4K) {
+    if (!cudaAvailable())
+        GTEST_SKIP() << "CUDA device required for 4K video fixture";
+    TempDir temp("window_4k");
+    const auto source = temp.path / "source.mp4";
+    std::string error;
+    ASSERT_TRUE(writeEncodedVideo(source, 60, 60, error, 3840, 2160)) << error;
+    auto reference = extractionParams(source, temp.path / "all");
+    reference.end_time = -1.0;
+    reference.format = lfs::io::ImageFormat::JPG;
+    reference.sharpness.enabled = true;
+    reference.sharpness.window_mode = true;
+    reference.sharpness.window_candidates_target = 0;
+    VideoFrameExtractor extractor;
+    ASSERT_TRUE(extractor.extract(reference, error)) << error;
+    const auto all = readMetadata(reference.output_dir).at("frames");
+    ASSERT_EQ(all.size(), 60u);
+    size_t best = 0;
+    for (size_t index = 1; index < all.size(); ++index)
+        if (all[index].at("sharpness_score").get<double>() > all[best].at("sharpness_score").get<double>())
+            best = index;
+    auto window = reference;
+    window.output_dir = temp.path / "window";
+    window.mode = ExtractionMode::FPS;
+    window.fps = 1.0;
+    ASSERT_TRUE(extractor.extract(window, error)) << error;
+    const auto selected = readMetadata(window.output_dir).at("frames");
+    ASSERT_EQ(selected.size(), 1u);
+    EXPECT_EQ(selected[0], all[best]);
+    const auto filename = all[best].at("file").get<std::string>();
+    std::ifstream expected(reference.output_dir / filename, std::ios::binary);
+    std::ifstream actual(window.output_dir / filename, std::ios::binary);
+    ASSERT_TRUE(expected && actual);
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>(actual), {}),
+              std::string(std::istreambuf_iterator<char>(expected), {}));
+}
+
 TEST(VideoFrameExtractorTrim, SharpnessWindowsKeepTheDurationBoundary) {
     TempDir temp("window_duration");
     const auto video_path = temp.path / "source.mkv";
@@ -2644,9 +2892,6 @@ TEST(VideoFrameExtractorTrim, SparseFpsStopsAtTheVideoWhenAudioOutlastsIt) {
 }
 
 TEST(VideoFrameExtractorTrim, SparseFpsStopsAtTheLastDecodableFrameInAStreamCopy) {
-    if (!cudaAvailable())
-        GTEST_SKIP() << "Requires NVDEC for sparse FPS extraction";
-
     TempDir temp("stream_copy_tail");
     const auto source = std::filesystem::path(PROJECT_ROOT_PATH) /
                         "tests/data/video/h264_stream_copy.mp4";
@@ -2663,7 +2908,12 @@ TEST(VideoFrameExtractorTrim, SparseFpsStopsAtTheLastDecodableFrameInAStreamCopy
         EXPECT_EQ(extractor.lastOutcome(), lfs::io::ExtractionOutcome::Completed);
         EXPECT_EQ(countPngFiles(params.output_dir), 1u);
         const auto metadata = readMetadata(params.output_dir);
-        EXPECT_EQ(metadata["processing"]["frame_selection"]["strategy"], "keyframe_seek");
+        // This 64x48 fixture is below some NVDEC devices' minimum height.
+        // The final-frame boundary must hold for both the hardware and CPU path.
+        const bool hardware = metadata["processing"]["decoder"]["backend"] == "nvdec";
+        EXPECT_EQ(metadata["processing"]["frame_selection"]["strategy"], hardware ? "keyframe_seek" : "sequential");
+        EXPECT_EQ(metadata["processing"]["frame_selection"]["reason"],
+                  hardware ? "sparse_fps_keyframe_seek" : "software_decoder_requires_sequential_decode");
         EXPECT_EQ(metadata["processing"]["frame_selection"]["estimated_targets"], 1);
         ASSERT_EQ(metadata["frames"].size(), 1u);
         EXPECT_DOUBLE_EQ(metadata["frames"][0]["timestamp"].get<double>(), 0.0);
@@ -2696,14 +2946,18 @@ TEST(VideoFrameExtractorTrim, PlayerFullRangeKeepsTheLastFrame) {
 
 namespace {
     // Independent software decode: compare image contents, not just the output count.
-    std::vector<std::vector<uint8_t>> decodeVp9Reference(const std::filesystem::path& source) {
+    std::vector<std::vector<uint8_t>> decodeVideoReference(const std::filesystem::path& source) {
         std::vector<std::vector<uint8_t>> result;
         AVFormatContext* format = nullptr;
         if (avformat_open_input(&format, source.string().c_str(), nullptr, nullptr) < 0)
             return result;
         avformat_find_stream_info(format, nullptr);
         const int stream = av_find_best_stream(format, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
-        const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_VP9);
+        if (stream < 0) {
+            avformat_close_input(&format);
+            return result;
+        }
+        const AVCodec* codec = avcodec_find_decoder(format->streams[stream]->codecpar->codec_id);
         AVCodecContext* context = avcodec_alloc_context3(codec);
         avcodec_parameters_to_context(context, format->streams[stream]->codecpar);
         context->pkt_timebase = format->streams[stream]->time_base;
@@ -2749,7 +3003,7 @@ TEST(VideoFrameExtractorOutputNaming, Vp9KeepsEverySourceTimestamp) {
     TempDir temp("vp9_timestamps");
     const auto source = std::filesystem::path(PROJECT_ROOT_PATH) /
                         "tests/data/video/vp9_timestamps.webm";
-    const auto reference = decodeVp9Reference(source);
+    const auto reference = decodeVideoReference(source);
     ASSERT_EQ(reference.size(), 185u);
     auto params = extractionParams(source, temp.path);
     params.end_time = -1.0;
@@ -2939,7 +3193,7 @@ TEST(VideoDecoderFallback, LongRawH264PreviewOpenReadsOnlyTheProbeWindow) {
     player.close();
 }
 
-TEST(VideoFrameExtractorOutputNaming, TimestampedGeneratedClipKeepsFrameHashes) {
+TEST(VideoFrameExtractorOutputNaming, TimestampedGeneratedClipPreservesFrameContents) {
     TempDir temp("timestamped_frame_hashes");
     const auto source = temp.path / "timestamped.mp4";
     constexpr int frame_count = 6;
@@ -2953,12 +3207,10 @@ TEST(VideoFrameExtractorOutputNaming, TimestampedGeneratedClipKeepsFrameHashes) 
     ASSERT_TRUE(extractor.extract(params, error)) << error;
     ASSERT_EQ(countPngFiles(params.output_dir), frame_count);
 
-    // Keep the original NVDEC pixel reference independent of PNG compression.
-    const std::vector<uint64_t> expected_hashes{
-        4447340953764640790ull, 6700247232541181701ull,
-        18018889043452171844ull, 15686283614649312191ull,
-        3742041256909694354ull, 8649771673398531241ull};
-    std::vector<uint64_t> hashes;
+    // The encoder is supplied by the local FFmpeg build. Compare the actual
+    // bitstream with independent software decoding, not another encoder's output.
+    const auto reference = decodeVideoReference(source);
+    ASSERT_EQ(reference.size(), frame_count);
     for (int index = 1; index <= frame_count; ++index) {
         SCOPED_TRACE(index);
         const auto frame = params.output_dir / ("frame_" + std::to_string(index) + ".png");
@@ -2969,9 +3221,28 @@ TEST(VideoFrameExtractorOutputNaming, TimestampedGeneratedClipKeepsFrameHashes) 
         ASSERT_EQ(width, 64);
         ASSERT_EQ(height, 48);
         ASSERT_EQ(channels, 3);
-        hashes.push_back(hashPixels(pixels, static_cast<std::size_t>(width) * height * channels));
+        const auto& expected = reference[index - 1];
+        ASSERT_EQ(expected.size(), static_cast<std::size_t>(width) * height * channels);
+        uint64_t difference = 0;
+        int maximum_difference = 0;
+        for (std::size_t pixel = 0; pixel < expected.size(); ++pixel) {
+            const int delta = std::abs(static_cast<int>(pixels[pixel]) - expected[pixel]);
+            difference += delta;
+            maximum_difference = std::max(maximum_difference, delta);
+        }
+        // Allow CPU/NVDEC IDCT and RGB rounding, but reject corrupt pixels and
+        // duplicated or reordered frames even when the output count is correct.
+        EXPECT_LE(maximum_difference, 3);
+        EXPECT_LT(static_cast<double>(difference) / expected.size(), 2.0);
+        for (int candidate = 0; candidate < frame_count; ++candidate) {
+            if (candidate == index - 1)
+                continue;
+            uint64_t other_difference = 0;
+            for (std::size_t pixel = 0; pixel < expected.size(); ++pixel)
+                other_difference += std::abs(static_cast<int>(pixels[pixel]) - reference[candidate][pixel]);
+            EXPECT_LT(difference, other_difference) << "better matching source frame " << candidate + 1;
+        }
     }
-    EXPECT_EQ(hashes, expected_hashes);
 }
 
 #if defined(__linux__)
@@ -3055,4 +3326,148 @@ TEST(VideoDecoderFallback, FailedReplacementClearsDialogPathsAndCanRecover) {
     ASSERT_TRUE(dialog.openVideoPath(source));
     EXPECT_EQ(Access::videoPath(dialog), source);
     EXPECT_EQ(Access::outputPath(dialog), source.parent_path() / "h264_420_frames");
+}
+
+// Independent scalar oracle: preserve the extractor's original border, thresholds and denominator.
+namespace {
+    double referenceSharpness(const std::vector<uint8_t>& rgb, int w, int h, lfs::io::SharpnessAlgorithm algorithm) {
+        long long edges = 0;
+        for (int y = 1; y + 1 < h; ++y) {
+            for (int x = 1; x + 1 < w; ++x) {
+                const auto green = [&](int dx, int dy) { return static_cast<int>(rgb[((y + dy) * w + x + dx) * 3 + 1]); };
+                const int lap = std::abs(4 * green(0, 0) - green(-1, 0) - green(1, 0) - green(0, -1) - green(0, 1));
+                const int gx = -green(-1, -1) + green(1, -1) - 2 * green(-1, 0) + 2 * green(1, 0) - green(-1, 1) + green(1, 1);
+                const int gy = -green(-1, -1) - 2 * green(0, -1) - green(1, -1) + green(-1, 1) + 2 * green(0, 1) + green(1, 1);
+                const bool lap_edge = lap > 10;
+                const bool sobel_edge = std::abs(gx) + std::abs(gy) > 40;
+                edges += algorithm == lfs::io::SharpnessAlgorithm::LAPLACIAN ? lap_edge : algorithm == lfs::io::SharpnessAlgorithm::COMBINED ? lap_edge || sobel_edge
+                                                                                                                                             : sobel_edge;
+            }
+        }
+        return w < 3 || h < 3 ? 0.0 : static_cast<double>(edges) * 100.0 / (static_cast<double>(static_cast<long long>(w) * h));
+    }
+} // namespace
+
+TEST(VideoSharpnessScore, CpuPreservesOriginalIntegerContract) {
+    using namespace lfs::io;
+    uint32_t random = 4112;
+    for (const auto [w, h] : {std::pair{0, 0}, {1, 2}, {3, 3}, {5, 9}, {257, 13}, {1919, 1079}}) {
+        std::vector<uint8_t> rgb(static_cast<size_t>(w) * h * 3);
+        for (auto& pixel : rgb) {
+            random = random * 1664525U + 1013904223U;
+            pixel = static_cast<uint8_t>(random >> 24);
+        }
+        for (const auto algorithm : {SharpnessAlgorithm::LAPLACIAN, SharpnessAlgorithm::TENENGRAD, SharpnessAlgorithm::COMBINED}) {
+            const auto expected = referenceSharpness(rgb, w, h, algorithm);
+            EXPECT_EQ(expected, computeSharpnessScore(rgb.data(), w, h, algorithm));
+        }
+    }
+}
+
+TEST(VideoSharpnessScore, CudaMatchesScalarAcrossImageSizes) {
+    if (!cudaAvailable())
+        GTEST_SKIP() << "CUDA device required for scorer equivalence";
+    using namespace lfs::io;
+    SharpnessScorer scorer;
+    uint32_t random = 4112;
+    for (const auto [w, h] : {std::pair{3, 3}, {257, 13}, {1920, 1080}, {3840, 2160}, {7, 11}}) {
+        std::vector<uint8_t> rgb(static_cast<size_t>(w) * h * 3);
+        for (int pattern = 0; pattern < 4; ++pattern) {
+            for (auto& pixel : rgb) {
+                random = random * 1664525U + 1013904223U;
+                pixel = pattern == 0 ? 17 : pattern == 1 ? static_cast<uint8_t>((random >> 24) % 12)
+                                                         : static_cast<uint8_t>(random >> 24);
+            }
+            if (pattern == 3) {
+                for (int y = 0; y < h; ++y)
+                    for (int x = 0; x < w; ++x)
+                        rgb[(static_cast<size_t>(y) * w + x) * 3 + 1] = (x + y) % 2 ? 255 : 0;
+            }
+            uint8_t* device = nullptr;
+            ASSERT_EQ(cudaSuccess, cudaMalloc(&device, rgb.size()));
+            ASSERT_EQ(cudaSuccess, cudaMemcpy(device, rgb.data(), rgb.size(), cudaMemcpyHostToDevice));
+            for (const auto algorithm : {SharpnessAlgorithm::LAPLACIAN, SharpnessAlgorithm::TENENGRAD, SharpnessAlgorithm::COMBINED}) {
+                const auto expected = referenceSharpness(rgb, w, h, algorithm);
+                EXPECT_EQ(expected, computeSharpnessScore(rgb.data(), w, h, algorithm));
+                const auto gpu = scorer.scoreDevice(device, w, h, algorithm);
+                EXPECT_TRUE(gpu.has_value());
+                if (gpu)
+                    EXPECT_EQ(expected, *gpu);
+            }
+            EXPECT_EQ(cudaSuccess, cudaFree(device));
+        }
+    }
+}
+
+TEST(VideoSharpnessScore, StrictLaplacianAndSobelBoundaries) {
+    using namespace lfs::io;
+    for (int sample = 0; sample < 4; ++sample) {
+        std::vector<uint8_t> rgb(3 * 3 * 3, 0);
+        if (sample < 2) {
+            rgb[(1 * 3 + 1) * 3 + 1] = 3;
+            rgb[(1 * 3 + 0) * 3 + 1] = sample == 0 ? 2 : 1; // Laplacian 10 / 11
+        } else {
+            for (int y = 0; y < 3; ++y)
+                for (int x = 0; x < 3; ++x)
+                    rgb[(y * 3 + x) * 3 + 1] = static_cast<uint8_t>(x * 5);
+            rgb[(0 * 3 + 2) * 3 + 1] += sample == 3 ? 1 : 0; // Sobel 40 / 42 (L1 is always even)
+        }
+        for (const auto algorithm : {SharpnessAlgorithm::LAPLACIAN, SharpnessAlgorithm::TENENGRAD, SharpnessAlgorithm::COMBINED}) {
+            const bool edge = algorithm == SharpnessAlgorithm::LAPLACIAN ? sample == 1 : algorithm == SharpnessAlgorithm::TENENGRAD ? sample == 3
+                                                                                                                                    : sample == 1 || sample == 3;
+            EXPECT_EQ(edge ? 100.0 / 9.0 : 0.0, computeSharpnessScore(rgb.data(), 3, 3, algorithm));
+            if (cudaAvailable()) {
+                SharpnessScorer scorer;
+                uint8_t* device = nullptr;
+                ASSERT_EQ(cudaSuccess, cudaMalloc(&device, rgb.size()));
+                ASSERT_EQ(cudaSuccess, cudaMemcpy(device, rgb.data(), rgb.size(), cudaMemcpyHostToDevice));
+                EXPECT_EQ(std::optional<double>(edge ? 100.0 / 9.0 : 0.0), scorer.scoreDevice(device, 3, 3, algorithm));
+                EXPECT_EQ(cudaSuccess, cudaFree(device));
+            }
+        }
+    }
+}
+
+TEST(VideoSharpnessScore, WaitsForTheDefaultStreamProducer) {
+    if (!cudaAvailable())
+        GTEST_SKIP() << "CUDA device required for stream ordering";
+    using namespace lfs::io;
+    int gpu = 0;
+    ASSERT_EQ(cudaSuccess, cudaGetDevice(&gpu));
+    std::vector<uint8_t> rgb(8 * 8 * 3, 0);
+    for (size_t pixel = 0; pixel < 64; ++pixel)
+        rgb[pixel * 3 + 1] = ((pixel / 8 + pixel % 8) % 2) ? 255 : 0;
+    uint8_t* device = nullptr;
+    ASSERT_EQ(cudaSuccess, cudaMalloc(&device, rgb.size()));
+    ASSERT_EQ(cudaSuccess, cudaMemcpy(device, rgb.data(), rgb.size(), cudaMemcpyHostToDevice));
+    SharpnessScorer scorer;
+    ASSERT_EQ(std::optional<double>(56.25), scorer.scoreDevice(device, 8, 8, SharpnessAlgorithm::COMBINED));
+    struct Gate {
+        std::atomic<bool> entered{false};
+        std::atomic<bool> released{false};
+    } gate;
+    auto result = std::async(std::launch::async, [&]() -> std::optional<double> {
+        if (cudaSetDevice(gpu) != cudaSuccess || cudaLaunchHostFunc(nullptr, [](void* pointer) {
+                auto& producer_gate = *static_cast<Gate*>(pointer);
+                producer_gate.entered.store(true);
+                producer_gate.entered.notify_one();
+                producer_gate.released.wait(false); }, &gate) != cudaSuccess) {
+            gate.entered.store(true);
+            gate.entered.notify_one();
+            return std::nullopt;
+        }
+        if (cudaMemsetAsync(device, 17, rgb.size(), nullptr) != cudaSuccess)
+            return std::nullopt;
+        return scorer.scoreDevice(device, 8, 8, SharpnessAlgorithm::COMBINED);
+    });
+    gate.entered.wait(false);
+    const auto early = result.wait_for(std::chrono::milliseconds(100));
+    gate.released.store(true);
+    gate.released.notify_one();
+    // Complete the callback before its stack-owned gate can be destroyed, including on failure.
+    EXPECT_EQ(cudaSuccess, cudaDeviceSynchronize());
+    const auto score = result.get();
+    EXPECT_EQ(std::future_status::timeout, early);
+    EXPECT_EQ(std::optional<double>(0.0), score);
+    EXPECT_EQ(cudaSuccess, cudaFree(device));
 }

@@ -43,6 +43,8 @@ namespace lfs::core::nn::models {
     public:
         static lfs::Result<Moge2> load(const std::filesystem::path& weights, Device device,
                                        std::optional<DataType> compute = std::nullopt);
+        static lfs::Result<Moge2> load(const WeightFile& file, Device device,
+                                       std::optional<DataType> compute = std::nullopt);
 
         // `image` is NCHW RGB in [0, 1], matching the ORT `image` input.
         // Outputs match the ONNX heads after postprocess (points remapped with

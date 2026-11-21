@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
+#include <vector>
 
 using namespace lfs::core;
 
@@ -68,6 +69,54 @@ TEST_F(StaleStreamTeardownTest, DeadHomeStreamCpuDoesNotPoisonThread) {
 
     const Tensor fresh = Tensor::ones({32}, Device::CUDA);
     EXPECT_EQ(fresh.count_nonzero(), 32u);
+    EXPECT_EQ(cudaGetLastError(), cudaSuccess);
+}
+
+TEST_F(StaleStreamTeardownTest, RetiredHomeStreamDeviceCopyPreservesDataAndRetirement) {
+    cudaStream_t user_stream = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&user_stream, cudaStreamNonBlocking), cudaSuccess);
+    Tensor source, destination;
+    {
+        CUDAStreamGuard guard(user_stream);
+        source = Tensor::full({8}, 3.25f, Device::CUDA);
+        destination = Tensor::empty({8}, Device::CUDA);
+    }
+    CudaMemoryPool::instance().release_stream(user_stream);
+    ASSERT_EQ(cudaStreamDestroy(user_stream), cudaSuccess);
+    ASSERT_TRUE(is_stream_retired(user_stream));
+
+    ASSERT_EQ(memcpy_ordered(destination.data_ptr(), source.data_ptr(), source.bytes(),
+                             cudaMemcpyDeviceToDevice, user_stream),
+              cudaSuccess);
+    const auto values = destination.cpu().to_vector();
+    ASSERT_EQ(values.size(), 8u);
+    for (const float value : values)
+        EXPECT_FLOAT_EQ(value, 3.25f);
+    EXPECT_TRUE(is_stream_retired(user_stream));
+    EXPECT_EQ(cudaGetLastError(), cudaSuccess);
+}
+
+TEST_F(StaleStreamTeardownTest, RetiredHomeStreamMutationsPreserveDataAndRetirement) {
+    cudaStream_t user_stream = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&user_stream, cudaStreamNonBlocking), cudaSuccess);
+    Tensor destination;
+    {
+        CUDAStreamGuard guard(user_stream);
+        destination = Tensor::empty({8}, Device::CUDA);
+    }
+    CudaMemoryPool::instance().release_stream(user_stream);
+    ASSERT_EQ(cudaStreamDestroy(user_stream), cudaSuccess);
+    const auto host = Tensor::from_vector(std::vector<float>(8, 5.0f), {8}, Device::CPU);
+    destination.copy_from(host);
+    for (const float value : destination.cpu().to_vector())
+        EXPECT_FLOAT_EQ(value, 5.0f);
+    destination.zero_();
+    for (const float value : destination.cpu().to_vector())
+        EXPECT_FLOAT_EQ(value, 0.0f);
+    destination.fill_(3.0f);
+    for (const float value : destination.cpu().to_vector())
+        EXPECT_FLOAT_EQ(value, 3.0f);
+    EXPECT_TRUE(is_stream_retired(user_stream));
     EXPECT_EQ(cudaGetLastError(), cudaSuccess);
 }
 

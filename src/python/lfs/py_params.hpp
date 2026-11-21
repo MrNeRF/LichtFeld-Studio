@@ -24,6 +24,7 @@ namespace lfs::python {
     class PyOptimizationParams {
     public:
         PyOptimizationParams() = default;
+        void set_scaled_iterations(size_t target);
 
         [[nodiscard]] nb::object get(const std::string& prop_id) const;
         void set(const std::string& prop_id, nb::object value);
@@ -39,6 +40,9 @@ namespace lfs::python {
 
         // Check if params are available
         [[nodiscard]] bool has_params() const;
+
+    private:
+        void set_impl(const std::string& prop_id, nb::object value, bool scale_schedule);
     };
 
     class PyDatasetConfig {

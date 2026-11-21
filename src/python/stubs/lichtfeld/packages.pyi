@@ -14,11 +14,13 @@ class PackageInfo:
 
     def __repr__(self) -> str: ...
 
-def init() -> str:
-    """Initialize the resolved per-user virtual environment"""
+def init(cancel: object | None = None) -> str:
+    """
+    Initialize the resolved per-user virtual environment; cancel is an optional worker-side predicate
+    """
 
-def install(package: str) -> str:
-    """Install package from PyPI"""
+def install(package: str, cancel: object | None = None) -> str:
+    """Install package from PyPI; cancel is an optional worker-side predicate"""
 
 def uninstall(package: str) -> str:
     """Uninstall package"""

@@ -269,7 +269,7 @@ namespace lfs::training {
     }
 
     lfs::Result<CompareResult> compare_image_sets(const lfs::core::param::CompareParameters& params,
-                                                  std::optional<std::filesystem::path> lpips_weights) {
+                                                  std::function<std::optional<core::nn::WeightFile>()> lpips_weights) {
         namespace param = lfs::core::param;
         const auto reference_set = resolve_image_set(params.reference_path);
         const auto test_set = resolve_image_set(params.test_path);
@@ -445,7 +445,7 @@ namespace lfs::training {
         }
 
         MetricsEvaluator evaluator(evaluation);
-        evaluator.set_lpips_weights_path(std::move(lpips_weights));
+        evaluator.set_lpips_weights_preparer(std::move(lpips_weights));
         if (!params.evaluation.eval_mask.empty()) {
             auto installed = evaluator.install_eval_mask_source({0.0f, 0.0f, 0.0f});
             if (!installed)

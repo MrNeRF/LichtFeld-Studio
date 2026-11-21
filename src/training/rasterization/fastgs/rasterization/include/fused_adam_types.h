@@ -67,6 +67,12 @@ namespace fast_lfs::rasterization {
         float mean_step_median_extent = 0.0f;
         const bool* mean_step_far_mask = nullptr;
         int mean_step_far_mask_n = 0;
+        // Ray-depth rows (lfs/training/ray_depth_step.cuh) stepped after the geometry rows; null: off.
+        float* ray_depth_state = nullptr;
+        int ray_depth_n = 0;
+        float ray_depth_lr = 0.0f;
+        float ray_depth_mean_lr = 0.0f;   // position learning rate, world units
+        float ray_depth_far_limit = 0.0f; // the rasterizer's far plane, world units
 
         FusedAdamParam means;
         FusedAdamParam scaling;

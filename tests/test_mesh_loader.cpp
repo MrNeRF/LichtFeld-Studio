@@ -5,6 +5,7 @@
 #include "io/formats/ply.hpp"
 #include "io/loader.hpp"
 #include "io/loaders/mesh_loader.hpp"
+#include "io/skinned_mesh.hpp"
 #include "rendering/mesh2splat.hpp"
 
 #include <gtest/gtest.h>
@@ -18,6 +19,7 @@
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <variant>
+#include <vector>
 
 using namespace lfs::core;
 
@@ -99,6 +101,51 @@ namespace {
             auto scene = nlohmann::json::parse(std::ifstream(path));
             scene["accessors"][0]["max"] = {1, 1, 0};
             std::ofstream(path) << scene.dump();
+            return path;
+        }
+
+        // A triangle bound to a skeleton of three bones: "root" moves no
+        // vertex, "a" moves the first two corners and shares the third with
+        // "b". The weights of the second corner do not sum to one.
+        std::filesystem::path write_skinned_scene() {
+            std::vector<char> bytes;
+            const auto put = [&bytes](const auto& values) {
+                const auto* const data = reinterpret_cast<const char*>(values.data());
+                bytes.insert(bytes.end(), data, data + values.size() * sizeof(values[0]));
+            };
+            put(std::array<float, 9>{0, 0, 0, 1, 0, 0, 0, 1, 0});                   // positions, offset 0
+            put(std::array<float, 9>{0, 0, 1, 0, 0, 1, 0, 0, 1});                   // normals, 36
+            put(std::array<uint8_t, 12>{1, 0, 0, 0, 1, 0, 0, 0, 1, 2, 0, 0});       // bones, 72
+            put(std::array<float, 12>{1, 0, 0, 0, 2, 0, 0, 0, 0.25f, 0.75f, 0, 0}); // weights, 84
+            put(std::array<uint16_t, 4>{0, 1, 2, 0});                               // indices, 132, padded
+            for (const float shift : {0.0f, 1.0f, 2.0f})                            // inverse binds, 140
+                put(std::array<float, 16>{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -shift, -2 * shift, -3 * shift, 1});
+            std::ofstream binary(temp_dir_ / "skinned.bin", std::ios::binary);
+            binary.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+            binary.close();
+            const auto path = temp_dir_ / "skinned.gltf";
+            std::ofstream(path) << R"({
+                "asset":{"version":"2.0"},
+                "buffers":[{"uri":"skinned.bin","byteLength":332}],
+                "bufferViews":[
+                    {"buffer":0,"byteOffset":0,"byteLength":36},
+                    {"buffer":0,"byteOffset":36,"byteLength":36},
+                    {"buffer":0,"byteOffset":72,"byteLength":12},
+                    {"buffer":0,"byteOffset":84,"byteLength":48},
+                    {"buffer":0,"byteOffset":132,"byteLength":6},
+                    {"buffer":0,"byteOffset":140,"byteLength":192}],
+                "accessors":[
+                    {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]},
+                    {"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"},
+                    {"bufferView":2,"componentType":5121,"count":3,"type":"VEC4"},
+                    {"bufferView":3,"componentType":5126,"count":3,"type":"VEC4"},
+                    {"bufferView":4,"componentType":5123,"count":3,"type":"SCALAR"},
+                    {"bufferView":5,"componentType":5126,"count":3,"type":"MAT4"}],
+                "meshes":[{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1,"JOINTS_0":2,"WEIGHTS_0":3},"indices":4}]}],
+                "skins":[{"joints":[1,2,3],"inverseBindMatrices":5}],
+                "nodes":[{"mesh":0,"skin":0},{"name":"root","children":[2,3]},
+                         {"name":"a","translation":[1,2,3]},{"name":"b","translation":[2,4,6]}],
+                "scenes":[{"nodes":[0,1]}],"scene":0})";
             return path;
         }
 
@@ -642,4 +689,72 @@ TEST_F(MeshLoaderTest, AppliesSmallNodeTranslations) {
     const auto mesh = std::get<std::shared_ptr<MeshData>>(result->data);
     auto vertices = mesh->vertices.accessor<float, 2>();
     EXPECT_NEAR(vertices(0, 0), 0.0001f, 1e-8f);
+}
+
+TEST_F(MeshLoaderTest, SkinnedMeshKeepsEveryBoneOfTheSkin) {
+    const auto mesh = lfs::io::load_skinned_mesh(write_skinned_scene());
+    ASSERT_TRUE(mesh.has_value()) << mesh.error().format();
+
+    // Every bone of the skin, in its order, the one without vertices included.
+    ASSERT_EQ(mesh->bones.size(), 3u);
+    EXPECT_EQ(mesh->bones[0].name, "root");
+    EXPECT_EQ(mesh->bones[1].name, "a");
+    EXPECT_EQ(mesh->bones[2].name, "b");
+    // The inverse bind matrices come through as they are in the file.
+    for (int row = 0; row < 3; ++row) {
+        EXPECT_FLOAT_EQ(mesh->bones[0].inverse_bind[3][row], 0.0f);
+        EXPECT_FLOAT_EQ(mesh->bones[1].inverse_bind[3][row], -1.0f * static_cast<float>(row + 1));
+        EXPECT_FLOAT_EQ(mesh->bones[2].inverse_bind[3][row], -2.0f * static_cast<float>(row + 1));
+        EXPECT_FLOAT_EQ(mesh->bones[2].inverse_bind[row][row], 1.0f);
+    }
+
+    ASSERT_EQ(mesh->vertices.size(), 3u);
+    ASSERT_EQ(mesh->indices.size(), 3u);
+    // How much a bone moves the corner of the triangle that lies at `position`.
+    const auto weight_at = [&](const glm::vec3 position, const std::uint16_t bone) {
+        for (const std::uint32_t index : mesh->indices) {
+            const auto& vertex = mesh->vertices[index];
+            if (glm::length(vertex.position - position) > 1e-6f)
+                continue;
+            EXPECT_NEAR(vertex.normal.z, 1.0f, 1e-6f);
+            float weight = 0.0f;
+            for (std::size_t slot = 0; slot < vertex.bones.size(); ++slot) {
+                if (vertex.bones[slot] == bone)
+                    weight += vertex.weights[slot];
+            }
+            return weight;
+        }
+        ADD_FAILURE() << "no corner of the triangle at that position";
+        return -1.0f;
+    };
+    EXPECT_FLOAT_EQ(weight_at({0, 0, 0}, 1), 1.0f);
+    // Weights are brought back to a sum of one.
+    EXPECT_FLOAT_EQ(weight_at({1, 0, 0}, 1), 1.0f);
+    EXPECT_FLOAT_EQ(weight_at({0, 1, 0}, 1), 0.25f);
+    EXPECT_FLOAT_EQ(weight_at({0, 1, 0}, 2), 0.75f);
+    EXPECT_FLOAT_EQ(weight_at({0, 1, 0}, 0), 0.0f);
+}
+
+TEST_F(MeshLoaderTest, SkinnedMeshRefusesFilesWithoutASkeleton) {
+    // A mesh no bone moves.
+    const auto unskinned = lfs::io::load_skinned_mesh(mesh_path_);
+    ASSERT_FALSE(unskinned.has_value());
+    EXPECT_TRUE(unskinned.error().is(lfs::io::ErrorCode::UNSUPPORTED_FORMAT));
+
+    const auto missing = lfs::io::load_skinned_mesh(temp_dir_ / "missing.glb");
+    ASSERT_FALSE(missing.has_value());
+    EXPECT_TRUE(missing.error().is(lfs::io::ErrorCode::PATH_NOT_FOUND));
+
+    // A file cut short, and one that is no model at all.
+    const auto path = write_skinned_scene();
+    std::filesystem::resize_file(path, std::filesystem::file_size(path) / 2);
+    const auto cut_short = lfs::io::load_skinned_mesh(path);
+    ASSERT_FALSE(cut_short.has_value());
+    EXPECT_TRUE(cut_short.error().is(lfs::io::ErrorCode::CORRUPTED_DATA));
+
+    const auto not_a_model = temp_dir_ / "not_a_model.glb";
+    std::ofstream(not_a_model) << "not a model";
+    const auto refused = lfs::io::load_skinned_mesh(not_a_model);
+    ASSERT_FALSE(refused.has_value());
+    EXPECT_TRUE(refused.error().is(lfs::io::ErrorCode::CORRUPTED_DATA));
 }

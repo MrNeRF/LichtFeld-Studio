@@ -16,6 +16,7 @@
 #include "core/resource_messages.hpp"
 #include "diagnostics/vram_ledger_model.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "gui/assisted_masking.hpp"
 #include "gui/camera_thumbnail_policy.hpp"
 #include "gui/frustum_overlay_key.hpp"
 #include "gui/guide_segment_clipping.hpp"
@@ -408,6 +409,7 @@ namespace lfs::vis::gui {
             glm::vec2 pos{0.0f};
             glm::vec2 size{0.0f};
             glm::ivec2 render_size{0};
+            std::optional<GTRenderCamera> camera_override{};
 
             [[nodiscard]] bool valid() const {
                 return viewport != nullptr && size.x > 0.0f && size.y > 0.0f &&
@@ -1218,10 +1220,11 @@ namespace lfs::vis::gui {
             const glm::vec3& world_a,
             const glm::vec3& world_b) {
             const float ortho_scale = panel.viewport->ortho_scale_override.value_or(settings.ortho_scale);
-            if (settings.equirectangular) {
-                const glm::mat3 rotation = panel.viewport->getRotationMatrix();
-                const glm::vec3 translation = panel.viewport->getTranslation();
-
+            const auto& camera = panel.camera_override;
+            const bool orthographic = !camera && settings.orthographic;
+            const glm::mat3 rotation = camera ? camera->rotation : panel.viewport->getRotationMatrix();
+            const glm::vec3 translation = camera ? camera->translation : panel.viewport->getTranslation();
+            if (camera ? camera->equirectangular : settings.equirectangular) {
                 struct EquirectProjected {
                     glm::vec2 screen;
                     float depth;
@@ -1256,21 +1259,22 @@ namespace lfs::vis::gui {
             }
 
             constexpr float kMinViewZ = -1e-4f;
-            const glm::mat3 rotation = panel.viewport->getRotationMatrix();
-            const glm::vec3 translation = panel.viewport->getTranslation();
             const glm::vec3 view_a = glm::transpose(rotation) * (world_a - translation);
             const glm::vec3 view_b = glm::transpose(rotation) * (world_b - translation);
 
-            const float cx = static_cast<float>(std::max(panel.render_size.x, 1)) * 0.5f;
-            const float cy = static_cast<float>(std::max(panel.render_size.y, 1)) * 0.5f;
-            const auto [fx, fy] = lfs::rendering::computePixelFocalLengths(
+            const auto [focal_x, focal_y] = lfs::rendering::computePixelFocalLengths(
                 panel.render_size, settings.focal_length_mm);
-            if (settings.orthographic && (!std::isfinite(ortho_scale) || ortho_scale <= 0.0f)) {
+            const auto [fx, fy, cx, cy] = camera && camera->intrinsics
+                                              ? *camera->intrinsics
+                                              : lfs::rendering::CameraIntrinsics{focal_x, focal_y,
+                                                                                 panel.render_size.x * 0.5f,
+                                                                                 panel.render_size.y * 0.5f};
+            if (orthographic && (!std::isfinite(ortho_scale) || ortho_scale <= 0.0f)) {
                 return std::nullopt;
             }
 
             const std::array<GuideClipPlane, 5> clip_planes =
-                settings.orthographic
+                orthographic
                     ? std::array<GuideClipPlane, 5>{{
                           {{0.0f, 0.0f, -1.0f}, kMinViewZ},
                           {{ortho_scale, 0.0f, 0.0f}, cx},
@@ -1281,9 +1285,9 @@ namespace lfs::vis::gui {
                     : std::array<GuideClipPlane, 5>{{
                           {{0.0f, 0.0f, -1.0f}, kMinViewZ},
                           {{fx, 0.0f, -cx}, 0.0f},
-                          {{-fx, 0.0f, -cx}, 0.0f},
+                          {{-fx, 0.0f, cx - panel.render_size.x}, 0.0f},
                           {{0.0f, -fy, -cy}, 0.0f},
-                          {{0.0f, fy, -cy}, 0.0f},
+                          {{0.0f, fy, cy - panel.render_size.y}, 0.0f},
                       }};
 
             const auto clipped = clipGuideSegment(view_a, view_b, clip_planes);
@@ -1293,7 +1297,7 @@ namespace lfs::vis::gui {
             const auto& [clipped_a, clipped_b] = *clipped;
 
             const auto project_view = [&](const glm::vec3& view) -> std::optional<glm::vec2> {
-                if (settings.orthographic) {
+                if (orthographic) {
                     return glm::vec2(cx + view.x * ortho_scale,
                                      cy - view.y * ortho_scale);
                 }
@@ -3443,9 +3447,18 @@ namespace lfs::vis::gui {
                 return;
             }
 
-            const auto panels = collectVulkanGuidePanels(viewer, viewport_layout, rendering_manager);
-            if (panels.empty()) {
-                return;
+            auto panels = collectVulkanGuidePanels(viewer, viewport_layout, rendering_manager);
+            const bool gt_compare = rendering_manager.isGTComparisonActive();
+            if (gt_compare) {
+                const auto gt = rendering_manager.getGTComparisonGuideCamera();
+                if (!gt)
+                    return;
+                auto& panel = panels.front();
+                const auto bounds = rendering_manager.getContentBounds(panel.render_size);
+                panel.pos = viewport_layout.pos + glm::vec2(bounds.x, bounds.y);
+                panel.size = {bounds.width, bounds.height};
+                panel.render_size = gt->render_size;
+                panel.camera_override = gt->camera;
             }
 
             constexpr std::array axis_colors{
@@ -3476,6 +3489,10 @@ namespace lfs::vis::gui {
                     }
                 }
 
+                if (gt_compare) {
+                    continue;
+                }
+
                 constexpr float kPivotDurationSec = 0.5f;
                 const float time_since_set = panel.viewport->camera.getSecondsSincePivotSet();
                 const bool pivot_animation_active = time_since_set < kPivotDurationSec;
@@ -3493,7 +3510,7 @@ namespace lfs::vis::gui {
                 }
             }
 
-            if (scene_manager) {
+            if (scene_manager && !gt_compare) {
                 appendCameraFrustumOverlays(params,
                                             panels,
                                             settings,
@@ -4626,6 +4643,9 @@ namespace lfs::vis::gui {
             }
         });
         lfs::python::set_rml_manager(&rmlui_manager_);
+        rmlui_manager_.setPreviewMemoryProvider([this](std::string_view key) {
+            return async_tasks_.assistedMasking().sequencePreview(key);
+        });
         initDevResourceHotReload();
 
         startup_overlay_.init(&rmlui_manager_);
@@ -4690,6 +4710,7 @@ namespace lfs::vis::gui {
                                     std::string(name), std::string(rml),
                                     inline_rcss ? std::string(inline_rcss) : std::string{});
         };
+        ops.suspend_input = [](void* host) { static_cast<RmlPanelHost*>(host)->suspendInput(); };
         ops.destroy = [](void* host) {
             if (lfs::python::on_graphics_thread()) {
                 delete static_cast<RmlPanelHost*>(host);
@@ -4790,6 +4811,19 @@ namespace lfs::vis::gui {
         };
         ops.set_floating = [](void* host, bool floating) {
             static_cast<RmlPanelHost*>(host)->setFloating(floating);
+        };
+        ops.set_window_presentation = [](void* host, int state) {
+            static_cast<RmlPanelHost*>(host)->setWindowPresentation(state < 0 ? std::nullopt : std::optional(static_cast<FloatingWindowState>(state)));
+        };
+        ops.title_controls_bounds = [](void* host, float* bounds) {
+            const auto box = static_cast<RmlPanelHost*>(host)->titleControlsBounds();
+            if (!box)
+                return false;
+            bounds[0] = box->x;
+            bounds[1] = box->y;
+            bounds[2] = box->width;
+            bounds[3] = box->height;
+            return true;
         };
         ops.native_window = [](void* host) -> void* {
             return static_cast<RmlPanelHost*>(host)->nativeWindow();
@@ -5139,6 +5173,7 @@ namespace lfs::vis::gui {
         endInteractiveTransitionGuard();
         interactive_transition_pause_pending_ = false;
         ui_toggle_pending_ = false;
+        side_dock_toggle_pending_.reset();
         fullscreen_toggle_pending_ = false;
         interactive_transition_guard_until_ = {};
 
@@ -5151,6 +5186,7 @@ namespace lfs::vis::gui {
         if (video_widget_)
             video_widget_->shutdown();
 
+        rmlui_manager_.setPreviewMemoryProvider({});
         async_tasks_.shutdown();
 
         const bool need_gil = lfs::python::get_main_thread_state() != nullptr;
@@ -5614,6 +5650,43 @@ namespace lfs::vis::gui {
         }
     }
 
+    void GuiManager::revealPanel(const std::string& id) {
+        if (!viewer_)
+            return;
+        if (!viewer_->isOnViewerThread()) {
+            viewer_->postWork(VisualizerImpl::WorkItem{.run = [this, id = std::string(id)] { revealPanel(id); }, .cancel = {}});
+            return;
+        }
+        const auto panel = PanelRegistry::instance().get_panel(id);
+        if (!panel || !panel->enabled)
+            return;
+        const bool right = panel->space == PanelSpace::MainPanelTab || panel->space == PanelSpace::SceneHeader;
+        if (!right && panel->space != PanelSpace::LeftDock)
+            return;
+        if (panel->space == PanelSpace::MainPanelTab)
+            focus_panel_name_ = id;
+        const bool collapsed = ui_visibility_resize_active_
+                                   ? (right ? ui_target_right_collapsed_ : ui_target_left_collapsed_)
+                                   : (right ? panel_layout_.isRightDockCollapsed() : panel_layout_.isLeftDockCollapsed());
+        const auto side = right ? lfs::core::SideDock::Right : lfs::core::SideDock::Left;
+        side_dock_toggle_pending_.set(std::to_underlying(side), collapsed);
+        lfs::python::request_redraw();
+    }
+
+    void GuiManager::queueSideDockToggle(const lfs::core::SideDock side) {
+        if (!viewer_)
+            return;
+        const auto request = [this, side] {
+            side_dock_toggle_pending_.set(std::to_underlying(side));
+            if (auto* wm = viewer_->getWindowManager())
+                wm->wakeEventLoop();
+        };
+        if (viewer_->isOnViewerThread())
+            request();
+        else
+            viewer_->postWork(VisualizerImpl::WorkItem{.run = request, .cancel = {}});
+    }
+
     void GuiManager::requestUiVisibilityToggle() {
         auto* const wm = viewer_ ? viewer_->getWindowManager() : nullptr;
         if (!wm) {
@@ -5633,23 +5706,27 @@ namespace lfs::vis::gui {
     }
 
     void GuiManager::updateUiVisibilityTransition() {
-        if (!ui_toggle_pending_ || ui_visibility_resize_active_) {
+        if ((!ui_toggle_pending_ && !side_dock_toggle_pending_.any()) || ui_visibility_resize_active_) {
             return;
         }
 
         auto* const wm = viewer_ ? viewer_->getWindowManager() : nullptr;
         if (!wm) {
             ui_toggle_pending_ = false;
+            side_dock_toggle_pending_.reset();
             return;
         }
 
         const auto now = std::chrono::steady_clock::now();
+        ui_visibility_target_hidden_ = ui_toggle_pending_ ? !ui_hidden_ : ui_hidden_;
+        ui_target_left_collapsed_ = panel_layout_.isLeftDockCollapsed() != side_dock_toggle_pending_.test(std::to_underlying(lfs::core::SideDock::Left));
+        ui_target_right_collapsed_ = panel_layout_.isRightDockCollapsed() != side_dock_toggle_pending_.test(std::to_underlying(lfs::core::SideDock::Right));
         ui_toggle_pending_ = false;
+        side_dock_toggle_pending_.reset();
         // UI visibility only resizes renderer output. Each renderer already
         // retires its image consumers before replacing that output, so do not
         // drain all GUI frames or inherit fullscreen's training/cooldown guard.
         ui_visibility_deadline_ = now + kInteractiveTransitionGuardDuration;
-        ui_visibility_target_hidden_ = !ui_hidden_;
         ui_visibility_target_ready_ = false;
         if (auto* const rendering = viewer_->getRenderingManager()) {
             // Hiding the editor chrome changes the viewport extent without an SDL
@@ -5671,9 +5748,15 @@ namespace lfs::vis::gui {
                 ScreenState transition_screen;
                 transition_screen.work_pos = last_ui_layout_work_pos_;
                 transition_screen.work_size = last_ui_layout_work_size_;
-                panel_layout_.enforceWidthConstraints(
+                auto target_layout = panel_layout_;
+                target_layout.setSideDockCollapsed(lfs::core::SideDock::Left, ui_target_left_collapsed_);
+                target_layout.setSideDockCollapsed(lfs::core::SideDock::Right, ui_target_right_collapsed_);
+                target_layout.enforceWidthConstraints(
                     show_main_panel_, ui_visibility_target_hidden_, transition_screen);
-                ui_visibility_target_layout_ = panel_layout_.computeViewportLayout(
+                ui_visibility_target_console_width_ = show_main_panel_ && !ui_visibility_target_hidden_ && window_states_["python_console"]
+                                                          ? target_layout.resolvePythonConsoleWidth(transition_screen)
+                                                          : target_layout.getPythonConsoleWidth();
+                ui_visibility_target_layout_ = target_layout.computeViewportLayout(
                     show_main_panel_, ui_visibility_target_hidden_, window_states_["python_console"],
                     transition_screen);
                 ui_visibility_target_ready_ =
@@ -5690,6 +5773,8 @@ namespace lfs::vis::gui {
         if (!ui_visibility_target_ready_) {
             // Startup/no-layout fallback: there is no prior scene rectangle to
             // preserve, so commit directly and let the normal layout pass resolve it.
+            panel_layout_.setSideDockCollapsed(lfs::core::SideDock::Left, ui_target_left_collapsed_);
+            panel_layout_.setSideDockCollapsed(lfs::core::SideDock::Right, ui_target_right_collapsed_);
             ui_hidden_ = ui_visibility_target_hidden_;
             ui_visibility_layout_committed_ = true;
             viewer_->projectMarkSessionChapterCommitted("GUIL");
@@ -6357,6 +6442,7 @@ namespace lfs::vis::gui {
 
         constexpr uint8_t kUiLayoutSettleFrames = 3;
         const bool python_console_visible = window_states_["python_console"];
+        const bool left_dock_rendered = panel_layout_.willRenderLeftDock(show_main_panel_, ui_hidden_, screen);
         const bool ui_layout_changed =
             std::abs(screen.work_pos.x - last_ui_layout_work_pos_.x) > 0.5f ||
             std::abs(screen.work_pos.y - last_ui_layout_work_pos_.y) > 0.5f ||
@@ -6367,12 +6453,14 @@ namespace lfs::vis::gui {
             std::abs(panel_layout_.getPythonConsoleWidth() - last_ui_layout_python_console_w_) > 0.5f ||
             std::abs(panel_layout_.getBottomDockHeight() - last_ui_layout_bottom_dock_h_) > 0.5f ||
             std::abs(panel_layout_.getLeftDockWidth() - last_ui_layout_left_dock_w_) > 0.5f ||
+            panel_layout_.isLeftDockCollapsed() != last_ui_layout_left_collapsed_ ||
+            rightDockRendered() != last_ui_layout_right_rendered_ ||
             show_main_panel_ != last_ui_layout_show_main_panel_ ||
             panel_layout_.isShowSequencer() != last_ui_layout_show_sequencer_ ||
             ui_hidden_ != last_ui_layout_ui_hidden_ ||
             python_console_visible != last_ui_layout_python_console_visible_ ||
             panel_layout_.isBottomDockVisible() != last_ui_layout_bottom_dock_visible_ ||
-            panel_layout_.isLeftDockVisible() != last_ui_layout_left_dock_visible_ ||
+            left_dock_rendered != last_ui_layout_left_dock_rendered_ ||
             panel_layout_.getActiveTab() != last_ui_layout_active_tab_ ||
             panel_layout_.getBottomDockActiveTab() != last_ui_layout_bottom_dock_active_tab_ ||
             reg.visibility_revision() != last_ui_layout_panel_visibility_revision_;
@@ -6391,6 +6479,13 @@ namespace lfs::vis::gui {
 
         if (ui_layout_changed) {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.layout_state_update", 0.25);
+            if (last_ui_layout_right_rendered_ && !rightDockRendered()) {
+                rml_right_panel_.suspendInput();
+                reg.suspend_input(PanelSpace::SceneHeader);
+                reg.suspend_input(PanelSpace::MainPanelTab);
+            }
+            if (last_ui_layout_left_dock_rendered_ && !left_dock_rendered)
+                reg.suspend_input(PanelSpace::LeftDock);
             ui_layout_settle_frames_ = kUiLayoutSettleFrames;
             if (ui_visibility_resize_active_ &&
                 ui_hidden_ != last_ui_layout_ui_hidden_) {
@@ -6405,12 +6500,14 @@ namespace lfs::vis::gui {
             last_ui_layout_python_console_w_ = panel_layout_.getPythonConsoleWidth();
             last_ui_layout_bottom_dock_h_ = panel_layout_.getBottomDockHeight();
             last_ui_layout_left_dock_w_ = panel_layout_.getLeftDockWidth();
+            last_ui_layout_left_collapsed_ = panel_layout_.isLeftDockCollapsed();
+            last_ui_layout_right_rendered_ = rightDockRendered();
             last_ui_layout_show_main_panel_ = show_main_panel_;
             last_ui_layout_show_sequencer_ = panel_layout_.isShowSequencer();
             last_ui_layout_ui_hidden_ = ui_hidden_;
             last_ui_layout_python_console_visible_ = python_console_visible;
             last_ui_layout_bottom_dock_visible_ = panel_layout_.isBottomDockVisible();
-            last_ui_layout_left_dock_visible_ = panel_layout_.isLeftDockVisible();
+            last_ui_layout_left_dock_rendered_ = left_dock_rendered;
             last_ui_layout_active_tab_ = panel_layout_.getActiveTab();
             last_ui_layout_bottom_dock_active_tab_ = panel_layout_.getBottomDockActiveTab();
             last_ui_layout_panel_visibility_revision_ = reg.visibility_revision();
@@ -6430,7 +6527,7 @@ namespace lfs::vis::gui {
         bool right_panel_active_tab_live = false;
         bool right_panel_pointer_over_scene_header = false;
         bool right_panel_pointer_over_active_tab = false;
-        if (show_main_panel_ && !ui_hidden_) {
+        if (rightDockRendered()) {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.rml_right_panel", 0.25);
             const float rpw = panel_layout_.getRightPanelWidth();
             const float ph = screen.work_size.y;
@@ -6866,6 +6963,12 @@ namespace lfs::vis::gui {
             overlay_pos, overlay_size,
             {panel_input.screen_x, panel_input.screen_y});
         rml_viewport_overlay_.setViewportContentOffset(viewport_content_offset);
+        // Reopen controls remain available while a dock is collapsed.
+        const bool dock_controls_available = show_main_panel_ && !ui_hidden_;
+        rml_viewport_overlay_.setSideDocks(
+            dock_controls_available && reg.has_panels(PanelSpace::LeftDock),
+            panel_layout_.isLeftDockCollapsed(), dock_controls_available,
+            panel_layout_.isRightDockCollapsed());
         RmlViewportOverlay::SplitDividerOverlayState split_divider_state;
         if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr;
             rendering && rendering->isSplitViewActive() && !rendering->isIndependentSplitViewActive()) {
@@ -8034,6 +8137,9 @@ namespace lfs::vis::gui {
     }
 
     void GuiManager::commitUiVisibilityTransition(const bool matched_frame) {
+        panel_layout_.setPythonConsoleWidth(ui_visibility_target_console_width_);
+        panel_layout_.setSideDockCollapsed(lfs::core::SideDock::Left, ui_target_left_collapsed_);
+        panel_layout_.setSideDockCollapsed(lfs::core::SideDock::Right, ui_target_right_collapsed_);
         ui_hidden_ = ui_visibility_target_hidden_;
         if (viewer_) {
             viewer_->projectMarkSessionChapterCommitted("GUIL");
@@ -8065,8 +8171,12 @@ namespace lfs::vis::gui {
         return PanelRegistry::instance().isPositionOverFloatingPanel(x, y);
     }
 
+    bool GuiManager::rightDockRendered() const {
+        return show_main_panel_ && !ui_hidden_ && !panel_layout_.isRightDockCollapsed();
+    }
+
     bool GuiManager::isPositionOverRightPanelResizeEdge(const double x, const double y) const {
-        if (!show_main_panel_ || ui_hidden_ ||
+        if (!rightDockRendered() ||
             last_ui_layout_work_size_.x <= 0.0f || last_ui_layout_work_size_.y <= 0.0f) {
             return false;
         }
@@ -8252,8 +8362,16 @@ namespace lfs::vis::gui {
         });
 
         ui::FocusTrainingPanel::when([this](const auto&) {
-            focus_panel_name_ = TRAINING_PANEL_ID;
+            revealPanel(TRAINING_PANEL_ID);
             lfs::python::request_redraw();
+        });
+
+        ui::RevealPanel::when([this](const auto& event) {
+            revealPanel(event.id);
+        });
+
+        ui::ToggleSideDock::when([this](const auto& event) {
+            queueSideDockToggle(event.side);
         });
 
         ui::ToggleUI::when([this](const auto&) {
@@ -8677,7 +8795,7 @@ namespace lfs::vis::gui {
             return;
         last_pre_scene_panel_sync_generation_ = sync_generation;
 
-        if (!viewer_ || !show_main_panel_ || ui_hidden_) {
+        if (!viewer_ || !rightDockRendered()) {
             return;
         }
 
@@ -8794,7 +8912,7 @@ namespace lfs::vis::gui {
                 rendering->markDirty(DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
             return true;
         }
-        const bool ui_toggle_due = ui_toggle_pending_ || ui_visibility_resize_active_;
+        const bool ui_toggle_due = ui_toggle_pending_ || side_dock_toggle_pending_.any() || ui_visibility_resize_active_;
         const bool fullscreen_toggle_due =
             fullscreen_toggle_pending_ && now >= fullscreen_toggle_next_allowed_at_;
         if (ui_toggle_due || fullscreen_toggle_due || interactive_transition_resume_training_ ||
@@ -8823,7 +8941,7 @@ namespace lfs::vis::gui {
             return true;
         if (rml_menu_bar_.needsAnimationFrame())
             return true;
-        if (rml_right_panel_.needsAnimationFrame())
+        if (rightDockRendered() && rml_right_panel_.needsAnimationFrame())
             return true;
         if (rml_bottom_dock_.needsAnimationFrame())
             return true;
@@ -8854,7 +8972,7 @@ namespace lfs::vis::gui {
             result += source;
         };
 
-        add(ui_toggle_pending_ || ui_visibility_resize_active_, "ui_visibility");
+        add(ui_toggle_pending_ || side_dock_toggle_pending_.any() || ui_visibility_resize_active_, "ui_visibility");
         add(cameraThumbnailRefreshDue(now), "camera_thumbnails");
         add(fullscreen_toggle_pending_ && now >= fullscreen_toggle_next_allowed_at_,
             "fullscreen_toggle");
@@ -8916,7 +9034,7 @@ namespace lfs::vis::gui {
         return {
             .active_main_tab = panel_layout_.getActiveTab(),
             .ui_visible = !ui_hidden_,
-            .right_panel_visible = show_main_panel_ && !ui_hidden_,
+            .right_panel_visible = rightDockRendered(),
             .bottom_dock_visible = panel_layout_.isBottomDockVisible(),
             .left_dock_visible = panel_layout_.isLeftDockVisible(),
         };

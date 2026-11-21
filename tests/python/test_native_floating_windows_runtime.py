@@ -51,7 +51,7 @@ class NativeWindowsClient:
         self.user32.SetForegroundWindow.argtypes = [wintypes.HWND]
         self.user32.GetForegroundWindow.restype = wintypes.HWND
         self.original_cursor = wintypes.POINT()
-        assert self.user32.GetCursorPos(ctypes.byref(self.original_cursor))
+        self.have_original_cursor = bool(self.user32.GetCursorPos(ctypes.byref(self.original_cursor)))
         self.rpc("initialize", {"protocolVersion": "2024-11-05", "capabilities": {},
                                 "clientInfo": {"name": "native-window-tests", "version": "1"}})
         for uri in ("lichtfeld://runtime/catalog", "lichtfeld://runtime/state", "lichtfeld://ui/state",
@@ -79,14 +79,17 @@ class NativeWindowsClient:
         return result["result"]
 
     def call(self, name, **arguments):
-        if name == "ui_pointer" and name not in self.tools:
-            self._used_native_pointer = True
+        if name == "ui_pointer" and (name not in self.tools or "window_handle" in arguments):
+            assert self.have_original_cursor, "Physical pointer tests need an accessible desktop; no mouse input was sent"
             assert arguments.get("button", "left") == "left"
             # Master has no synthetic-pointer MCP tool. Use real mouse input:
             # posted messages do not update the physical held-button state used
-            # by drag handoff. Coordinates target this isolated app's main HWND.
+            # by drag handoff. Native controls use the same guarded input path;
+            # only HWNDs enumerated for this isolated process can be targeted.
+            target_handle = arguments.get("window_handle")
             main = next(window for window in self.windows()
-                        if window["title"].startswith("LichtFeld Studio"))
+                        if (window["hwnd"] == target_handle if target_handle is not None
+                            else window["title"].startswith("LichtFeld Studio")))
             point = wintypes.POINT(int(arguments["x"]), int(arguments["y"]))
             assert self.user32.ClientToScreen(main["hwnd"], ctypes.byref(point))
             action = arguments["action"]
@@ -100,6 +103,10 @@ class NativeWindowsClient:
                 _fields_ = [("type", wintypes.DWORD), ("value", InputValue)]
             self.user32.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(Input), ctypes.c_int]
             if action == "down":
+                client_rect = wintypes.RECT()
+                assert self.user32.GetClientRect(main["hwnd"], ctypes.byref(client_rect))
+                assert 0 <= int(arguments["x"]) < client_rect.right and 0 <= int(arguments["y"]) < client_rect.bottom, \
+                    "refusing a press outside the selected window; wait for resized layout coordinates"
                 foreground = self.user32.GetForegroundWindow()
                 assert foreground, "Master pointer tests require an unlocked interactive Windows desktop"
                 foreground_pid = wintypes.DWORD()
@@ -120,13 +127,14 @@ class NativeWindowsClient:
                                 "Master pointer tests require an unlocked Windows session; no mouse input was sent"
                     finally:
                         kernel.CloseHandle(process)
+                self._used_native_pointer = True
                 self.user32.SetForegroundWindow(main["hwnd"])
                 time.sleep(.1)
                 if self.user32.GetForegroundWindow() != main["hwnd"]:
                     # Windows can deny a background process's activation request.
-                    # Activate with a normal click in the main window's empty corner
-                    # before issuing the title press used by the drag assertion.
-                    corner = wintypes.POINT(4, 4)
+                    # Use the title's left inset for borderless panel windows;
+                    # their rounded top-left corner is intentionally transparent.
+                    corner = wintypes.POINT(8, 16) if target_handle is not None else wintypes.POINT(4, 4)
                     assert self.user32.ClientToScreen(main["hwnd"], ctypes.byref(corner))
                     assert self.user32.SetCursorPos(corner.x, corner.y)
                     activation = (Input * 2)(Input(0, InputValue(mouse=MouseInput(flags=2))),
@@ -134,6 +142,8 @@ class NativeWindowsClient:
                     assert self.user32.SendInput(2, activation, ctypes.sizeof(Input)) == 2
                     self.until(lambda: self.user32.GetForegroundWindow() == main["hwnd"])
                     time.sleep(.1)
+            point = wintypes.POINT(int(arguments["x"]), int(arguments["y"]))
+            assert self.user32.ClientToScreen(main["hwnd"], ctypes.byref(point))
             assert self.user32.SetCursorPos(point.x, point.y)
             if action == "down":
                 flags = 0x0002  # MOUSEEVENTF_LEFTDOWN
@@ -483,3 +493,84 @@ def test_reset_discards_closed_external_panel_reopen_position(native_client, pan
     native_client.until(lambda: native_client.call("ui_panel_describe", panel_id=panel_id)["panel"].get("floating_bounds"))
     time.sleep(.2)
     assert not any(window["title"] == native["title"] for window in native_client.windows())
+
+
+@pytest.mark.parametrize("panel_id", ["lfs.preferences", "lfs.plugin_marketplace", "native.video_extractor"])
+def test_native_window_actions_minimize_maximize_and_restore(native_client, panel_id):
+    window = native_client.open(panel_id)
+    hwnd = window["hwnd"]
+    native_client.user32.IsIconic.argtypes = [wintypes.HWND]
+    native_client.user32.IsZoomed.argtypes = [wintypes.HWND]
+
+    def rendered_size():
+        try:
+            capture = native_client.call("render_capture_window", panel_id=panel_id)
+        except AssertionError as error:
+            # Resize may temporarily invalidate the native render target.
+            # Keep polling readiness; a persistent failure still times out.
+            if "FailedPrecondition" not in str(error):
+                raise
+            return (0, 0)
+        assert capture["success"]
+        png = base64.b64decode(capture["data"])
+        return struct.unpack_from(">II", png, 16)
+
+    def click(identifier):
+        client_width, _ = native_client.until(lambda: (size := rendered_size()) and size[0] > 0 and size)
+        if panel_id == "native.video_extractor":
+            # C++ panels do not register a Python Rml document. Probe their shared
+            # title controls in client coordinates, then verify the native hit test.
+            preference = native_client.python("import lichtfeld as lf,json\nprint('NATIVE_WINDOWS_TEST:'+json.dumps(lf.ui.get_ui_scale_preference()))")
+            native_client.user32.GetDpiForWindow.argtypes = [wintypes.HWND]
+            scale = preference if preference > 0 else native_client.user32.GetDpiForWindow(hwnd) / 96
+            x = client_width - (82 if identifier == "minimize-btn" else 52) * scale
+            y, width, height = 16 * scale, 0, 0
+        else:
+            x, y, width, height = native_client.panel_elements(panel_id, [identifier])[identifier]
+            assert width > 0 and height > 0
+        # The control belongs to the client area, not the native drag region.
+        point = wintypes.POINT(int(x + width / 2), int(y + height / 2))
+        assert native_client.user32.ClientToScreen(hwnd, ctypes.byref(point))
+        hit_point = ((point.y & 0xffff) << 16) | (point.x & 0xffff)
+        assert native_client.user32.SendMessageW(hwnd, 0x0084, 0, hit_point) == 1
+        for action in ("move", "down", "up"):
+            native_client.call("ui_pointer", action=action, button="left", window_handle=hwnd,
+                               x=int(x + width / 2), y=int(y + height / 2))
+            time.sleep(.05)
+
+    assert native_client.user32.SetWindowPos(hwnd, 0, 40, 50, 760, 540, 0x0014)
+    native_client.until(lambda: abs(rendered_size()[0] - 760) <= 2)
+    click("maximize-btn")
+    native_client.until(lambda: native_client.user32.IsZoomed(hwnd))
+    assert_rendered_capture(native_client, panel_id)
+    capture_name = "preferences-rendered.png" if panel_id == "lfs.preferences" else f"capture-{panel_id}.png"
+    (native_client.profile.parent / capture_name).replace(native_client.profile.parent / f"maximized-{panel_id}.png")
+    click("maximize-btn")
+    native_client.until(lambda: not native_client.user32.IsZoomed(hwnd))
+    rect = wintypes.RECT()
+    assert native_client.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    assert abs(rect.right - rect.left - 760) <= 2
+    assert abs(rect.bottom - rect.top - 540) <= 2
+    click("minimize-btn")
+    native_client.until(lambda: native_client.user32.IsIconic(hwnd))
+    assert native_client.call("ui_panel_describe", panel_id=panel_id)["panel"]["enabled"]
+    time.sleep(.35)
+    native_client.call("runtime_frame_ledger", reset=True)
+    time.sleep(.8)
+    ledger = native_client.call("runtime_frame_ledger")["frames"]
+    assert ledger["presents_by_reason"]["GuiAnimation"] == 0, ledger
+    assert ledger["views_rendered"] == 0, ledger
+
+    def normal_geometry_saved():
+        try:
+            preferences = json.loads((native_client.profile / "config/preferences.json").read_text(encoding="utf-8"))
+            return preferences.get("floating_window_geometry", {}).get("video_extractor" if panel_id == "native.video_extractor" else panel_id, [])[2:] == [760, 540]
+        except (OSError, json.JSONDecodeError):
+            return False
+
+    native_client.until(normal_geometry_saved)
+    native_client.call("ui_panel_update", panel_id=panel_id, enabled=True)
+    native_client.until(lambda: not native_client.user32.IsIconic(hwnd))
+    assert native_client.user32.IsWindow(hwnd)
+    native_client.call("ui_panel_update", panel_id=panel_id, enabled=False)
+    native_client.until(lambda: not native_client.user32.IsWindow(hwnd))

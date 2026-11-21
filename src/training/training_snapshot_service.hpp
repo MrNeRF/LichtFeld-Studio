@@ -34,6 +34,7 @@ namespace lfs::training {
     class PPISPControllerPool;
     class POPSpaController;
     class AdamOptimizer;
+    class CalibrationCorrection;
 
     struct TrainingSnapshotServiceConfig {
         std::size_t ring_slots = 4;
@@ -180,6 +181,7 @@ namespace lfs::training {
         const PPISPControllerPool* ppisp_controller_pool = nullptr;
         const POPSpaController* popspa_controller = nullptr;
         const AdamOptimizer* popspa_optimizer = nullptr;
+        const CalibrationCorrection* calibration_correction = nullptr;
         std::span<const cudaStream_t> mutating_streams;
         // Runs inside the measured safe-point clock after all mutation streams
         // are quiescent. The callback may only copy detached value state and

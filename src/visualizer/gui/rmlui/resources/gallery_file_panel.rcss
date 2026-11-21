@@ -17,9 +17,9 @@
 .gallery-phone-warning span { white-space: normal; }
 .gallery-cover-option input { flex-shrink: 0; margin: 0dp; }
 .gallery-cover-option span { flex: 1; }
-.gallery-choice-row { display: flex; align-items: center; gap: 16dp; padding: 8dp 0dp; border-bottom-width: 1dp; border-bottom-color: #45475a; min-height: 40dp; }
+.gallery-choice-row { display: flex; align-items: center; gap: 16dp; padding: 8dp 0dp; border-bottom-width: 1dp;  min-height: 40dp; }
 .gallery-choice-description { display: flex; flex-direction: column; gap: 4dp; flex: 1; min-width: 0dp; }
 .gallery-choice-difference { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gallery-segmented { display: flex; flex-shrink: 0; gap: 0dp; }
-.gallery-segmented .btn { border-radius: 0dp; }
+.gallery-segmented .btn {  }
 .gallery-segmented .is-active { background-color: #89b4fa; color: #1e1e2e; }

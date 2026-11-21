@@ -15,6 +15,7 @@
 #include "app/view_info_json.hpp"
 
 #include "core/cuda/sh_layout.cuh"
+#include "core/error.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
@@ -2472,8 +2473,8 @@ namespace lfs::app {
         registry.register_tool(
             McpTool{
                 .name = "camera_selection.start",
-                .description = "Start a cancellable camera-group training selection job",
-                .input_schema = {.type = "object", .properties = json{{"operation", {{"type", "string"}, {"enum", json::array({"enable_all", "disable_all", "invert", "random", "every_n", "distinct", "cropbox_visibility"})}}}, {"camera_group", {{"type", "string"}}}, {"percentage", {{"type", "number"}, {"minimum", 0}, {"maximum", 100}}}, {"every_n", {{"type", "integer"}, {"minimum", 1}}}, {"overlap", {{"type", "number"}, {"minimum", 0}, {"maximum", 100}}}, {"coverage", {{"type", "number"}, {"minimum", 0}, {"maximum", 100}}}, {"cropbox", {{"type", "string"}}}}, .required = {"operation", "camera_group"}},
+                .description = "Start a cancellable camera-group selection job. Blurry visually selects enabled cameras below the sharpness threshold; it does not change training flags.",
+                .input_schema = {.type = "object", .properties = json{{"operation", {{"type", "string"}, {"enum", json::array({"enable_all", "disable_all", "invert", "random", "every_n", "distinct", "cropbox_visibility", "blurry"})}}}, {"camera_group", {{"type", "string"}}}, {"percentage", {{"type", "number"}, {"minimum", 0}, {"maximum", 100}}}, {"every_n", {{"type", "integer"}, {"minimum", 1}}}, {"overlap", {{"type", "number"}, {"minimum", 0}, {"maximum", 100}}}, {"coverage", {{"type", "number"}, {"minimum", 0}, {"maximum", 100}}}, {"cropbox", {{"type", "string"}}}, {"sharpness_threshold", {{"type", "number"}, {"minimum", 0}, {"maximum", 100}}}}, .required = {"operation", "camera_group"}},
                 .metadata = {.category = "scene", .kind = "mutation", .runtime = "gui", .thread_affinity = "gui_thread", .long_running = true, .user_visible = true}},
             [viewer_impl](const json& args) -> json {
                 return post_and_wait(viewer_impl, [viewer_impl, args]() -> json {
@@ -2490,10 +2491,11 @@ namespace lfs::app {
                                       : operation == "random"             ? Selection::CameraSelectionOperation::Random
                                       : operation == "every_n"            ? Selection::CameraSelectionOperation::EveryN
                                       : operation == "distinct"           ? Selection::CameraSelectionOperation::Distinct
+                                      : operation == "blurry"             ? Selection::CameraSelectionOperation::Blurry
                                       : operation == "cropbox_visibility" ? Selection::CameraSelectionOperation::CropBoxVisibility
                                                                           : Selection::CameraSelectionOperation::Random;
                     if (operation != "enable_all" && operation != "disable_all" && operation != "invert" &&
-                        operation != "random" && operation != "every_n" && operation != "distinct" && operation != "cropbox_visibility")
+                        operation != "random" && operation != "every_n" && operation != "distinct" && operation != "cropbox_visibility" && operation != "blurry")
                         return mcp::invalid_argument_result("Unsupported camera selection operation", "operation");
                     const auto group_id = scene.getNodeIdByName(args.value("camera_group", ""));
                     const auto* group = scene.getNodeById(group_id);
@@ -2511,11 +2513,33 @@ namespace lfs::app {
                                                                                 .every_n = args.value("every_n", 2),
                                                                                 .overlap = args.value("overlap", 65.0F),
                                                                                 .coverage = args.value("coverage", 40.0F),
+                                                                                .sharpness_threshold = args.value("sharpness_threshold", 10.0),
                                                                                 .camera_group_id = group_id,
                                                                                 .cropbox_id = cropbox_id});
                     if (!handle)
                         return json{{"error", std::string(handle.error().user_message())}};
                     return json{{"job_id", "camera.selection"}, {"handle", handle->id}, {"operation", operation}};
+                });
+            });
+        registry.register_tool(
+            McpTool{
+                .name = "camera_group.remove_disabled",
+                .description = "Remove disabled direct cameras from a camera group in one undoable operation",
+                .input_schema = {.type = "object", .properties = json{{"camera_group", {{"type", "string"}}}}, .required = {"camera_group"}},
+                .metadata = {.category = "scene", .kind = "mutation", .runtime = "gui", .thread_affinity = "gui_thread", .destructive = true, .user_visible = true}},
+            [viewer_impl](const json& args) -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+                    const auto group_id = scene_manager->getScene().getNodeIdByName(args.at("camera_group").get<std::string>());
+                    const auto* const group = scene_manager->getScene().getNodeById(group_id);
+                    if (!group || group->type != core::NodeType::CAMERA_GROUP)
+                        return mcp::invalid_argument_result(LOC("scene.camera_selection_group_required"), "camera_group");
+                    const auto removal = scene_manager->removeDisabledCamerasWithResult(group_id);
+                    if (!removal)
+                        return json{{"error", lfs::format_for_developer(removal.error())}};
+                    return json{{"removed", *removal}};
                 });
             });
         registry.register_tool(

@@ -37,6 +37,7 @@ namespace lfs::vis::gui {
         bool is_label = false;
         bool is_submenu_item = false;
         bool is_active = false;
+        bool is_disabled = false;
         std::string icon = {};
     };
 

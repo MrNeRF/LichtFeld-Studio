@@ -7,6 +7,7 @@
 #include "core/image_io.hpp"
 #include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
+#include "core/utc_time.hpp"
 #include "io/cache_image_loader.hpp"
 #include "io/embedded_dataset.hpp"
 #include "io/formats/transforms.hpp"
@@ -23,6 +24,7 @@
 #include "training/checkpoint.hpp"
 #include "training/project_snapshot_chapters.hpp"
 #include "training/strategies/mcmc.hpp"
+#include "training/training_setup.hpp"
 #include "user_shader_sources.hpp"
 #include "visualizer/core/parameter_manager.hpp"
 
@@ -68,6 +70,18 @@
 #endif
 
 namespace {
+    TEST(ProjectDocumentTime, FileClockConversionPreservesUnixEpochAndSubseconds) {
+        for (const auto seconds : {-1LL, 0LL, 1'700'000'000LL}) {
+            const auto expected = std::chrono::sys_seconds{std::chrono::seconds{seconds}} +
+                                  std::chrono::microseconds{123456};
+#if defined(_MSC_VER)
+            const auto file_time = std::chrono::clock_cast<std::filesystem::file_time_type::clock>(expected);
+#else
+            const auto file_time = std::filesystem::file_time_type::clock::from_sys(expected);
+#endif
+            EXPECT_EQ(lfs::core::file_time_to_system_clock(file_time), expected);
+        }
+    }
 
     namespace fs = std::filesystem;
     using lfs::core::DataType;
@@ -5981,6 +5995,72 @@ namespace {
         }
     }
 
+    TEST(ProjectDocumentTest, FirstSaveAsKeepsAdjacentDatasetPortable) {
+        TemporaryDirectory temporary;
+        const auto original = temporary.path / "original";
+        const auto moved = temporary.path / "moved";
+        const auto destination = original / "scene.licht";
+
+        for (const bool adjacent : {true, false}) {
+            SCOPED_TRACE(adjacent);
+            const auto dataset = adjacent ? original / "images" : temporary.path / "external";
+            fs::create_directories(original);
+            fs::create_directories(dataset);
+            std::ofstream(dataset / "frame.txt") << "dataset";
+
+            auto document = make_empty_document(fixed_uuid(19'156), 100);
+            const auto uuid = require_result(upsert_path_reference(
+                document->edit_references(), {}, dataset, "dataset", "dataset"));
+            require_status(document->edit_project().set_dataset_reference(uuid));
+            auto element = document->edit_references().dom().array_find("references", uuid.to_string());
+            ASSERT_TRUE(element);
+            require_status(element->set("locator.future_path_flag", true));
+            require_status(element->set("fingerprint.future_hash", "retained"));
+            const auto original_reference = document->references().dom().array_get("references", uuid.to_string());
+            ASSERT_TRUE(original_reference);
+
+            if (adjacent) {
+                auto fail_options = save_options(19'157, 200);
+                bool reached_chunks = false;
+                fail_options.boundary_observer = [&](CommitBoundary boundary) {
+                    if (boundary == CommitBoundary::ChunksWritten) {
+                        reached_chunks = true;
+                        throw std::runtime_error("Injected save failure before publication");
+                    }
+                };
+                EXPECT_FALSE(document->save_as(destination, fail_options));
+                ASSERT_TRUE(reached_chunks);
+                EXPECT_FALSE(document->source_path());
+                EXPECT_FALSE(fs::exists(destination));
+                EXPECT_EQ(document->references().dom().array_get("references", uuid.to_string()), original_reference);
+            }
+
+            ASSERT_TRUE(document->save_as(destination, save_options(19'158, 300)));
+            const auto saved = require_result(document->references().find(uuid));
+            ASSERT_TRUE(saved);
+            EXPECT_EQ(saved->locator.base, adjacent ? LocatorBase::Project : LocatorBase::Absolute);
+            EXPECT_EQ(saved->locator.absolute_fallback, lfs::core::path_to_utf8(dataset));
+            document.reset();
+
+            const auto relocated = moved / (adjacent ? "adjacent" : "outside");
+            fs::create_directories(moved);
+            fs::rename(original, relocated);
+            auto reopened = require_result_ptr(ProjectDocument::open(relocated / destination.filename()));
+            const auto persisted = reopened->references().dom().array_get("references", uuid.to_string());
+            ASSERT_TRUE(persisted);
+            auto expected = *original_reference;
+            if (adjacent) {
+                expected["locator"]["base"] = "project";
+                expected["locator"]["preferred"] = "images";
+            }
+            EXPECT_EQ(*persisted, expected);
+            const auto resolved = resolve_path_reference(reopened->references(), relocated, uuid);
+            ASSERT_TRUE(resolved);
+            EXPECT_EQ(*resolved, adjacent ? relocated / "images" : dataset);
+            EXPECT_TRUE(fs::is_regular_file(*resolved / "frame.txt"));
+        }
+    }
+
     TEST(ProjectDocumentTest, SaveAsPreservesUnicodeSourceAndDestinationPaths) {
         TemporaryDirectory temporary;
         const fs::path source =
@@ -7830,6 +7910,50 @@ namespace {
         adopt(relocated);
         EXPECT_EQ(params.optimization.bg_image_path, fs::path("cli-background.png"));
         EXPECT_EQ(params.optimization.ppisp_sidecar_path, fs::path("cli.ppisp"));
+    }
+
+    TEST(ProjectDocumentTest, HeadlessDatasetRunSkipsCamerasDisabledInTheProject) {
+        if (!cuda_device_available())
+            GTEST_SKIP() << "CUDA device unavailable";
+        TemporaryDirectory temporary;
+        const auto project_path = temporary.path / "training.licht";
+        const auto dataset = temporary.path / "dataset";
+        fs::create_directories(dataset / "images");
+        for (const auto* name : {"a.png", "b.png", "c.png"})
+            write_solid_png(dataset / "images" / name, 1, 1);
+        std::ofstream(dataset / "transforms.json") << R"({
+            "w":1,"h":1,"fl_x":1,"fl_y":1,"cx":0.5,"cy":0.5,"frames":[
+            {"file_path":"images/a.png","transform_matrix":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]},
+            {"file_path":"images/b.png","transform_matrix":[[1,0,0,1],[0,1,0,0],[0,0,1,0],[0,0,0,1]]},
+            {"file_path":"images/c.png","transform_matrix":[[1,0,0,2],[0,1,0,0],[0,0,1,0],[0,0,0,1]]}]})";
+
+        // The project as saved after loading the dataset and disabling one camera.
+        lfs::core::param::TrainingParameters loaded_params;
+        loaded_params.dataset.data_path = dataset;
+        loaded_params.dataset.images = "images";
+        Scene edited;
+        ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(loaded_params, edited));
+        edited.setCameraTrainingEnabled(std::string("b.png"), false);
+        edited.removeNode("PointCloud", false);
+        auto document = make_empty_document(fixed_uuid(2392), 100);
+        bind_dataset(*document, dataset);
+        document->edit_scene_graph() = require_result(capture_scene_graph(edited, ScenePayloadBindings{}));
+        (void)require_result(document->save(project_path, save_options(2393, 200)));
+
+        // `--data-path training.licht --headless` adopts the project, then loads its dataset.
+        auto reopened = require_result_ptr(ProjectDocument::open(project_path));
+        lfs::core::param::TrainingParameters params;
+        params.dataset_project = project_path;
+        params.optimization.headless = true;
+        adopt_project_training_parameters(params, require_result(reopened->parameters().snapshot()), dataset,
+                                          "images", reopened->references(), temporary.path);
+        params.disabled_camera_uids = require_result(disabled_camera_uids(reopened->scene_graph()));
+        Scene scene;
+        ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+
+        const auto active = scene.getActiveCameras();
+        EXPECT_EQ(active.size(), 2u);
+        EXPECT_TRUE(std::ranges::none_of(active, [](const auto& camera) { return camera->image_name() == "b.png"; }));
     }
 
     TEST(ProjectDocumentTest, EmbeddedDatasetRoundTripAndCompaction) {

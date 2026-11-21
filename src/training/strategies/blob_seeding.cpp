@@ -8,6 +8,7 @@
 #include "nanoflann.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cassert>
 #include <cmath>
@@ -69,6 +70,46 @@ namespace lfs::training {
             return values[k];
         }
     } // namespace
+
+    std::vector<int> select_sweep_neighbors(const std::span<const bs::SweepView> views,
+                                            const std::span<const uint64_t> visible, const size_t words,
+                                            const int count) {
+        const size_t view_count = views.size();
+        std::vector<std::array<float, 3>> centres(view_count);
+        for (size_t i = 0; i < view_count; ++i)
+            for (int a = 0; a < 3; ++a)
+                centres[i][a] = -(views[i].R[a] * views[i].t[0] + views[i].R[3 + a] * views[i].t[1] +
+                                  views[i].R[6 + a] * views[i].t[2]);
+        std::vector<int> neighbors(view_count * static_cast<size_t>(count), -1);
+        for (size_t i = 0; i < view_count; ++i) {
+            const float* axis_i = views[i].R + 6;
+            std::vector<std::pair<int, int>> shared;
+            for (size_t j = 0; j < view_count; ++j) {
+                const float* axis_j = views[j].R + 6;
+                if (j == i || axis_i[0] * axis_j[0] + axis_i[1] * axis_j[1] + axis_i[2] * axis_j[2] < 0.0f)
+                    continue;
+                // Views cut from one photograph share its centre: a point on a ray of one lands on the same pixel of
+                // the other at every depth and supports them all alike. A neighbour must move a point at the nearest
+                // swept depth by at least one of its pixels.
+                const float dx = centres[i][0] - centres[j][0];
+                const float dy = centres[i][1] - centres[j][1];
+                const float dz = centres[i][2] - centres[j][2];
+                if (std::sqrt(dx * dx + dy * dy + dz * dz) * std::max(views[j].fx, views[j].fy) < views[i].z_min)
+                    continue;
+                int overlap = 0;
+                for (size_t w = 0; w < words; ++w)
+                    overlap += std::popcount(visible[i * words + w] & visible[j * words + w]);
+                if (overlap > 0)
+                    shared.emplace_back(overlap, static_cast<int>(j));
+            }
+            const size_t keep = std::min<size_t>(shared.size(), static_cast<size_t>(count));
+            std::partial_sort(shared.begin(), shared.begin() + static_cast<std::ptrdiff_t>(keep), shared.end(),
+                              [](const auto& a, const auto& b) { return a.first > b.first || (a.first == b.first && a.second < b.second); });
+            for (size_t k = 0; k < keep; ++k)
+                neighbors[i * count + k] = shared[k].second;
+        }
+        return neighbors;
+    }
 
     BlobSeeder::BlobSeeder(Tensor reference_points, const size_t max_detection_pixels)
         : _reference_points(reference_points.cpu().contiguous()),
@@ -166,26 +207,7 @@ namespace lfs::training {
         }
 
         const int neighbor_count = static_cast<int>(std::min<size_t>(NEIGHBOR_VIEWS, view_count - 1));
-        std::vector<int> neighbors(view_count * neighbor_count, -1);
-        for (size_t i = 0; i < view_count; ++i) {
-            const float* axis_i = geometry[i].R + 6;
-            std::vector<std::pair<int, int>> shared;
-            for (size_t j = 0; j < view_count; ++j) {
-                const float* axis_j = geometry[j].R + 6;
-                if (j == i || axis_i[0] * axis_j[0] + axis_i[1] * axis_j[1] + axis_i[2] * axis_j[2] < 0.0f)
-                    continue;
-                int overlap = 0;
-                for (size_t w = 0; w < words; ++w)
-                    overlap += std::popcount(visible[i * words + w] & visible[j * words + w]);
-                if (overlap > 0)
-                    shared.emplace_back(overlap, static_cast<int>(j));
-            }
-            const size_t keep = std::min<size_t>(shared.size(), neighbor_count);
-            std::partial_sort(shared.begin(), shared.begin() + static_cast<std::ptrdiff_t>(keep), shared.end(),
-                              [](const auto& a, const auto& b) { return a.first > b.first || (a.first == b.first && a.second < b.second); });
-            for (size_t k = 0; k < keep; ++k)
-                neighbors[i * neighbor_count + k] = shared[k].second;
-        }
+        const auto neighbors = select_sweep_neighbors(geometry, visible, words, neighbor_count);
 
         std::vector<Tensor> per_view_peaks;
         per_view_peaks.reserve(view_count);

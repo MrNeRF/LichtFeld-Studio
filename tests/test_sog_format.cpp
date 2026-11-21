@@ -14,6 +14,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -26,7 +27,7 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "core/uuid.hpp"
-#include "io/cuda/kmeans.hpp"
+#include "io/cuda/emeans.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/ply.hpp"
 #include "io/formats/sogs.hpp"
@@ -853,6 +854,101 @@ TEST_F(SogFormatTest, StreamedSh3AssignmentMatchesReferenceTiles) {
             EXPECT_TRUE(std::equal(reference.ptr<int>(), reference.ptr<int>() + n, actual.ptr<int>()));
             EXPECT_EQ(actual.ptr<int>()[0], 0);
         }
+    }
+}
+
+TEST_F(SogFormatTest, EMeansPaletteResolvesSeparatedModes) {
+    using namespace lfs::core;
+    using namespace lfs::io;
+    constexpr float sigma = 0.02f;
+    std::mt19937 rng(2611);
+    std::normal_distribution<float> noise(0.0f, sigma);
+    std::uniform_real_distribution<float> center(-1.0f, 1.0f);
+    struct Case {
+        int sh_coeffs;
+        size_t n;
+        int k;
+    };
+    // Exact candidate search, the inverted-file search (k >= 4096) and the n <= k shortcut
+    // across SH1-SH3; SH3 final labels come from the screened half-precision search.
+    for (const auto [sh_coeffs, n, k] : {Case{15, 20000, 256}, Case{8, 20000, 256}, Case{3, 60000, 4096},
+                                         Case{15, 60000, 4096}, Case{8, 100, 256}}) {
+        SCOPED_TRACE(std::format("sh_coeffs={} n={} k={}", sh_coeffs, n, k));
+        const size_t dims = static_cast<size_t>(sh_coeffs) * 3;
+        // Several centroids per well-separated mode: missing any mode costs far more than sigma^2.
+        const size_t modes = std::max<size_t>(1, static_cast<size_t>(k) / 16);
+        std::vector<float> centers(modes * dims);
+        for (auto& c : centers)
+            c = center(rng);
+        std::vector<float> host(n * dims);
+        auto points = Tensor::zeros({sh_swizzled_float_count(n, sh_coeffs)}, Device::CPU);
+        for (size_t i = 0; i < n; ++i) {
+            const size_t mode = (i * 2654435761u) % modes;
+            for (size_t d = 0; d < dims; ++d) {
+                host[i * dims + d] = centers[mode * dims + d] + noise(rng);
+                points.ptr<float>()[sh_swizzled_index(i, d / 4, sh_coeffs) * 4 + d % 4] = host[i * dims + d];
+            }
+        }
+        points = points.cuda();
+
+        const auto [centroids, labels] = emeans_sh_swizzled(points, int(n), sh_coeffs, k);
+        const size_t palette = std::min<size_t>(k, n);
+        ASSERT_EQ(centroids.shape()[0], palette);
+        ASSERT_EQ(centroids.shape()[1], dims);
+        ASSERT_EQ(labels.numel(), n);
+        const auto labels_cpu = labels.cpu();
+        const auto* label = labels_cpu.ptr<int>();
+        ASSERT_TRUE(std::all_of(label, label + n, [&](const int l) { return l >= 0 && size_t(l) < palette; }));
+
+        // The final refit makes every non-empty centroid the mean of its members.
+        std::vector<double> sums(palette * dims, 0.0);
+        std::vector<size_t> counts(palette, 0);
+        for (size_t i = 0; i < n; ++i) {
+            ++counts[label[i]];
+            for (size_t d = 0; d < dims; ++d)
+                sums[label[i] * dims + d] += host[i * dims + d];
+        }
+        const auto centroids_cpu = centroids.cpu();
+        for (size_t c = 0; c < palette; ++c)
+            for (size_t d = 0; counts[c] && d < dims; ++d)
+                ASSERT_NEAR(centroids_cpu.ptr<float>()[c * dims + d], sums[c * dims + d] / counts[c], 1e-4)
+                    << "centroid " << c << " dim " << d;
+
+        double squared_error = 0.0;
+        for (size_t i = 0; i < n; ++i)
+            for (size_t d = 0; d < dims; ++d) {
+                const double diff = host[i * dims + d] - centroids_cpu.ptr<float>()[label[i] * dims + d];
+                squared_error += diff * diff;
+            }
+        const double mse = squared_error / static_cast<double>(n * dims);
+        EXPECT_LE(mse, double(sigma) * sigma) << "e-means left a mode unresolved";
+
+        // Fixed seed and order-independent accumulation: a rerun is bit-identical.
+        const auto [centroids_again, labels_again] = emeans_sh_swizzled(points, int(n), sh_coeffs, k);
+        const auto centroids_again_cpu = centroids_again.cpu(), labels_again_cpu = labels_again.cpu();
+        EXPECT_EQ(std::memcmp(centroids_cpu.ptr<float>(), centroids_again_cpu.ptr<float>(), palette * dims * sizeof(float)), 0);
+        EXPECT_TRUE(std::equal(label, label + n, labels_again_cpu.ptr<int>()));
+    }
+}
+
+TEST_F(SogFormatTest, EMeansPaletteKeepsLargeCoefficients) {
+    using namespace lfs::core;
+    using namespace lfs::io;
+    constexpr int sh_coeffs = 3;
+    constexpr size_t n = 64, dims = 9;
+    for (const float scale : {4096.0f, 1.0e12f}) {
+        SCOPED_TRACE(scale);
+        auto points = Tensor::zeros({sh_swizzled_float_count(n, sh_coeffs)}, Device::CPU);
+        for (size_t i = 0; i < n; ++i)
+            for (size_t d = 0; d < dims; ++d)
+                points.ptr<float>()[sh_swizzled_index(i, d / 4, sh_coeffs) * 4 + d % 4] =
+                    (d % 2 ? -scale : scale) * (1.0f + static_cast<float>(i % 4) / 8.0f);
+        points = points.cuda();
+
+        const auto [centroids, labels] = emeans_sh_swizzled(points, int(n), sh_coeffs, 1);
+        const auto centroids_cpu = centroids.cpu();
+        for (size_t d = 0; d < dims; ++d)
+            EXPECT_FLOAT_EQ(centroids_cpu.ptr<float>()[d], (d % 2 ? -scale : scale) * 1.1875f) << "dim " << d;
     }
 }
 

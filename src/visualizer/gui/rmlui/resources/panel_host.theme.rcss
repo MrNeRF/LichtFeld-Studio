@@ -7,10 +7,16 @@ body {
 }
 
 body.native-panel #window-shadow-ambient,
-body.native-panel #window-shadow-key {
+body.native-panel #window-shadow-key,
+body.window-minimized #window-shadow-ambient,
+body.window-minimized #window-shadow-key,
+body.window-maximized #window-shadow-ambient,
+body.window-maximized #window-shadow-key {
     display: none;
 }
-body.native-panel {
+body.native-panel,
+body.window-minimized,
+body.window-maximized {
     left: 0;
     right: 0;
     top: 0;
@@ -19,4 +25,12 @@ body.native-panel {
     height: 100%;
     background-color: transparent;
     decorator: none;
+}
+
+button.window-control {
+    color: @{text_dim};
+    background-color: transparent;
+}
+button.window-control:hover {
+    background-color: @{menu.hover};
 }

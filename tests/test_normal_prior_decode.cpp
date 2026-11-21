@@ -6,6 +6,7 @@
 
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "io/pipelined_image_loader.hpp"
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <chrono>
@@ -208,10 +209,31 @@ TEST_P(PipelinedNormalDecode, PreservesSamplesTransformsAndCache) {
     request.normal_world_to_camera = rotation;
     request.aux_target_width = transform ? normal_width / 2 : normal_width;
     request.aux_target_height = transform ? normal_height / 2 : normal_height;
+    // A prior larger than its target is resized to it by the loader, which caches the result;
+    // one no larger travels at its own size and the loss enlarges it.
+    const bool own_size = !transform;
+    request.normal_own_size = own_size;
+    // What the loader delivers for a larger prior, and what its cache gives on later visits:
+    // (n+1)/2 rounded to 16 bits after the resize, decoded as n = 2v - 1 and, normals alone
+    // taking the unpaired path, renormalized by a same-size prior pass (zero below length 0.5).
     const auto reference = resize_normal_prior(Tensor::from_vector(expected, {3, normal_height, normal_width}, Device::CUDA),
                                                request.aux_target_height, request.aux_target_width)
                                .cpu()
                                .to_vector();
+    std::vector<float> old_cached(reference.size());
+    const size_t target_pixels = reference.size() / 3;
+    for (size_t i = 0; i < target_pixels; ++i) {
+        float n[3];
+        float norm2 = 0.0f;
+        for (size_t c = 0; c < 3; ++c) {
+            const float v = std::clamp(reference[c * target_pixels + i] * 0.5f + 0.5f, 0.0f, 1.0f);
+            n[c] = std::floor(v * 65535.0f + 0.5f) * (1.0f / 65535.0f) * 2.0f - 1.0f;
+            norm2 += n[c] * n[c];
+        }
+        for (size_t c = 0; c < 3; ++c)
+            old_cached[c * target_pixels + i] = norm2 >= 0.25f ? n[c] / std::sqrt(norm2) : 0.0f;
+    }
+    std::vector<float> first_visit;
     for (int pass = 0; pass < 2; ++pass) {
         SCOPED_TRACE(pass);
         loader.prefetch({request});
@@ -223,10 +245,40 @@ TEST_P(PipelinedNormalDecode, PreservesSamplesTransformsAndCache) {
             ASSERT_EQ(cudaEventDestroy(ready->normal_ready_event), cudaSuccess);
             ready->normal_ready_event = nullptr;
         }
-        const auto values = ready->normal->cpu().to_vector();
+        EXPECT_EQ(ready->normal_own_size, own_size);
+        if (!own_size) {
+            ASSERT_EQ(ready->normal->shape(), (TensorShape({3, size_t(request.aux_target_height),
+                                                            size_t(request.aux_target_width)})));
+            const auto values = ready->normal->cpu().to_vector();
+            const auto& visit_reference = pass == 0 ? reference : old_cached;
+            for (size_t i = 0; i < values.size(); ++i)
+                ASSERT_NEAR(values[i], visit_reference[i], 2e-6f) << "sample " << i;
+            std::filesystem::remove(normal_path);
+            ++request.sequence_id;
+            continue;
+        }
+        // The normals arrive transformed at their own size, with the size to enlarge them to.
+        ASSERT_EQ(ready->normal->shape(), (TensorShape({3, normal_height, normal_width})));
+        EXPECT_EQ(ready->prior_target_width, request.aux_target_width);
+        EXPECT_EQ(ready->prior_target_height, request.aux_target_height);
+        const auto delivered = ready->normal->cpu().to_vector();
+        if (pass == 0)
+            first_visit = delivered;
+        else
+            ASSERT_EQ(delivered, first_visit) << "a cached visit must deliver what the first visit delivered";
+        const auto values = fit_normal_prior(*ready->normal, request.aux_target_height, request.aux_target_width,
+                                             request.aux_target_height, request.aux_target_width)
+                                .cpu()
+                                .to_vector();
         ASSERT_EQ(values.size(), reference.size());
-        for (size_t i = 0; i < values.size(); ++i)
-            ASSERT_NEAR(values[i], reference[i], pass == 0 ? 2e-6f : 4e-5f) << "sample " << i;
+        float old_cache_gap = 0.0f;
+        for (size_t i = 0; i < values.size(); ++i) {
+            ASSERT_NEAR(values[i], reference[i], 2e-6f) << "sample " << i;
+            old_cache_gap = std::max(old_cache_gap, std::abs(values[i] - old_cached[i]));
+        }
+        // One 16-bit step of the (n+1)/2 encoding is 2/65535 in normal units.
+        EXPECT_LE(old_cache_gap, 2.0f / 65535.0f);
+        RecordProperty(pass == 0 ? "old_cache_gap_first" : "old_cache_gap_cached", std::to_string(old_cache_gap));
         // A second successful read must come from the cache.
         std::filesystem::remove(normal_path);
         ++request.sequence_id;

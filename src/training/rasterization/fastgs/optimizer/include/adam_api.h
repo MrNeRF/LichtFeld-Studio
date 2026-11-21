@@ -25,6 +25,36 @@ namespace fast_lfs::optimizer {
         int apply_screen_share = 0;
     };
 
+    // Ray-depth coordinate around the unfused Adam step (lfs/training/ray_depth_step.cuh).
+    struct RayDepthStepArgs {
+        float* state = nullptr;           // [n, kStateStride]
+        float* means = nullptr;           // [n, 3]
+        float* log_scales = nullptr;      // [n, 3]
+        const float* rotations = nullptr; // [n, 4]
+        const float* means_grad = nullptr;
+        const float* camera = nullptr; // [3], world
+        float far_limit = 0.0f;        // the rasterizer's far plane, world units
+        float* proposals = nullptr;    // [n]: dt, or kNotObserved
+        int n = 0;
+        float lr = 0.0f;
+        float mean_lr = 0.0f; // position learning rate, world units
+        const bool* frozen_mask = nullptr;
+        int frozen_mask_size = 0;
+        float frozen_lr_scale = 0.0f;
+        const bool* crop_damping_mask = nullptr;
+        int crop_damping_mask_size = 0;
+        float cropbox_lr_scale = 1.0f;
+        // Per-splat mean-step ratio of far rows; null when off.
+        const bool* mean_step_far_mask = nullptr;
+        int mean_step_far_mask_n = 0;
+        float mean_step_median_extent = 0.0f;
+    };
+
+    // Before the step: steps 1-7 from the rendered parameters into proposals.
+    void ray_depth_propose(const RayDepthStepArgs& args, cudaStream_t stream);
+    // After the step: the move and the observer statistics.
+    void ray_depth_commit(const RayDepthStepArgs& args, cudaStream_t stream);
+
     // Pure CUDA interface - no torch dependencies
 
     // Non-fused joint (u,log_s) Adam step for contiguous [n_prims, n_attr] parameters.

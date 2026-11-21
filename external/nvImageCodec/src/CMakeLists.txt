@@ -60,7 +60,7 @@ set(NVIMGCODEC_HEADERS
     directory_scaner.h
     encode_state_batch.h
     environment.h
-    file_ext_codec.h
+    file_extension_utils.h
     file_io_stream.h
     host_dev.h
     icode_stream.h
@@ -102,6 +102,7 @@ set(NVIMGCODEC_HEADERS
     mmaped_file_io_stream.h
     nvimgcodec_director.h
     nvimgcodec_type_utils.h
+    plugin_selection.h
     plugin_framework.h
     processing_results.h
     std_file_io_stream.h
@@ -135,6 +136,19 @@ else()
 endif()
 
 target_link_libraries(${NVIMGCODEC_LIBRARY_NAME} PRIVATE ${CUDA_CUDART_LIB} ${CUDA_DRIVER_LIB})
+
+# The shared library resolves the CUDA driver API internally - either against the
+# real driver stub or, with WITH_DYNAMIC_CUDA, against the dynlink_cuda shims that
+# are linked into it. Neither ends up in the static archive, which is built from
+# the object libraries alone, so it always leaves cuInit/cuCtx*/cuDevice*
+# undefined. Carry the driver stub on the static target's INTERFACE so it
+# propagates through install(EXPORT ...) and static consumers link it
+# automatically instead of each one repeating it.
+target_link_libraries(${NVIMGCODEC_LIBRARY_NAME}_static INTERFACE CUDA::cuda_driver)
+
+# Export only the public C API; hide the libstdc++ vague-linkage residue that
+# -fvisibility=hidden and --exclude-libs cannot reach.
+nvimgcodec_apply_version_script(${NVIMGCODEC_LIBRARY_NAME} nvimgcodec.map)
 
 if(UNIX)
     # CXX flags
@@ -256,6 +270,32 @@ install(
     EXPORT "${TARGETS_EXPORT_NAME}"
     NAMESPACE "${namespace}"
     DESTINATION "${config_install_dir}"
+    COMPONENT lib
+)
+
+# Unversioned dispatcher so a bare find_package(nvimgcodec) works without the
+# consumer having to pass -Dnvimgcodec_DIR=. The real config lives under
+# <libdir>/libnvimgcodec/<cuda_major>/cmake/nvimgcodec, which CMake does not
+# search; share/cmake/nvimgcodec is searched on every layout (unlike
+# <libdir>/cmake, which is missed on Debian multiarch) and survives the library
+# directory being rewritten by distro repackaging.
+#
+# The dispatcher is intentionally free of CUDA-major and version specific
+# content, so the CUDA 12 and CUDA 13 packages of a release install byte
+# identical files here and can coexist.
+set(dispatcher_dir "${generated_dir}/dispatcher")
+set(dispatcher_config "${dispatcher_dir}/${PROJECT_NAME}Config.cmake")
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/../cmake/template/DispatcherConfig.cmake.in"
+    "${dispatcher_config}"
+    @ONLY
+)
+write_basic_package_version_file(
+    "${dispatcher_dir}/${PROJECT_NAME}ConfigVersion.cmake" COMPATIBILITY SameMajorVersion
+)
+install(
+    FILES "${dispatcher_config}" "${dispatcher_dir}/${PROJECT_NAME}ConfigVersion.cmake"
+    DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/cmake/${PROJECT_NAME}"
     COMPONENT lib
 )
 

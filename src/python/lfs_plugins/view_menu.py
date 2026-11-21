@@ -133,7 +133,26 @@ class ViewMenu:
                 )
             )
 
+        pinned_windows = []
+        for panel_id in lf.ui.get_panel_names():
+            pinned = lf.ui.get_panel_always_on_top(panel_id)
+            if pinned is None:
+                continue
+            panel = lf.ui.get_panel(panel_id)
+            if panel is not None:
+                pinned_windows.append(menu_toggle(
+                    panel.label,
+                    lambda panel_id=panel_id, pinned=pinned: lf.ui.set_panel_always_on_top(panel_id, not pinned),
+                    pinned,
+                ))
+
         vr = lf.ui.get_vr_state()
+        vr_enterable = vr["active"] or vr["available"]
+        # Offered while VR support is on and no headset was found: one may have
+        # been connected since startup. Finding it makes Enter VR available.
+        detect_vr = [] if vr_enterable or not lf.ui.get_vr_preferences()["enabled"] else [
+            menu_action(tr("menu.view.detect_vr"), lf.detect_vr),
+        ]
         return [
             menu_action(tr("menu.view.home_view"), lf.go_home,
                         shortcut=keymap_shortcut(lf.keymap.Action.CAMERA_RESET_HOME)),
@@ -144,6 +163,10 @@ class ViewMenu:
             menu_separator(),
             menu_toggle(tr("menu.view.split_view"), lf.toggle_independent_split_view,
                         lf.ui.get_split_view_mode() == "independent_dual"),
+            menu_action(tr("input_settings.action.toggle_left_dock"), lambda: lf.toggle_side_dock("left"),
+                        shortcut=keymap_shortcut(lf.keymap.Action.TOGGLE_LEFT_DOCK)),
+            menu_action(tr("input_settings.action.toggle_right_dock"), lambda: lf.toggle_side_dock("right"),
+                        shortcut=keymap_shortcut(lf.keymap.Action.TOGGLE_RIGHT_DOCK)),
             menu_action(tr("ui.hide_ui"), lf.toggle_ui,
                         shortcut=keymap_shortcut(lf.keymap.Action.TOGGLE_UI)),
             menu_separator(),
@@ -151,9 +174,10 @@ class ViewMenu:
                 tr("input_settings.action.exit_vr") if vr["active"] else tr("menu.view.enter_vr"),
                 lambda active=vr["active"]: lf.set_vr_active(not active),
                 shortcut=keymap_shortcut(lf.keymap.Action.EXIT_VR, lf.keymap.ToolMode.VR) if vr["active"] else "",
-                enabled=vr["active"] or vr["available"],
-                tooltip="" if vr["active"] or vr["available"] else vr["status"],
+                enabled=vr_enterable,
+                tooltip="" if vr_enterable else vr["status"],
             ),
+            *detect_vr,
             menu_action(tr("input_settings.action.vr_recenter"), lf.recenter_vr,
                         shortcut=keymap_shortcut(lf.keymap.Action.VR_RECENTER, lf.keymap.ToolMode.VR),
                         enabled=vr["active"]),
@@ -169,6 +193,7 @@ class ViewMenu:
                 lf.ui.is_panel_enabled("lfs.logging"),
             ),
             menu_separator(),
+            *([menu_submenu(tr("ui.always_on_top"), pinned_windows)] if pinned_windows else []),
             menu_submenu(tr("preferences.appearance"), [
                 menu_submenu(f"{tr('menu.view.theme')} · {active_theme_label}", theme_items),
                 menu_submenu(tr("menu.view.ui_scale"), scale_items),

@@ -2076,8 +2076,11 @@ namespace lfs::io {
             throw std::runtime_error("Expected 3D tensor, got " + std::to_string(shape.rank()) + "D");
         }
 
-        if (image.dtype() != DataType::Float32 || image.device() != Device::CUDA) {
-            throw std::runtime_error("encode_to_jpeg2k expects a Float32 CUDA tensor");
+        // Float32 [0,1] is scaled to uint16 samples; uint16 samples (Float16 is only
+        // their 2-byte container, there is no UInt16 dtype) are written as they are.
+        const bool uint16_samples = image.dtype() == DataType::Float16;
+        if ((image.dtype() != DataType::Float32 && !uint16_samples) || image.device() != Device::CUDA) {
+            throw std::runtime_error("encode_to_jpeg2k expects a Float32 or uint16 (Float16 container) CUDA tensor");
         }
 
         const bool chw = layout == RgbLayout::CHW;
@@ -2088,17 +2091,18 @@ namespace lfs::io {
         const uint32_t width = static_cast<uint32_t>(chw ? shape[2] : shape[1]);
         const uint32_t channels = 3;
 
-        // Scale float [0,1] -> uint16 [0, 65535] in HWC layout.
-        // Float16 is only a 2-byte container for the uint16 samples (no UInt16 dtype).
         // Permute only when the caller named CHW. Contiguous HWC shares its storage.
-        const Tensor hwc_float = chw ? image.permute({1, 2, 0}).contiguous()
-                                     : image.contiguous();
-        Tensor hwc_uint16 = Tensor::empty(
-            TensorShape({height, width, channels}), Device::CUDA, DataType::Float16);
-        cuda::launch_float32_hwc_to_uint16_hwc(
-            hwc_float.ptr<float>(),
-            reinterpret_cast<uint16_t*>(hwc_uint16.data_ptr()),
-            height, width, channels, static_cast<cudaStream_t>(cuda_stream));
+        const Tensor hwc = chw ? image.permute({1, 2, 0}).contiguous()
+                               : image.contiguous();
+        Tensor hwc_samples = hwc;
+        if (!uint16_samples) {
+            hwc_samples = Tensor::empty(
+                TensorShape({height, width, channels}), Device::CUDA, DataType::Float16);
+            cuda::launch_float32_hwc_to_uint16_hwc(
+                hwc.ptr<float>(),
+                reinterpret_cast<uint16_t*>(hwc_samples.data_ptr()),
+                height, width, channels, static_cast<cudaStream_t>(cuda_stream));
+        }
 
         nvimgcodecImageInfo_t image_info{};
         image_info.struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
@@ -2113,7 +2117,7 @@ namespace lfs::io {
         image_info.plane_info[0].row_stride = static_cast<size_t>(width) * 3 * sizeof(uint16_t);
         image_info.plane_info[0].sample_type = NVIMGCODEC_SAMPLE_DATA_TYPE_UINT16;
         image_info.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
-        image_info.buffer = hwc_uint16.data_ptr();
+        image_info.buffer = hwc_samples.data_ptr();
         image_info.cuda_stream = static_cast<cudaStream_t>(cuda_stream);
 
         nvimgcodecImage_t nv_image = nullptr;

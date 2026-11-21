@@ -17,6 +17,21 @@ from . import (
 import lichtfeld
 
 
+def model_cache_snapshot() -> dict:
+    """
+    UI thread: inspect managed model files and the current Preferences operation; no hashing or downloads.
+    """
+
+def model_cache_start(model: int, action: str) -> bool:
+    """
+    UI thread: queue download, verification or removal through the shared model cache.
+    """
+
+def model_cache_cancel(job: int) -> None:
+    """
+    UI thread: cancel only the matching Preferences model operation; on-demand callers keep their own cancellation.
+    """
+
 class AppContext:
     def __init__(self) -> None: ...
 
@@ -410,6 +425,16 @@ def get_panel_names(space: PanelSpace = PanelSpace.FLOATING) -> list[str]:
 
 def set_panel_enabled(panel_id: str, enabled: bool) -> None:
     """Enable or disable a panel by id"""
+
+def get_panel_always_on_top(panel_id: str) -> bool | None:
+    """
+    Get the session pin choice, or None if the panel has no desktop window or pinning is unavailable.
+    """
+
+def set_panel_always_on_top(panel_id: str, enabled: bool) -> bool:
+    """
+    Pin a desktop panel above other windows for this session. Return whether the change succeeded.
+    """
 
 def save_startup_sidebar() -> bool:
     """
@@ -2323,13 +2348,15 @@ def is_gt_comparison_active() -> bool:
     """
 
 def get_gt_comparison_mode() -> str:
-    """Get ground-truth comparison mode: rgb, normal, or depth."""
+    """Get ground-truth comparison mode: rgb, normal, depth, or loss."""
 
 def set_gt_comparison_mode(mode: str) -> None:
     """Set ground-truth comparison mode."""
 
 def cycle_gt_comparison_mode() -> str:
-    """Cycle ground-truth comparison mode: rgb -> normal -> depth -> rgb."""
+    """
+    Cycle ground-truth comparison mode: rgb -> normal -> depth -> loss -> rgb.
+    """
 
 def reveal_in_file_manager(path: str) -> bool:
     """
@@ -2474,12 +2501,34 @@ def release_texture(texture_id: int) -> None:
 def release_rml_texture(source: str) -> bool:
     """Release a cached RmlUi texture by source URL"""
 
-def on_open_image_preview(callback: object) -> None:
-    """Register the preview callback for extracted images."""
-
-def sam_preview_submit(path: str, revision: str, mtime_ns: int, size_bytes: int, points: Sequence[Sequence[float]], box: Sequence[float] | None = None, refine_request: int = 0, refine_candidate: int = -1, weights: str = '', export_candidate: int = -1, exclude: bool = False) -> int:
+def on_open_image_preview(callback: object, include_sequence: bool = False) -> None:
     """
-    UI thread: queue native SAM inference or render a selected original-resolution mask. Apply is a separate explicit action.
+    Register the preview callback for extracted images; optionally receive extraction-run metadata as a third argument.
+    """
+
+def sam_preview_submit(path: str, revision: str, mtime_ns: int, size_bytes: int, points: Sequence[Sequence[float]], box: Sequence[float] | None = None, refine_request: int = 0, refine_candidate: int = -1, weights: str = '', export_candidate: int = -1, exclude: bool = False, sequence: object | None = None, semantic: object | None = None) -> int:
+    """
+    UI thread: queue native SAM inference, bounded text/category detection, sequence tracking/inspection, or render a selected original-resolution mask. Semantic descriptions are BERT token ID lists; the shared cache downloads the verified native LLMDet Tiny archive. Apply is a separate explicit action.
+    """
+
+def sam_preview_sequence_frames(run: str, first: int = 0, count: int = 64) -> list:
+    """
+    UI thread: read at most 256 current frame summaries from an extraction run.
+    """
+
+def sam_preview_approve_frames(run: str, updates: Sequence[tuple[int, int, bool]]) -> bool:
+    """
+    UI thread: atomically approve/revoke a group of (index, revision, approved) updates. Missing, duplicate or stale frames reject the whole group.
+    """
+
+def sam_preview_end_sequence(run: str) -> None:
+    """
+    UI thread: release an extraction review document; old run IDs cannot close a new document.
+    """
+
+def sam_preview_invalidate_frame(run: str, index: int) -> None:
+    """
+    UI thread: revoke a changed frame's proposal/approval while idle. Reject active work and preserve saved masks.
     """
 
 def sam_preview_poll() -> dict:
@@ -3062,8 +3111,18 @@ def get_vr_state() -> dict:
 def get_vr_preferences() -> dict:
     """Get the VR preferences"""
 
-def set_vr_preferences(enabled: bool, resolution_scale: float, scene_units_per_meter: float, move_speed: float, persist: bool = True) -> None:
+def set_vr_preferences(enabled: bool, resolution_scale: float, scene_units_per_meter: float, move_speed: float, show_hands: bool = True, persist: bool = True) -> None:
     """Set the VR preferences; VR support takes effect after restart"""
+
+def get_vr_runtimes() -> dict:
+    """
+    Get the OpenXR runtimes installed on this computer, the name of the system's active one, and the manifest of the one chosen for VR (empty: the active one)
+    """
+
+def set_vr_runtime(manifest: str) -> None:
+    """
+    Choose the OpenXR runtime VR uses by its manifest path; empty follows the system's active runtime. Takes effect after restart
+    """
 
 def get_mcp_port_override() -> int | None:
     """Get the MCP port set on the command line for this session, or None"""

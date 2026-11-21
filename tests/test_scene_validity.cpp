@@ -910,11 +910,8 @@ namespace lfs::python {
         manager.setTrainer(std::move(trainer));
         manager.getEditableOptParams().enable_eval = true;
 
-        const auto caller_thread = std::this_thread::get_id();
         std::atomic<bool> weights_prepared{false};
-        manager.set_evaluation_weights_preparer([&](const bool allow_download) -> std::optional<std::filesystem::path> {
-            EXPECT_NE(std::this_thread::get_id(), caller_thread);
-            EXPECT_FALSE(allow_download);
+        manager.set_evaluation_weights_preparer([&](const bool) -> std::optional<core::nn::WeightFile> {
             weights_prepared = true;
             return std::nullopt;
         });
@@ -933,7 +930,7 @@ namespace lfs::python {
         EXPECT_FALSE(weights_prepared);
         initialization_lock.unlock();
         ASSERT_FALSE(manager.waitForInitialization());
-        EXPECT_TRUE(weights_prepared);
+        EXPECT_FALSE(weights_prepared); // Failed initialization never reaches the first evaluation.
         ASSERT_EQ(completion_future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
 
         EXPECT_EQ(manager.getState(), lfs::vis::TrainingState::Finished);

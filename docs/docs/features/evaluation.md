@@ -52,7 +52,7 @@ Images are named after their input image. When two input images share a name, th
 
 A caption band above each row names its two images, for example `Ground Truth, Mask` and `Render, Mask`; the image pixels themselves are not drawn over.
 
-`metrics.csv` has the columns `iteration, psnr, ssim, lpips, time_per_image, num_gaussians, normal_angle_deg, depth_absrel, bias_r, bias_g, bias_b, bias_corr_r, bias_corr_g, bias_corr_b, flip`. Columns without a value are left empty.
+`metrics.csv` has the columns `iteration, psnr, ssim, lpips, time_per_image, num_gaussians, normal_angle_deg, depth_absrel, bias_r, bias_g, bias_b, bias_corr_r, bias_corr_g, bias_corr_b, flip`. Columns without a value are left empty. With calibration correction on (the default; see [Refine camera poses](../cli.md#refine-camera-poses)), the columns `psnr_aligned, ssim_aligned, lpips_aligned` follow: the headline scores after aligning each render onto its photograph. The scores before them stay the plain ones. Each image's evaluation in `per_image_metrics.json` then has the same three fields, inside the headline set's object with `--eval-mask-report`.
 
 `per_image_metrics.json` maps each image name to its size and a list of evaluations:
 
@@ -215,6 +215,12 @@ With `--undistort`, training uses undistorted images. `--eval-space` chooses wha
 - `undistorted`: the undistorted training images.
 
 Without `--undistort` the images are evaluated as they are; with `--gut` a distorted camera is rendered in its own lens.
+
+## Refined camera poses
+
+`--pose-opt` refines the training cameras' poses with the model, and the cameras keep the refined poses. The held-out cameras are not trained, so before scoring, each one is fitted to the frozen model for the same fixed number of steps; it returns to its own pose afterwards. With `--eval-all` the evaluated cameras are the training cameras and are scored as they are.
+
+At the end of training `pose_refinement.tsv` lists each training camera's move and turn, and `cameras_refined/` holds the scene's cameras written over the dataset's COLMAP model.
 
 ## Bit depth
 

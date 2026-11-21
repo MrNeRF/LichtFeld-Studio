@@ -5,13 +5,16 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "core/extracted_frame.hpp"
 #include "io/hdr_tonemap.hpp"
+#include "io/sharpness_score.hpp"
 
 namespace lfs::io {
 
@@ -61,12 +64,6 @@ namespace lfs::io {
         Failed,
     };
 
-    enum class SharpnessAlgorithm {
-        LAPLACIAN, // Laplacian variance — fast, blur detection
-        TENENGRAD, // Sobel energy — directional blur detection
-        COMBINED   // Tenengrad + Laplacian — best overall
-    };
-
     struct SharpnessParams {
         bool enabled = false;
         SharpnessAlgorithm algorithm = SharpnessAlgorithm::COMBINED;
@@ -86,12 +83,7 @@ namespace lfs::io {
             double end = -1.0;
         };
 
-        struct WrittenFrame {
-            std::filesystem::path path;
-            int width = 0, height = 0;
-            double timestamp = 0;
-            int source_frame = 0;
-        };
+        using WrittenFrame = core::ExtractedFrame;
 
         struct Params {
             std::filesystem::path video_path;

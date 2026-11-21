@@ -235,7 +235,7 @@ namespace lfs::vis {
             enforceProjectionBackend(settings_, true);
             LOG_TRACE("Equirectangular rendering: {}", settings_.equirectangular ? "enabled" : "disabled");
         }
-        markDirty(DirtyFlag::SPLATS | DirtyFlag::CAMERA | DirtyFlag::BACKGROUND, lfs::vis::FrameReason::SceneChange);
+        markDirty(DirtyFlag::SPLATS | DirtyFlag::CAMERA | DirtyFlag::BACKGROUND, lfs::vis::FrameReason::SettingsChange);
         lock.unlock();
 
         if (projection_changed) {
@@ -356,13 +356,13 @@ namespace lfs::vis {
     void RenderingManager::handleCropBoxChanged(const bool enabled) {
         std::lock_guard<std::mutex> lock(settings_mutex_);
         settings_.use_crop_box = enabled;
-        markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
+        markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SettingsChange);
     }
 
     void RenderingManager::handleEllipsoidChanged(const bool enabled) {
         std::lock_guard<std::mutex> lock(settings_mutex_);
         settings_.use_ellipsoid = enabled;
-        markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
+        markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SettingsChange);
     }
 
     void RenderingManager::handlePointCloudModeChanged(const ui::PointCloudModeChanged& event) {
@@ -372,7 +372,7 @@ namespace lfs::vis {
         LOG_DEBUG("Point cloud mode: {}, voxel size: {}",
                   event.enabled ? "enabled" : "disabled", event.voxel_size);
         viewport_artifact_service_.clearViewportOutput();
-        markDirty(DirtyFlag::SPLATS, lfs::vis::FrameReason::SceneChange);
+        markDirty(DirtyFlag::SPLATS, lfs::vis::FrameReason::SettingsChange);
     }
 
 } // namespace lfs::vis

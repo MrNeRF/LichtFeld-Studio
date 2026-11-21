@@ -6,6 +6,7 @@
 #include "gui/gui_focus_state.hpp"
 #include "input/sdl_coordinate_utils.hpp"
 #include "operator/ops/point_pick_operator.hpp"
+#include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "theme/theme.hpp"
 #include <algorithm>
@@ -266,14 +267,17 @@ namespace lfs::vis::tools {
         const auto& t = theme();
         overlay.addCircle(mouse_pos, 5.0f, toOverlay(color, 0.8f), 16, 2.0f);
         std::optional<float> hover_depth;
-        if (sample_hover && rendering_manager) {
+        const auto* controller = InputController::instance();
+        const bool navigating = controller && controller->isCameraNavigating();
+        if (sample_hover && navigating && !controller->isCameraDragging())
+            lfs::python::request_redraw_after(1.0 / 60.0);
+        if (sample_hover && rendering_manager && !navigating) {
             const glm::vec2 render_point = screenToRender(panel_proj, mouse_pos);
             const int depth_x = static_cast<int>(render_point.x);
             const int depth_y = static_cast<int>(render_point.y);
-            const float depth = rendering_manager->getDepthAtPixel(
-                depth_x,
-                depth_y,
-                frame.has_panel ? std::optional<SplitViewPanelId>(panel_proj.info.panel) : std::nullopt, true);
+            const float depth = rendering_manager->getSurfaceDepthAtPixel(
+                depth_x, depth_y, {panel_proj.info.render_width, panel_proj.info.render_height},
+                frame.has_panel ? std::optional<SplitViewPanelId>(panel_proj.info.panel) : std::nullopt);
             if (depth > 0.0f && depth < 1e9f) {
                 hover_depth = depth;
             }

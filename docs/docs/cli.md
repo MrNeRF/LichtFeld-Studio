@@ -21,6 +21,17 @@ Python: `lichtfeld.io.generate_voxels(path, settings)` and `lichtfeld.io.save_vo
 overwrite=False, transform=[])`. `VoxelSettings` exposes these controls; a progress callback
 returning `False` cancels. Optional transforms are 16 column-major data-world values.
 
+## Convert a project
+
+```sh
+LichtFeld-Studio convert scene.licht scene.ply
+LichtFeld-Studio convert scene.licht scene.spz --sh-degree 2
+```
+
+`convert` merges visible splats using saved transforms, enabled crops and the published SH degree.
+Referenced RAD data is loaded at full detail; unrelated checkpoints and Undo history are excluded.
+`LichtFeld-Studio convert --capabilities` prints `visible-project-splats-v1` when this export is supported.
+
 ## Embed a dataset in a project
 
 `LichtFeld-Studio licht <project.licht> --embed` embeds the dataset currently referenced by a project. To select a
@@ -70,3 +81,16 @@ settings it cannot be combined with.
 `--cropbox` limits training to a box, `--cropbox-rotation` turns it, and `--crop` removes everything outside it when
 training completes and from exports. [Train a region of interest](features/region-of-interest.md) describes the box and
 its rotation, the ROI training options and tiled training.
+
+## Refine camera poses
+
+`--pose-opt` refines the training cameras' poses with the model; it needs pinhole cameras or `--undistort` and cannot be
+combined with `--gut`. At the end of training `pose_refinement.tsv` lists each camera's move and turn, and
+`cameras_refined/` holds the cameras as a COLMAP model. [Refined camera poses](features/evaluation.md#refined-camera-poses)
+describes how evaluation scores the held-out cameras.
+
+Calibration correction fits a smooth image displacement for each training camera to absorb small calibration errors. It is on by default; `--no-calibration-correction` turns it off. It starts at step 1000 scaled by `--steps-scaler`. Training checkpoints retain the correction. Projects and checkpoints saved before the option existed resume with it off. Evaluation reports the plain scores as without the option and, in addition, scores after a fresh alignment of each render onto its held-out photograph: `psnr_aligned`, `ssim_aligned` and `lpips_aligned`, the last columns of `metrics.csv`, fields of each image's evaluation in `per_image_metrics.json`, and an `Aligned` line in `metrics_report.txt` and in the log. It also works with `eval` on models trained with any calibration setting.
+
+## Run a Python script
+
+`LichtFeld-Studio --headless --python-script /path/to/check.py` runs trusted local scripts without a dataset, GUI, training or user plugins, returning a nonzero status on failure; never take the script path from downloaded project metadata.

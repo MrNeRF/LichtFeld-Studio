@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <gtest/gtest.h>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -87,6 +88,18 @@ namespace {
             }
         }
         return nullptr;
+    }
+
+    void set_sync_debug_env(const char* const value) {
+#if defined(_WIN32)
+        (void)_putenv_s("LFS_CUDA_SYNC_DEBUG", value ? value : "");
+#else
+        if (value) {
+            (void)setenv("LFS_CUDA_SYNC_DEBUG", value, 1);
+        } else {
+            (void)unsetenv("LFS_CUDA_SYNC_DEBUG");
+        }
+#endif
     }
 
     [[nodiscard]] std::shared_ptr<lfs::core::Camera> make_camera(const int uid) {
@@ -253,6 +266,42 @@ namespace {
             }
             cameras.clear();
         });
+    }
+
+    TEST_F(CudaErrorTypedDeathTest, CudaSyncStreamDestroyNeverTouchesDestroyedStream) {
+        int device_count = 0;
+        if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
+            (void)cudaGetLastError();
+            GTEST_SKIP() << "a live CUDA device is required";
+        }
+        // The mode is read once per process, so the re-executed child gets it from its environment.
+        const char* const previous_env = std::getenv("LFS_CUDA_SYNC_DEBUG");
+        const std::optional<std::string> previous =
+            previous_env ? std::optional<std::string>{previous_env} : std::nullopt;
+        set_sync_debug_env("cuda-sync");
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        EXPECT_EXIT(
+            {
+                if (!lfs::core::cuda_sync_debug_enabled()) {
+                    std::_Exit(4);
+                }
+                ErrorLogCapture capture;
+                cudaStream_t stream = nullptr;
+                void* buffer = nullptr;
+                if (cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking) != cudaSuccess ||
+                    cudaMalloc(&buffer, 256) != cudaSuccess ||
+                    cudaMemsetAsync(buffer, 0, 256, stream) != cudaSuccess) {
+                    std::_Exit(5);
+                }
+                LFS_CUDA_LOG_STREAM_DESTROY(stream, "sync-debug stream teardown");
+                (void)cudaFree(buffer);
+                if (capture.joined().find("LFS FAILURE REPORT") != std::string::npos) {
+                    std::_Exit(2);
+                }
+                std::_Exit(cudaPeekAtLastError() == cudaSuccess ? 0 : 3);
+            },
+            ::testing::ExitedWithCode(0), "");
+        set_sync_debug_env(previous ? previous->c_str() : nullptr);
     }
 
     TEST_F(CudaErrorTypedDeathTest, PoisonedContextTryThrowsCatchableException) {

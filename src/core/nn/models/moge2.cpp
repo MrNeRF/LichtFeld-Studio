@@ -148,20 +148,25 @@ namespace lfs::core::nn::models {
 
     lfs::Result<Moge2> Moge2::load(const std::filesystem::path& weights, Device device,
                                    std::optional<DataType> compute) {
-        if (device != Device::CUDA) {
-            return moge_error(lfs::ErrorCode::InvalidArgument,
-                              "MoGe-2 requires a CUDA device");
-        }
         auto file = WeightFile::open(weights);
         if (!file) {
             return std::move(file.error());
+        }
+        return load(*file, device, compute);
+    }
+
+    lfs::Result<Moge2> Moge2::load(const WeightFile& file, Device device,
+                                   std::optional<DataType> compute) {
+        if (device != Device::CUDA) {
+            return moge_error(lfs::ErrorCode::InvalidArgument,
+                              "MoGe-2 requires a CUDA device");
         }
         DataType dtype = DataType::Float32;
         if (compute) {
             dtype = *compute;
         } else {
-            for (const auto& name : file->names()) {
-                const auto* info = file->info(name);
+            for (const auto& name : file.names()) {
+                const auto* info = file.info(name);
                 if (info && info->dtype == DataType::Float16) {
                     dtype = DataType::Float16;
                     break;
@@ -172,7 +177,7 @@ namespace lfs::core::nn::models {
             return moge_error(lfs::ErrorCode::InvalidArgument,
                               "MoGe-2 compute dtype must be float16 or float32");
         }
-        auto loaded = file->load_all(device, dtype);
+        auto loaded = file.load_all(device, dtype);
         if (!loaded) {
             return std::move(loaded.error());
         }

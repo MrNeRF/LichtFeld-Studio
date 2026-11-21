@@ -33,6 +33,10 @@ namespace lfs::core {
         HAS_PPISP_CONTROLLER = 1 << 2,
         HAS_SPARSITY = 1 << 3,
         HAS_POPSPA = 1 << 4,
+        // Per-photo alignment warp stored as a bare tensor before the parameter JSON. Readers accept
+        // it; writers never set it, because builds that do not know the bit refuse the whole file.
+        // Writers store the field as an optional tagged block after the JSON (training/checkpoint.cpp).
+        HAS_CALIBRATION_CORRECTION = 1 << 5,
     };
 
     constexpr CheckpointFlags operator|(const CheckpointFlags a, const CheckpointFlags b) {

@@ -19,7 +19,8 @@ namespace gsplat_lfs {
     // Forward Kernel
     ////////////////////////////////////////////////////////////////
 
-    template <uint32_t CDIM, typename scalar_t, bool kPerfectPinhole, bool kBatched>
+    // kMipFilter is a template parameter so the unfiltered kernel compiles exactly as before.
+    template <uint32_t CDIM, typename scalar_t, bool kPerfectPinhole, bool kBatched, bool kMipFilter>
     __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         const uint32_t C,
         const uint32_t N,
@@ -33,6 +34,8 @@ namespace gsplat_lfs {
         const scalar_t* __restrict__ backgrounds, // [C, CDIM] - solid color (mutually exclusive with bg_images)
         const scalar_t* __restrict__ bg_images,   // [C, CDIM, H, W] - per-pixel background (mutually exclusive with backgrounds)
         const bool* __restrict__ masks,           // [C, tile_height, tile_width]
+        const scalar_t* __restrict__ compensations,
+        const scalar_t* __restrict__ dilations,
         const uint32_t image_width,
         const uint32_t image_height,
         const uint32_t tile_size,
@@ -163,7 +166,9 @@ namespace gsplat_lfs {
             if (tr < stage_n && idx < range_end) {
                 int32_t g = flatten_ids[idx]; // flatten index in [C * N] or [nnz]
                 const float3 xyz_f = load_float3(reinterpret_cast<const float*>(&means[g]));
-                const float opac = activated_opacity(opacities[g]);
+                float opac = activated_opacity(opacities[g]);
+                if constexpr (kMipFilter)
+                    opac *= compensations[g];
                 xyz_opacity_batch[tr] = {xyz_f.x, xyz_f.y, xyz_f.z, opac};
 
                 const vec4 quat = quats[g];
@@ -180,6 +185,8 @@ namespace gsplat_lfs {
                     0.f,
                     1.0f / scale[2]);
                 iscl_rot_batch[tr] = S * glm::transpose(R);
+                if constexpr (kMipFilter)
+                    iscl_rot_batch[tr] = inverse_scale_matrix(dilated_scale(scale, dilations[g])) * glm::transpose(R);
                 if constexpr (CDIM == 3) {
                     const float3 c = load_float3(colors + g * 3);
                     rgbs_batch[tr * 3u + 0] = c.x;
@@ -288,6 +295,8 @@ namespace gsplat_lfs {
         const float* backgrounds,
         const float* bg_images,
         const bool* masks,
+        const float* compensations,
+        const float* dilations,
         uint32_t C,
         uint32_t N,
         uint32_t n_isects,
@@ -362,6 +371,8 @@ namespace gsplat_lfs {
                 backgrounds,
                 bg_images,
                 masks,
+                compensations,
+                dilations,
                 image_width,
                 image_height,
                 tile_size,
@@ -384,19 +395,25 @@ namespace gsplat_lfs {
             LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.rasterize_to_pixels_fwd");
         };
 
-        auto dispatch = [&]<bool kBatched>() {
+        auto dispatch = [&]<bool kBatched, bool kMipFilter>() {
             if constexpr (CDIM == 3) {
                 if (global_shutter && perfect_pinhole) {
-                    launch(rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, float, true, kBatched>);
+                    launch(rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, float, true, kBatched, kMipFilter>);
                     return;
                 }
             }
-            launch(rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, float, false, kBatched>);
+            launch(rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, float, false, kBatched, kMipFilter>);
         };
-        if (tiles.end == UINT32_MAX)
-            dispatch.template operator()<false>();
+        auto dispatch_batched = [&]<bool kMipFilter>() {
+            if (tiles.end == UINT32_MAX)
+                dispatch.template operator()<false, kMipFilter>();
+            else
+                dispatch.template operator()<true, kMipFilter>();
+        };
+        if (dilations != nullptr)
+            dispatch_batched.template operator()<true>();
         else
-            dispatch.template operator()<true>();
+            dispatch_batched.template operator()<false>();
     }
 
     ////////////////////////////////////////////////////////////////
@@ -413,6 +430,8 @@ namespace gsplat_lfs {
         const float* backgrounds,                                              \
         const float* bg_images,                                                \
         const bool* masks,                                                     \
+        const float* compensations,                                            \
+        const float* dilations,                                                \
         uint32_t C,                                                            \
         uint32_t N,                                                            \
         uint32_t n_isects,                                                     \

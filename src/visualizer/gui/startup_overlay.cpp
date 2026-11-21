@@ -426,16 +426,8 @@ namespace lfs::vis::gui {
         }
 
         row->SetProperty("display", "flex");
+        row->SetClass("is-complete", plugin_load_complete_);
         if (plugin_load_complete_) {
-            track->SetProperty("display", "block");
-            track->SetProperty("width", "360dp");
-            track->SetProperty("height", "18dp");
-            track->SetProperty("background-color", "transparent");
-            track->SetProperty("border-color", "transparent");
-            fill->SetProperty("display", "none");
-            percent->SetProperty("display", "none");
-            row->SetProperty("height", "18dp");
-            row->SetProperty("margin-top", "14dp");
             std::size_t current_count = 0;
             std::size_t total_count = 0;
             if (current.stage.starts_with("Plugin issue|")) {
@@ -456,28 +448,7 @@ namespace lfs::vis::gui {
             } else {
                 stage->SetInnerRML(escapeRmlText(current.stage));
             }
-            stage->SetProperty("width", "360dp");
-            stage->SetProperty("height", "18dp");
-            stage->SetProperty("margin-left", "0");
-            stage->SetProperty("margin-top", "0");
-            stage->SetProperty("line-height", "18dp");
-            stage->SetProperty("text-align", "center");
         } else {
-            track->SetProperty("display", "block");
-            track->SetProperty("width", "300dp");
-            track->SetProperty("height", "14dp");
-            track->SetProperty("background-color", "rgba(255, 255, 255, 0.06)");
-            track->SetProperty("border-color", "rgba(255, 255, 255, 0.15)");
-            fill->SetProperty("display", "block");
-            percent->SetProperty("display", "block");
-            row->SetProperty("height", "16dp");
-            row->SetProperty("margin-top", "14dp");
-            stage->SetProperty("width", "286dp");
-            stage->SetProperty("height", "14dp");
-            stage->SetProperty("margin-left", "7dp");
-            stage->SetProperty("margin-top", "-14dp");
-            stage->SetProperty("line-height", "14dp");
-            stage->SetProperty("text-align", "center");
             stage->SetInnerRML(escapeRmlText(current.stage));
         }
         percent->SetInnerRML(std::format("{:.0f}%", current.progress * 100.0f));

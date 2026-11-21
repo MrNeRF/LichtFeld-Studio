@@ -40,9 +40,9 @@ namespace lfs::python {
         std::filesystem::path venv_dir() const;
         std::filesystem::path venv_python() const;
         std::filesystem::path site_packages_dir() const;
-        bool ensure_venv();
+        bool ensure_venv(const std::function<bool()>& should_cancel = {});
         // Synchronous operations (blocking)
-        InstallResult install(const std::string& package);
+        InstallResult install(const std::string& package, const std::function<bool()>& should_cancel = {});
         InstallResult uninstall(const std::string& package);
         InstallResult install_torch(const std::string& cuda_version = "auto",
                                     const std::string& torch_version = "");
@@ -72,7 +72,7 @@ namespace lfs::python {
 
     private:
         PackageManager();
-        InstallResult execute_uv(const std::vector<std::string>& args) const;
+        InstallResult execute_uv(const std::vector<std::string>& args, const std::function<bool()>& should_cancel = {}) const;
 
         std::filesystem::path m_root_dir;
         std::filesystem::path m_venv_dir;

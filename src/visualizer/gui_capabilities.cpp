@@ -1286,6 +1286,9 @@ namespace lfs::vis::cap {
         if (!node || !node->model)
             return std::unexpected("Gaussian node not found: " + node_name);
 
+        if (scene.isNodeEffectivelyLocked(node->id))
+            return std::unexpected("Cannot edit '" + node_name + "': node is locked");
+
         const auto canonical_field_name = canonical_gaussian_field_name(field_name);
         if (canonical_field_name.empty())
             return std::unexpected("Unsupported gaussian field: " + std::string(field_name));

@@ -6,6 +6,7 @@
 
 #include "core/native_fs.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -349,6 +350,23 @@ namespace lfs::core {
         // Also handle embedded nulls by using c_str()
         return std::filesystem::path(utf8_str.c_str());
 #endif
+    }
+
+    // Interpret saved asset paths using their source root's separators, not
+    // the current OS. A native POSIX filename may legitimately contain '\\'.
+    inline std::filesystem::path path_from_source_format(
+        const std::filesystem::path& value, const std::filesystem::path& source_root) {
+        const auto root = path_to_utf8(source_root);
+        const bool drive_root = root.size() >= 3 &&
+                                ((root[0] >= 'A' && root[0] <= 'Z') ||
+                                 (root[0] >= 'a' && root[0] <= 'z')) &&
+                                root[1] == ':' && (root[2] == '\\' || root[2] == '/');
+        const bool unc_root = root.starts_with("\\\\");
+        if (!drive_root && !unc_root)
+            return value;
+        auto text = path_to_utf8(value);
+        std::replace(text.begin(), text.end(), '\\', '/');
+        return utf8_to_path(text);
     }
 
     /**

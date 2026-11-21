@@ -38,6 +38,7 @@ namespace lfs::vis::gui {
         void setPollVisibility(bool visible) override;
         bool isVisibleForAnimation() const override;
         void on_visibility_changed(bool visible) override;
+        void suspendInput() override;
         void on_layout_changed() override;
         void on_content_changed() override;
         void preload(const PanelDrawContext& ctx) override;
@@ -96,6 +97,7 @@ namespace lfs::vis::gui {
         bool drawDirectCached(float x, float y, float w, float h,
                               const PanelDrawContext& ctx);
         float getDirectDrawHeight() const;
+        std::optional<PanelDrawBounds> titleControlsBounds() const;
         void setInput(const PanelInputState* input);
         void setInputClipY(float y_min, float y_max);
         void setForcedHeight(float h);

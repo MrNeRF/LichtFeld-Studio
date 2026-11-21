@@ -1,3 +1,7 @@
+.description {
+    word-break: break-word;
+}
+
 .guide-tabs {
     display: flex;
     gap: 6dp;
@@ -29,7 +33,7 @@
     height: 0;
     padding-top: 56.25%;
     border-width: 1dp;
-    border-radius: 6dp;
+
     transition: background-color border-color 0.12s quadratic-out;
 }
 
@@ -43,6 +47,9 @@
 
 .card-title {
     display: block;
+    width: 100%;
+    white-space: normal;
+    word-break: break-word;
     font-size: 12dp;
     line-height: 18dp;
     min-height: 36dp;

@@ -30,6 +30,7 @@ namespace nvimgcodec {
         explicit ImageParserFactory(const nvimgcodecParserDesc_t* desc);
         std::string getParserId() const override;
         std::string getCodecName() const override;
+        const nvimgcodecParserDesc_t* getParserDesc() const override;
         bool canParse(nvimgcodecCodeStreamDesc_t* code_stream) override;
         std::unique_ptr<IImageParser> createParser() const override;
 

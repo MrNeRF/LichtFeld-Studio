@@ -159,7 +159,8 @@ namespace lfs::vis {
         lfs::core::TensorShape shape,
         const lfs::core::DataType dtype,
         const std::size_t capacity,
-        const char* const debug_name) {
+        const char* const debug_name,
+        const VkBufferUsageFlags extra_usage) {
         if (!context.externalMemoryInteropEnabled()) {
             return std::unexpected("Vulkan external tensor allocation requires CUDA/Vulkan external-memory interop");
         }
@@ -205,9 +206,10 @@ namespace lfs::vis {
         auto block = std::move(*block_result);
 
         VulkanContext::ExternalBuffer imported{};
-        constexpr VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                             VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                                             VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        const VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                         VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                         VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                                         extra_usage;
         if (!context.importExportableBlock(*block,
                                            usage,
                                            imported,

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/export.hpp"
@@ -148,6 +149,8 @@ namespace lfs::vis {
                                                                    bool keep_children = false);
         [[nodiscard]] BatchNodeRemovalResult removeNodesByIdsWithResult(const std::vector<core::NodeId>& ids,
                                                                         bool keep_children = false);
+        using DisabledCameraRemovalResult = lfs::Result<size_t>;
+        [[nodiscard]] DisabledCameraRemovalResult removeDisabledCamerasWithResult(core::NodeId camera_group_id);
         size_t publishLiveCameraCount();
         void removePLY(std::string name, bool keep_children = false);
         void setPLYVisibility(std::string name, bool visible);

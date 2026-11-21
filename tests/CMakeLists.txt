@@ -40,6 +40,12 @@ target_include_directories(lichtfeld_camera_selection_tests PRIVATE ${CMAKE_SOUR
 target_link_libraries(lichtfeld_camera_selection_tests PRIVATE GTest::gtest_main glm::glm)
 add_test(NAME lichtfeld.camera_selection COMMAND lichtfeld_camera_selection_tests)
 set_tests_properties(lichtfeld.camera_selection PROPERTIES LABELS "cpu;camera" TIMEOUT 30)
+add_executable(lichtfeld_camera_pose_math_tests test_camera_pose_math.cpp)
+target_compile_features(lichtfeld_camera_pose_math_tests PRIVATE cxx_std_23)
+target_include_directories(lichtfeld_camera_pose_math_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/training)
+target_link_libraries(lichtfeld_camera_pose_math_tests PRIVATE GTest::gtest_main)
+add_test(NAME lichtfeld.camera_pose_math COMMAND lichtfeld_camera_pose_math_tests)
+set_tests_properties(lichtfeld.camera_pose_math PROPERTIES LABELS "cpu;camera" TIMEOUT 30)
 add_executable(lichtfeld_collision_preview_upload_tests test_collision_preview_upload.cpp)
 target_compile_features(lichtfeld_collision_preview_upload_tests PRIVATE cxx_std_23)
 target_include_directories(lichtfeld_collision_preview_upload_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/visualizer)
@@ -276,6 +282,7 @@ if(BUILD_VISUALIZER_TESTS)
         test_preferences_tooltips.cpp
         test_guide_segment_clipping.cpp
         test_viewport_depth_layout.cpp
+        test_gt_comparison_loss.cpp
         test_panel_layout_render_demand.cpp
         test_right_panel_tabs.cpp
         test_preferences_migration.cpp
@@ -293,6 +300,7 @@ if(BUILD_VISUALIZER_TESTS)
     # Focused RmlUi migration contracts for the retained master interface.
     add_executable(lichtfeld_rmlui_tests
         test_assisted_masking.cpp
+        test_model_cache.cpp
         test_rml_text_input_handler.cpp
         test_rml_text_input_native_keys.cpp
         test_rml_path_utils.cpp
@@ -388,6 +396,9 @@ if(BUILD_PANEL_LAYOUT_TESTS)
         test_panel_registry_default_closed.cpp
     )
     target_compile_features(panel_layout_tests PRIVATE cxx_std_23)
+    target_compile_definitions(panel_layout_tests PRIVATE
+        PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
+    )
     target_include_directories(panel_layout_tests PRIVATE
         $<TARGET_PROPERTY:${PROJECT_NAME},INCLUDE_DIRECTORIES>
     )
@@ -851,6 +862,7 @@ set(TEST_FILES
     test_geometry_payload.cpp
     test_selection_chapter.cpp
     test_project_document.cpp
+    test_project_operations.cpp
     test_project_thumbnail_sources.cpp
     test_project_training_copy.cpp
     test_gallery_scene_publication.cpp
@@ -931,6 +943,9 @@ set(TEST_FILES
     test_tensor_kernels_6c_elem.cpp
     test_tensor_lazy_stateful_ops.cpp
     test_fastgs_kernels.cpp
+    test_calibration_correction.cpp
+    test_camera_pose_gradient.cpp
+    test_ray_depth_step.cpp
     test_color_variance.cpp
     fastgs_visibility_readback_cuda.cu
     test_fastgs_fuzz.cpp
@@ -993,6 +1008,7 @@ set(TEST_FILES
     test_operator_registry_props.cpp
     test_fastgs_analytical_gradients.cpp
     test_normal_prior_decode.cpp
+    test_prior_own_size.cpp
     test_normal_auto_generate.cpp
     test_lens_priors.cpp
     test_metrics_evaluator.cpp
@@ -1029,7 +1045,9 @@ set(TEST_FILES
     test_camera_training_notice.cpp
     test_tensor_nn_ops.cpp
     test_nn_ops.cpp
+    test_llmdet_backbones.cpp
     test_weight_file_paths.cpp
+    test_model_cache.cpp
     test_moge2.cpp
     test_lpips.cpp
     test_sam2.cpp
@@ -1058,6 +1076,8 @@ set(TEST_FILES
     test_camera_thumbnail_policy.cpp
     test_apriltag_scene_scale.cpp
     test_undistort.cpp
+    test_panorama_views.cpp
+    test_fisheye_views.cpp
     gut_camera_model_cuda.cu
     test_viewport_region_utils.cpp
     test_viewport_interop_decision.cpp
@@ -1299,6 +1319,7 @@ target_link_libraries(lichtfeld_tests PRIVATE
     Zep::Zep
     vterm
     GTest::gtest
+    TBB::tbb
     nanobind-static
     ZLIB::ZLIB
     ${TORCH_LIBRARIES}

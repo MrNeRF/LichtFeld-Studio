@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -106,6 +107,28 @@ namespace {
         ASSERT_TRUE(initialized) << initialized.error();
         trainer.shutdown();
         EXPECT_EQ(eval_names(scene.getAllCameras()), sorted_names);
+    }
+
+    TEST(PanoramaUndistort, MissingSceneCameraStillReservesItsUid) {
+        using lfs::core::CameraModelType;
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+        lfs::core::Scene scene;
+        const auto add = [&](const CameraModelType model, int uid, bool has_image) {
+            auto camera = std::make_shared<lfs::core::Camera>(
+                Tensor::eye(3, Device::CPU), Tensor::zeros({3}, Device::CPU),
+                1, 1, 16, 8, Tensor{}, Tensor{}, model, "frame.png", "", "", 32, 16, uid);
+            camera->set_has_image(has_image);
+            scene.addCamera(camera->image_name(), lfs::core::NULL_NODE, camera);
+        };
+        add(CameraModelType::EQUIRECTANGULAR, 1, true);
+        add(CameraModelType::PINHOLE, std::numeric_limits<int>::max() - 2, false);
+        lfs::core::param::TrainingParameters params;
+        params.optimization.undistort = true;
+        lfs::training::Trainer trainer(scene);
+        const auto result = trainer.initialize(params);
+        ASSERT_FALSE(result);
+        EXPECT_EQ(result.error(), "View camera UIDs exceed the supported range.");
     }
 
 } // namespace

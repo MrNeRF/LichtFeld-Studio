@@ -14,15 +14,20 @@
 #include <core/user_paths.hpp>
 
 #include <algorithm>
+#include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <optional>
 #include <regex>
 #include <sstream>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
 #else
+#include <fcntl.h>
+#include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -38,6 +43,19 @@ namespace lfs::python {
         constexpr size_t MAX_PATH_LEN = 4096;
 #endif
         constexpr const char* PYTORCH_INDEX = "https://download.pytorch.org/whl/";
+
+        bool lock_unless_cancelled(std::unique_lock<std::mutex>& lock, const std::function<bool()>& should_cancel) {
+            if (!should_cancel) {
+                lock.lock();
+                return true;
+            }
+            while (!lock.try_lock()) {
+                if (should_cancel())
+                    return false;
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            }
+            return !should_cancel();
+        }
 
         std::filesystem::path get_executable_dir() {
 #ifdef _WIN32
@@ -56,7 +74,10 @@ namespace lfs::python {
         std::pair<int, std::string> execute_process_capture(
             const std::filesystem::path& program,
             const std::vector<std::string>& args,
-            const std::optional<std::pair<std::string, std::string>>& env_override = std::nullopt) {
+            const std::optional<std::pair<std::string, std::string>>& env_override = std::nullopt,
+            const std::function<bool()>& should_cancel = {}) {
+            if (should_cancel && should_cancel())
+                return {-1, "Package operation cancelled"};
             std::string output;
             int exit_code = -1;
 
@@ -140,22 +161,57 @@ namespace lfs::python {
             std::vector<wchar_t> environment = build_environment_block(env_override);
             void* environment_ptr = environment.empty() ? nullptr : environment.data();
 
+            // Own descendants too: a source distribution may start a build process.
+            HANDLE job = should_cancel ? CreateJobObjectW(nullptr, nullptr) : nullptr;
+            if (should_cancel && !job) {
+                CloseHandle(hReadPipe);
+                CloseHandle(hWritePipe);
+                return {-1, "Failed to create package process job"};
+            }
+
             // Keep lpApplicationName and argv[0] aligned to the same executable path.
             if (!CreateProcessW(lfs::core::native_fs::native_path(program_w).c_str(), cmdline.data(), nullptr, nullptr, TRUE,
-                                CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
+                                CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | (job ? CREATE_SUSPENDED : 0),
                                 environment_ptr, nullptr, &si, &pi)) {
                 CloseHandle(hReadPipe);
                 CloseHandle(hWritePipe);
+                if (job)
+                    CloseHandle(job);
                 return {-1, std::format("Failed to create process ({})", GetLastError())};
             }
 
             CloseHandle(hWritePipe);
 
+            if (job) {
+                if (!AssignProcessToJobObject(job, pi.hProcess) || ResumeThread(pi.hThread) == DWORD(-1)) {
+                    TerminateProcess(pi.hProcess, 1);
+                    WaitForSingleObject(pi.hProcess, INFINITE);
+                    CloseHandle(pi.hThread);
+                    CloseHandle(pi.hProcess);
+                    CloseHandle(hReadPipe);
+                    CloseHandle(job);
+                    return {-1, "Failed to own package process tree"};
+                }
+            }
+
             char buffer[4096];
-            DWORD bytesRead;
-            while (ReadFile(hReadPipe, buffer, sizeof(buffer) - 1, &bytesRead, nullptr) && bytesRead > 0) {
-                buffer[bytesRead] = '\0';
-                output += buffer;
+            bool process_exited = false;
+            for (;;) {
+                if (should_cancel && should_cancel()) {
+                    if (!TerminateJobObject(job, 1))
+                        TerminateProcess(pi.hProcess, 1);
+                    output = "Package operation cancelled";
+                    break;
+                }
+                DWORD available = 0, bytesRead = 0;
+                if (PeekNamedPipe(hReadPipe, nullptr, 0, nullptr, &available, nullptr) && available > 0 &&
+                    ReadFile(hReadPipe, buffer, std::min<DWORD>(available, sizeof(buffer)), &bytesRead, nullptr)) {
+                    output.append(buffer, bytesRead);
+                    continue;
+                }
+                if (process_exited)
+                    break;
+                process_exited = WaitForSingleObject(pi.hProcess, 20) != WAIT_TIMEOUT;
             }
 
             WaitForSingleObject(pi.hProcess, INFINITE);
@@ -167,6 +223,8 @@ namespace lfs::python {
             CloseHandle(pi.hProcess);
             CloseHandle(pi.hThread);
             CloseHandle(hReadPipe);
+            if (job)
+                CloseHandle(job);
 #else
             int pipe_fds[2];
             if (pipe(pipe_fds) != 0) {
@@ -181,6 +239,8 @@ namespace lfs::python {
             }
 
             if (pid == 0) {
+                if (should_cancel)
+                    setpgid(0, 0);
                 dup2(pipe_fds[1], STDOUT_FILENO);
                 dup2(pipe_fds[1], STDERR_FILENO);
                 close(pipe_fds[0]);
@@ -204,18 +264,43 @@ namespace lfs::python {
             }
 
             close(pipe_fds[1]);
+            if (should_cancel)
+                setpgid(pid, pid);
+            if (fcntl(pipe_fds[0], F_SETFL, O_NONBLOCK) == -1) {
+                kill(pid, SIGKILL);
+                waitpid(pid, nullptr, 0);
+                close(pipe_fds[0]);
+                return {-1, "Failed to poll package process output"};
+            }
 
             char buffer[4096];
-            ssize_t bytes_read = 0;
-            while ((bytes_read = read(pipe_fds[0], buffer, sizeof(buffer))) > 0) {
-                output.append(buffer, static_cast<size_t>(bytes_read));
+            int status = 0;
+            bool process_exited = false;
+            for (;;) {
+                if (should_cancel && should_cancel()) {
+                    if (kill(-pid, SIGKILL) != 0)
+                        kill(pid, SIGKILL);
+                    output = "Package operation cancelled";
+                    process_exited = waitpid(pid, &status, 0) == pid;
+                    break;
+                }
+                const auto bytes_read = read(pipe_fds[0], buffer, sizeof(buffer));
+                if (bytes_read > 0) {
+                    output.append(buffer, static_cast<size_t>(bytes_read));
+                    continue;
+                }
+                if (process_exited)
+                    break;
+                const auto waited = waitpid(pid, &status, WNOHANG);
+                if (waited < 0 && errno != EINTR)
+                    break;
+                process_exited = waited == pid;
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
             }
             close(pipe_fds[0]);
-
-            int status = 0;
-            if (waitpid(pid, &status, 0) == pid && WIFEXITED(status)) {
+            if (process_exited && WIFEXITED(status)) {
                 exit_code = WEXITSTATUS(status);
-            } else if (WIFSIGNALED(status)) {
+            } else if (process_exited && WIFSIGNALED(status)) {
                 exit_code = 128 + WTERMSIG(status);
             }
 #endif
@@ -290,8 +375,10 @@ namespace lfs::python {
 #endif
     }
 
-    bool PackageManager::ensure_venv() {
-        std::lock_guard lock(m_mutex);
+    bool PackageManager::ensure_venv(const std::function<bool()>& should_cancel) {
+        std::unique_lock lock(m_mutex, std::defer_lock);
+        if (!lock_unless_cancelled(lock, should_cancel))
+            return false;
 
         if (m_venv_ready && lfs::core::native_fs::exists(venv_python()))
             return true;
@@ -342,10 +429,16 @@ namespace lfs::python {
 
         LOG_INFO("Executing uv venv create for {}", lfs::core::path_to_utf8(m_venv_dir));
         LOG_DEBUG("UV command: {}", detail::format_command_for_log(uv, args));
-        const auto [exit_code, output] = execute_process_capture(uv, args, env_override);
+        const auto [exit_code, output] = execute_process_capture(uv, args, env_override, should_cancel);
 
         if (exit_code != 0) {
             LOG_ERROR("Failed to create venv: {}", output);
+            // This invocation owns the new environment. Do not let a partial
+            // interpreter left by cancellation look ready on the next attempt.
+            std::error_code cleanup_error;
+            lfs::core::native_fs::remove_all(m_venv_dir, cleanup_error);
+            if (cleanup_error)
+                LOG_WARN("Could not remove incomplete Python environment: {}", cleanup_error.message());
             return false;
         }
 
@@ -378,14 +471,14 @@ namespace lfs::python {
 #endif
     }
 
-    InstallResult PackageManager::execute_uv(const std::vector<std::string>& args) const {
+    InstallResult PackageManager::execute_uv(const std::vector<std::string>& args, const std::function<bool()>& should_cancel) const {
         const auto uv = uv_path();
         if (uv.empty())
             return {.error = "uv not found"};
 
         LOG_INFO("Executing uv command with {} args", args.size());
         LOG_DEBUG("UV command: {}", detail::format_command_for_log(uv, args));
-        const auto [exit_code, output] = execute_process_capture(uv, args);
+        const auto [exit_code, output] = execute_process_capture(uv, args, std::nullopt, should_cancel);
 
         InstallResult result;
         result.output = output;
@@ -395,13 +488,15 @@ namespace lfs::python {
         return result;
     }
 
-    InstallResult PackageManager::install(const std::string& package) {
-        if (!ensure_venv())
+    InstallResult PackageManager::install(const std::string& package, const std::function<bool()>& should_cancel) {
+        if (!ensure_venv(should_cancel))
             return {.error = "Failed to create venv"};
 
-        std::lock_guard lock(m_mutex);
+        std::unique_lock lock(m_mutex, std::defer_lock);
+        if (!lock_unless_cancelled(lock, should_cancel))
+            return {.error = "Package operation cancelled"};
         LOG_INFO("Installing {}", package);
-        return execute_uv({"pip", "install", package, "--python", lfs::core::path_to_utf8(venv_python())});
+        return execute_uv({"pip", "install", package, "--python", lfs::core::path_to_utf8(venv_python())}, should_cancel);
     }
 
     InstallResult PackageManager::uninstall(const std::string& package) {
