@@ -436,6 +436,7 @@ namespace lfs::app {
                 }
             } catch (const std::exception& exception) {
                 error = std::format("Invalid auto-tile source camera snapshot: {}", exception.what());
+                LOG_WARN("{}", error);
                 return false;
             }
             if (camera_uids.empty()) {
