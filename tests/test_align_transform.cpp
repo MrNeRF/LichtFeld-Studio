@@ -585,6 +585,11 @@ namespace lfs::vis::op {
             operation_.syncPickedPointsToServices();
         }
 
+        void addPairPoint(const glm::vec3 point) {
+            operation_.picked_points_.push_back(point);
+            operation_.syncPickedPointsToServices();
+        }
+
         void startPairAlignment(RenderingManager& rendering) {
             using core::Device;
             using core::Tensor;
@@ -655,6 +660,30 @@ namespace lfs::vis::op {
         EXPECT_EQ(manager_->getNodeTransform("reference"), moved);
         EXPECT_EQ(manager_->getNodeTransform("mobile"), mobile);
         EXPECT_EQ(undoHistory().undoCount(), 0u);
+    }
+
+    TEST_F(AlignPreviewTest, ExtraPairsParticipateInFitAndCanBeRemovedTogether) {
+        pair_rendering_ = std::make_unique<RenderingManager>();
+        startPairAlignment(*pair_rendering_);
+        ASSERT_FALSE(HasFatalFailure());
+        const auto original = manager_->getNodeTransform("mobile");
+        addPairPoint({0, 0, 3});
+        EXPECT_EQ(action(PointPickState::UiAction::Apply), OperatorResult::RUNNING_MODAL);
+        EXPECT_EQ(manager_->getNodeTransform("mobile"), original);
+
+        addPairPoint({0, 0, 1});
+        action(PointPickState::UiAction::TogglePreview);
+        ASSERT_TRUE(services().getAlignPreviewEnabled());
+        EXPECT_GT(glm::length(glm::vec3(manager_->getNodeTransform("mobile")[0])), 2.1f);
+        action(PointPickState::UiAction::TogglePreview);
+        addPairPoint({2, 2, 0});
+        addPairPoint({1, 1, 0});
+        selectPoint(7);
+        EXPECT_EQ(bound(input::Action::DELETE_SELECTED), OperatorResult::RUNNING_MODAL);
+        EXPECT_EQ(services().alignPointPick().getPickedPoints().size(), 8u);
+        EXPECT_EQ(action(PointPickState::UiAction::Apply), OperatorResult::FINISHED);
+        EXPECT_NEAR(glm::length(glm::vec3(manager_->getNodeTransform("mobile")[0])), 2.0f, 1e-5f);
+        EXPECT_EQ(undoHistory().undoCount(), 1u);
     }
 
     TEST_F(AlignPreviewTest, ExternalMobileEditSupersedesThePreview) {

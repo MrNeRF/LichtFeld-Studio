@@ -202,7 +202,9 @@ namespace lfs::vis::tools {
                 continue;
             const float screen_radius = markerScreenRadius(picked_points[i], panel_proj);
 
-            const bool is_selected = selected_point && *selected_point == static_cast<int>(i);
+            const bool is_selected = selected_point &&
+                                     (pair_divider_x ? *selected_point / 2 == static_cast<int>(i / 2)
+                                                     : *selected_point == static_cast<int>(i));
             overlay.addCircleFilled(screen_pos, screen_radius, color, 32);
             overlay.addCircle(screen_pos, screen_radius,
                               is_selected ? toOverlay(t.palette.primary) : toOverlay(t.overlay.text),

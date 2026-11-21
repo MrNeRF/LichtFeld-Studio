@@ -20,6 +20,7 @@
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <limits>
 
 namespace lfs::vis::op {
 
@@ -70,7 +71,7 @@ namespace lfs::vis::op {
             pair_ = Pair{{reference->uuid, mobile->uuid},
                          {vis::scene_coords::nodeVisualizerWorldTransform(scene, reference->id),
                           vis::scene_coords::nodeVisualizerWorldTransform(scene, mobile->id)}};
-            max_points_ = 6;
+            max_points_ = std::numeric_limits<int>::max();
         }
         return PointPickOperator::invoke(ctx, props);
     }
@@ -83,12 +84,14 @@ namespace lfs::vis::op {
     }
 
     std::optional<glm::mat4> AlignPickPointOperator::computePairPreviewTransform() const {
-        if (picked_points_.size() != 6)
+        if (!hasEnoughAlignmentPairs(picked_points_.size()))
             return std::nullopt;
-        std::array<glm::dvec3, 3> source, target;
-        for (size_t i = 0; i < source.size(); ++i) {
-            target[i] = picked_points_[2 * i];
-            source[i] = picked_points_[2 * i + 1];
+        std::vector<glm::dvec3> source, target;
+        source.reserve(picked_points_.size() / 2);
+        target.reserve(picked_points_.size() / 2);
+        for (size_t i = 0; i < picked_points_.size(); i += 2) {
+            target.emplace_back(picked_points_[i]);
+            source.emplace_back(picked_points_[i + 1]);
         }
         const auto fit = computePairAlignment(source, target, true);
         return fit ? std::optional<glm::mat4>(glm::mat4(*fit)) : std::nullopt;
@@ -268,7 +271,7 @@ namespace lfs::vis::op {
         if (!transform) {
             restorePreview(ctx);
             if (pair_) {
-                setStatus(picked_points_.size() == 6 ? "align.pair_degenerate" : "align.pair_incomplete", 3.0);
+                setStatus(hasEnoughAlignmentPairs(picked_points_.size()) ? "align.pair_degenerate" : "align.pair_incomplete", 3.0);
             }
             return false;
         }
@@ -302,13 +305,22 @@ namespace lfs::vis::op {
         if (pair_) {
             const auto& points = services().alignPointPick().getPickedPoints();
             double squared_error = 0.0;
+            double largest_squared_error = -1.0;
+            size_t largest_error_pair = 1;
             for (size_t i = 0; i < points.size(); i += 2) {
                 const glm::dvec3 delta = glm::dvec3(points[i]) - glm::dvec3(points[i + 1]);
-                squared_error += glm::dot(delta, delta);
+                const double error = glm::dot(delta, delta);
+                squared_error += error;
+                if (error > largest_squared_error) {
+                    largest_squared_error = error;
+                    largest_error_pair = i / 2 + 1;
+                }
             }
+            selected_point_ = static_cast<int>(2 * (largest_error_pair - 1));
+            services().alignPointPick().setSelectedPoint(selected_point_);
             services().alignPointPick().setStatusMessage(
                 LOCF("align.pair_fit", glm::length(glm::dvec3((*transform)[0])),
-                     std::sqrt(squared_error / (points.size() / 2))),
+                     std::sqrt(squared_error / (points.size() / 2)), largest_error_pair),
                 8.0);
         }
         press_active_ = false;

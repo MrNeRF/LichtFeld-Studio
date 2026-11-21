@@ -286,10 +286,8 @@ namespace lfs::vis::op {
                 return OperatorResult::RUNNING_MODAL;
 
             case lfs::vis::input::Action::DELETE_SELECTED:
-                if (!sequentialPoints()) {
-                    beforePointEdit(ctx);
-                    removeSelectedPoint();
-                }
+                beforePointEdit(ctx);
+                removeSelectedPoint();
                 return OperatorResult::RUNNING_MODAL;
 
             default:
@@ -392,7 +390,9 @@ namespace lfs::vis::op {
             state_.clearSelectedPoint();
             return;
         }
-        picked_points_.erase(picked_points_.begin() + idx);
+        const int first = sequentialPoints() ? idx - idx % 2 : idx;
+        const auto last = std::min(picked_points_.size(), static_cast<size_t>(first) + (sequentialPoints() ? 2u : 1u));
+        picked_points_.erase(picked_points_.begin() + first, picked_points_.begin() + last);
         selected_point_.reset();
         if (picked_points_.empty()) {
             pick_panel_.reset();

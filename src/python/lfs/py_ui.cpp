@@ -4626,7 +4626,7 @@ namespace lfs::python {
                 if (scene && rendering) {
                     const auto settings = rendering->getSettings();
                     if (lfs::vis::splitViewUsesPLYComparison(settings.split_view_mode))
-                        return lfs::vis::services().alignPointPick().getPickedPoints().size() == 6 &&
+                        return lfs::vis::op::hasEnoughAlignmentPairs(lfs::vis::services().alignPointPick().getPickedPoints().size()) &&
                                lfs::vis::op::canAlignComparisonPair(scene->getScene(), settings.split_view_offset);
                 }
                 return scene &&

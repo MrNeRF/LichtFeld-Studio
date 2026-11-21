@@ -61,6 +61,10 @@ namespace lfs::vis::op {
     void registerAlignOperators();
     void unregisterAlignOperators();
 
+    [[nodiscard]] constexpr bool hasEnoughAlignmentPairs(const size_t point_count) {
+        return point_count >= 6 && point_count % 2 == 0;
+    }
+
     [[nodiscard]] LFS_VIS_API bool canAlignComparisonPair(const core::Scene& scene, size_t offset);
 
     // Shared by apply path and overlay preview. Returns true if normal was snapped.

@@ -284,7 +284,7 @@ namespace lfs::vis::tools {
             const bool preview = services().getAlignPreviewEnabled();
             const auto hint = preview
                                   ? LOC("align.pair_preview")
-                              : count >= 6
+                              : op::hasEnoughAlignmentPairs(count)
                                   ? LOC("align.pair_apply")
                               : count % 2 == 0
                                   ? LOC("align.pair_reference")
@@ -293,8 +293,12 @@ namespace lfs::vis::tools {
             const auto help = !preview && count && !remove_key.empty()
                                   ? LOCF("align.pair_remove", remove_key)
                                   : std::string{};
+            const auto delete_key = pointPickShortcut(input::Action::DELETE_SELECTED);
+            const auto edit_help = !preview && selected_point && !delete_key.empty()
+                                       ? LOCF("align.pair_delete", delete_key)
+                                       : help;
             drawPointPickHud(*overlay, panel_proj, hint, LOCF("align.pair_progress", count / 2),
-                             services().alignPointPick().getStatusMessage(), help);
+                             services().alignPointPick().getStatusMessage(), edit_help);
             return;
         }
         const bool in_review = picked_points.size() == 3;
