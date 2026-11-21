@@ -1602,8 +1602,9 @@ namespace lfs::io {
             }
 
             auto rgb_key = make_cache_key(request.path, request.params);
-            if (request.fill_masked_rgb &&
-                (request.mask_path || request.rgb_mask || request.extract_alpha_as_mask)) {
+            const bool fills_rgb = request.fill_masked_rgb &&
+                                   (request.mask_path || request.rgb_mask || request.extract_alpha_as_mask);
+            if (fills_rgb) {
                 const auto& policy = request.extract_alpha_as_mask
                                          ? request.alpha_mask_params
                                          : request.mask_params;
@@ -1631,9 +1632,41 @@ namespace lfs::io {
                 result.needs_processing = true;
                 result.alpha_as_mask = request.extract_alpha_as_mask;
                 result.alpha_mask_params = request.alpha_mask_params;
+                result.fill_masked_rgb = fills_rgb;
                 result.undistort = request.undistort;
-                if (!request.extract_alpha_as_mask && !config_.use_16bit_color &&
-                    !request.params.undistort && !request.undistort) {
+                std::shared_ptr<std::promise<lfs::core::Tensor>> mask_source;
+                if (fills_rgb) {
+                    // The worker fills the decoded source as the CUDA cold path does, then
+                    // publishes the prepared RGB (and alpha) under the mask-keyed RGB key.
+                    result.cache_key = rgb_key;
+                    result.mask_keep_high_band = request.mask_keep_high_band;
+                    result.alpha_is_transparency = request.alpha_is_transparency;
+                    if (!request.extract_alpha_as_mask) {
+                        result.rgb_mask_path = request.mask_path && is_regular_file_no_throw(*request.mask_path)
+                                                   ? request.mask_path
+                                                   : std::nullopt;
+                        result.rgb_mask = request.rgb_mask;
+                        result.mask_params = request.mask_params;
+                    }
+                    result.caches_filled_rgb = caches_portable_filled_rgb(request.params);
+                    if (result.caches_filled_rgb) {
+                        result.jpeg_data = load_cached_jpeg_blob(rgb_key);
+                        if (result.jpeg_data && result.alpha_as_mask) {
+                            result.alpha_data = load_cached_jpeg_blob(portable_alpha_cache_key(
+                                request.path, request.params, request.alpha_is_transparency));
+                            if (!result.alpha_data)
+                                result.jpeg_data.reset();
+                        }
+                        result.is_cache_hit = result.jpeg_data != nullptr;
+                    }
+                    // A cold RGB refills its output grid with the sidecar's prepared mask,
+                    // so the sidecar goes first for a single worker.
+                    if (!result.is_cache_hit && result.rgb_mask_path && !result.rgb_mask) {
+                        mask_source = std::make_shared<std::promise<lfs::core::Tensor>>();
+                        result.rgb_mask_source = mask_source->get_future().share();
+                    }
+                } else if (!request.extract_alpha_as_mask && !config_.use_16bit_color &&
+                           !request.params.undistort && !request.undistort) {
                     try {
                         result.cache_key = make_cache_key(request.path, request.params);
                         if (!request.params.skip_blob_cache)
@@ -1657,10 +1690,9 @@ namespace lfs::io {
                         continue;
                     }
                 }
-                cold_queue_.push(std::move(result));
                 {
                     std::lock_guard<std::mutex> lock(stats_mutex_);
-                    ++stats_.cold_path_misses;
+                    ++(result.is_cache_hit ? stats_.hot_path_hits : stats_.cold_path_misses);
                 }
                 if (request.mask_path && !request.extract_alpha_as_mask) {
                     if (!is_regular_file_no_throw(*request.mask_path)) {
@@ -1678,11 +1710,13 @@ namespace lfs::io {
                         mask_result.needs_processing = true;
                         mask_result.mask_params = request.mask_params;
                         mask_result.undistort = request.undistort;
+                        mask_result.mask_source_promise = std::move(mask_source);
                         cold_queue_.push(std::move(mask_result));
                         std::lock_guard<std::mutex> lock(stats_mutex_);
                         ++stats_.mask_cache_misses;
                     }
                 }
+                cold_queue_.push(std::move(result));
                 enqueue_depth_request();
                 enqueue_normal_request();
                 continue;

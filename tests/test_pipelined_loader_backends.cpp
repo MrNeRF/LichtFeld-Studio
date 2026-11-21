@@ -1050,6 +1050,67 @@ namespace {
         EXPECT_EQ(loader.get_stats().hot_path_hits, 0u);
     }
 
+    TEST_P(PipelinedLoaderBackends, MaskedRgbIsFilledOnTheHostAndCachedWithItsMask) {
+        if (GetParam() == GpuBackend::CUDA)
+            GTEST_SKIP() << "Portable fill and cache; CUDA fills on the device";
+        const GpuBackendScope scope(GetParam());
+        const auto mask = Tensor::from_blob(mask_.data(), {HEIGHT, WIDTH}, Device::CPU, DataType::UInt8).clone();
+        enum class Source { Memory,
+                            Sidecar,
+                            Alpha };
+        for (const auto source : {Source::Memory, Source::Sidecar, Source::Alpha}) {
+            SCOPED_TRACE(static_cast<int>(source));
+            const bool alpha = source == Source::Alpha;
+            auto masked = request(alpha ? "rgba.png" : "rgb8.png");
+            if (source == Source::Memory)
+                masked.rgb_mask = mask;
+            else if (source == Source::Sidecar)
+                masked.mask_path = path("mask.png");
+            masked.extract_alpha_as_mask = alpha;
+            masked.mask_params.threshold = masked.alpha_mask_params.threshold = 0.5f;
+            // On the source grid, the loader returns exactly the host fill of the decoded pixels.
+            const int channels = alpha ? 4 : 3;
+            auto filled = alpha ? rgba_ : rgb8_;
+            lfs::io::fill_masked_image_host(filled.data(), WIDTH, HEIGHT, channels, false,
+                                            {.mask = mask, .alpha = alpha, .threshold = 0.5f});
+            std::vector<uint8_t> rgb(size_t(WIDTH) * HEIGHT * 3);
+            for (size_t i = 0; i < size_t(WIDTH) * HEIGHT; ++i)
+                std::copy_n(&filled[i * channels], 3, &rgb[i * 3]);
+
+            PipelinedLoaderConfig config;
+            config.min_spill_free_bytes = 0; // spill regardless of free space in the temp dir
+            config.backend = GetParam();
+            config.io_threads = 1;
+            config.cold_process_threads = 1;
+            PipelinedImageLoader loader(config);
+            std::vector<float> first_mask;
+            for (size_t visit = 0; visit < 3; ++visit) {
+                SCOPED_TRACE(visit);
+                if (visit == 2)
+                    ASSERT_GT(loader.release_host_cache(std::numeric_limits<size_t>::max()), 0u);
+                masked.sequence_id = visit;
+                loader.prefetch({masked});
+                auto ready = loader.get();
+                ASSERT_TRUE(ready.error.empty()) << ready.error;
+                if (visit == 0)
+                    expect_close(ready.tensor, host(planar(rgb, 3, UINT8_SCALE), {3, HEIGHT, WIDTH}), 0.0f);
+                EXPECT_EQ(ready.tensor.shape(), (TensorShape{3, HEIGHT, WIDTH}));
+                if (source != Source::Memory) {
+                    ASSERT_TRUE(ready.mask);
+                    const auto values = ready.mask->cpu().to_vector();
+                    if (visit == 0)
+                        first_mask = values;
+                    EXPECT_EQ(values, first_mask) << "the alpha cache is lossless";
+                }
+                const auto stats = loader.get_stats();
+                EXPECT_EQ(stats.cold_path_misses, 1u);
+                EXPECT_EQ(stats.hot_path_hits, visit);
+                if (visit == 0)
+                    EXPECT_EQ(stats.jpeg_cache_entries, alpha ? 2u : 1u);
+            }
+        }
+    }
+
     TEST_P(PipelinedLoaderBackends, PreparedCachesConcurrentWarmConsumersOwnIndependentImages) {
         if (GetParam() == GpuBackend::CUDA)
             GTEST_SKIP();

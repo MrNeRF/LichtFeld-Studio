@@ -269,6 +269,8 @@ add_library(lfs_io STATIC
 )
 target_sources(lfs_io PRIVATE splat_decimate.cpp)
 target_sources(lfs_io PRIVATE
+    masked_image_fill.hpp
+    masked_image_fill_host.cpp
     pipelined_image_loader.cpp
     pipelined_image_loader_portable.cpp)
 if(LFS_HAS_CUDA)

@@ -330,6 +330,10 @@ namespace lfs::io {
             // is queued first so a single cold worker can satisfy the future.
             std::shared_ptr<std::promise<lfs::core::Tensor>> mask_source_promise;
             std::shared_future<lfs::core::Tensor> rgb_mask_source;
+            // Portable masked RGB: the prepared image, and an alpha mask's alpha, are
+            // cached under cache_key. On a hit, jpeg_data and alpha_data hold them.
+            bool caches_filled_rgb = false;
+            std::shared_ptr<std::vector<uint8_t>> alpha_data;
             const lfs::core::UndistortParams* undistort = nullptr;
         };
 
@@ -477,6 +481,15 @@ namespace lfs::io {
                                            size_t max_output_bytes = PORTABLE_CACHE_MAX_BYTES, bool lossless = false);
         void warn_portable_cache_failure(std::string_view message);
         bool uses_portable_prepared_cache(const LoadParams& params) const;
+        // Masked RGB filled on the host, and the alpha that selected its kept pixels.
+        bool caches_portable_filled_rgb(const LoadParams& params) const;
+        std::string portable_alpha_cache_key(const std::filesystem::path& path, const LoadParams& params,
+                                             bool alpha_is_transparency) const;
+        void cache_portable_filled_rgb(const std::string& key, const lfs::core::Tensor& image, const LoadParams& params);
+        lfs::core::Tensor decode_portable_filled_rgb(const std::vector<uint8_t>& bytes, const LoadParams& params,
+                                                     lfs::core::TensorUpload& upload);
+        lfs::core::Tensor decode_portable_alpha(const std::vector<uint8_t>& bytes, size_t width, size_t height,
+                                                lfs::core::TensorUpload& upload);
 
         std::string make_cache_key(const std::filesystem::path& path, const LoadParams& params) const;
         bool decodes_16bit(const LoadParams& params) const { return config_.use_16bit_color || params.decode_16bit; }

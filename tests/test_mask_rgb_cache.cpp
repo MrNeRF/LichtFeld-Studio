@@ -100,9 +100,6 @@ TEST_F(MaskRgbCache, ImmediateLoaderUndistortsDecodedPixelsOnTheDestinationGrid)
 }
 
 TEST_F(MaskRgbCache, IgnoredSourceColorsCannotChangeColdHotOrSpilledTargets) {
-    // The portable loaders neither fill masked RGB nor keep filled images in a host cache.
-    if (default_gpu_backend() != GpuBackend::CUDA)
-        GTEST_SKIP() << "Masked RGB fill runs in the CUDA image loader only";
     check_memory_precedence();
     check_memory_revision_cache();
     for (const bool alpha : {false, true}) {
