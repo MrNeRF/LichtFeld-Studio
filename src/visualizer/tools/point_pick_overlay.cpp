@@ -193,10 +193,13 @@ namespace lfs::vis::tools {
 
     void drawPointMarkers(lfs::rendering::ScreenOverlayRenderer& overlay, const PanelProjection& panel_proj,
                           const std::vector<glm::vec3>& picked_points, std::optional<int> selected_point,
-                          const lfs::rendering::OverlayColor& color, float label_size) {
+                          const lfs::rendering::OverlayColor& color, float label_size,
+                          std::optional<float> pair_divider_x) {
         const auto& t = theme();
         for (size_t i = 0; i < picked_points.size(); ++i) {
             const glm::vec2 screen_pos = projectToScreen(panel_proj, picked_points[i]);
+            if (pair_divider_x && (screen_pos.x >= *pair_divider_x) != (i % 2 != 0))
+                continue;
             const float screen_radius = markerScreenRadius(picked_points[i], panel_proj);
 
             const bool is_selected = selected_point && *selected_point == static_cast<int>(i);
@@ -205,7 +208,7 @@ namespace lfs::vis::tools {
                               is_selected ? toOverlay(t.palette.primary) : toOverlay(t.overlay.text),
                               32, is_selected ? 2.5f : 1.5f);
 
-            const char label[2] = {static_cast<char>('1' + static_cast<char>(i)), '\0'};
+            const auto label = std::to_string((pair_divider_x ? i / 2 : i) + 1);
             overlay.addText({screen_pos.x - 4.0f, screen_pos.y - 6.0f},
                             label, toOverlay(t.overlay.text), label_size);
         }

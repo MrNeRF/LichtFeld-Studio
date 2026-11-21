@@ -10,6 +10,7 @@
 #include "operation/undo_history.hpp"
 #include "operator/operator_registry.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "rendering/viewport_request_builder.hpp"
 #include "scene/scene_manager.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer_impl.hpp"
@@ -36,9 +37,76 @@ namespace lfs::vis::op {
     AlignPickPointOperator::AlignPickPointOperator()
         : PointPickOperator(services().alignPointPick(), 3, lichtfeld::Strings::Align::STATUS_NO_SURFACE) {}
 
+    namespace {
+        std::array<const core::SceneNode*, 2> comparisonPair(const OperatorContext& ctx) {
+            auto* rm = services().renderingOrNull();
+            if (!rm)
+                return {};
+            const auto settings = rm->getSettings();
+            if (!splitViewUsesPLYComparison(settings.split_view_mode))
+                return {};
+            const auto& scene = ctx.scene().getScene();
+            const auto left = resolvePlyComparisonDepthSample(scene, settings.split_view_offset, SplitViewPanelId::Left);
+            const auto right = resolvePlyComparisonDepthSample(scene, settings.split_view_offset, SplitViewPanelId::Right);
+            if (!left.model || !right.model)
+                return {};
+            for (auto* node = left.node; node && node->parent_id != core::NULL_NODE;) {
+                node = scene.getNodeById(node->parent_id);
+                if (node == right.node)
+                    return {};
+            }
+            return {left.node, right.node};
+        }
+    } // namespace
+
+    OperatorResult AlignPickPointOperator::invoke(OperatorContext& ctx, OperatorProperties& props) {
+        pair_.reset();
+        max_points_ = 3;
+        const auto [reference, mobile] = comparisonPair(ctx);
+        if (reference && mobile && !ctx.scene().getScene().isNodeEffectivelyLocked(mobile->id)) {
+            pair_ = std::array{reference->uuid, mobile->uuid};
+            max_points_ = 6;
+        }
+        return PointPickOperator::invoke(ctx, props);
+    }
+
+    bool AlignPickPointOperator::acceptsPointSample(const PointSample& sample, std::optional<int> index) const {
+        if (!pair_)
+            return true;
+        const bool right = index.value_or(static_cast<int>(picked_points_.size())) % 2 != 0;
+        return sample.panel == (right ? SplitViewPanelId::Right : SplitViewPanelId::Left);
+    }
+
+    std::optional<glm::mat4> AlignPickPointOperator::computePairPreviewTransform() const {
+        if (picked_points_.size() != 6)
+            return std::nullopt;
+        std::array<glm::dvec3, 3> source, target;
+        for (size_t i = 0; i < source.size(); ++i) {
+            target[i] = picked_points_[2 * i];
+            source[i] = picked_points_[2 * i + 1];
+        }
+        const auto fit = computePairAlignment(source, target, true);
+        return fit ? std::optional<glm::mat4>(glm::mat4(*fit)) : std::nullopt;
+    }
+
     std::optional<OperatorResult> AlignPickPointOperator::prepareModal(OperatorContext& ctx) {
+        if (pair_) {
+            const auto [reference, mobile] = comparisonPair(ctx);
+            if (!reference || !mobile || ctx.scene().getScene().isNodeEffectivelyLocked(mobile->id) ||
+                reference->uuid != (*pair_)[0] || mobile->uuid != (*pair_)[1]) {
+                restorePreview(ctx);
+                clearAllPoints();
+                return OperatorResult::CANCELLED;
+            }
+        }
+        const auto* rm = services().renderingOrNull();
+        if (!pair_ && rm && splitViewUsesPLYComparison(rm->getSettings().split_view_mode)) {
+            restorePreview(ctx);
+            clearAllPoints();
+            return OperatorResult::CANCELLED;
+        }
         if (!preview_targets_.empty()) {
-            const auto targets = resolvePointPickTargets(ctx, true);
+            const auto targets = pair_ ? std::vector{comparisonPair(ctx)[1]->id} : resolvePointPickTargets(ctx, true);
             if (targets.size() != preview_targets_.size() ||
                 std::any_of(preview_targets_.begin(), preview_targets_.end(), [&](const auto& saved) {
                     const auto* node = ctx.scene().getScene().getNodeById(saved.id);
@@ -69,7 +137,7 @@ namespace lfs::vis::op {
     }
 
     bool AlignPickPointOperator::applyPickedPoints(OperatorContext& ctx, float /*value*/) {
-        return picked_points_.size() == 3 && pointsAreNonDegenerate(picked_points_) && applyAlignment(ctx);
+        return applyAlignment(ctx);
     }
 
     void AlignPickPointOperator::handleToolUiAction(OperatorContext& ctx, const PointPickState::UiAction action) {
@@ -86,7 +154,7 @@ namespace lfs::vis::op {
     OperatorResult AlignPickPointOperator::handleToolAction(OperatorContext& ctx, const input::Action action) {
         if (action != input::Action::APPLY_ALIGNMENT)
             return OperatorResult::PASS_THROUGH;
-        if (picked_points_.size() == 3 && applyAlignment(ctx)) {
+        if (applyPickedPoints(ctx, 0.0f)) {
             clearAllPoints();
             return OperatorResult::FINISHED;
         }
@@ -95,7 +163,11 @@ namespace lfs::vis::op {
 
     bool AlignPickPointOperator::poll(const OperatorContext& ctx,
                                       const OperatorProperties* /*props*/) const {
-        return !resolvePointPickTargets(ctx, true).empty();
+        const auto [reference, mobile] = comparisonPair(ctx);
+        const auto* rm = services().renderingOrNull();
+        return rm && splitViewUsesPLYComparison(rm->getSettings().split_view_mode)
+                   ? reference && mobile && !ctx.scene().getScene().isNodeEffectivelyLocked(mobile->id)
+                   : !resolvePointPickTargets(ctx, true).empty();
     }
 
     glm::vec3 AlignPickPointOperator::resolvePickPanelCameraPosition() const {
@@ -138,12 +210,17 @@ namespace lfs::vis::op {
     }
 
     bool AlignPickPointOperator::updatePreview(OperatorContext& ctx) {
-        if (!pointsAreNonDegenerate(picked_points_)) {
+        if (!pair_ && !pointsAreNonDegenerate(picked_points_)) {
             return false;
         }
         auto& scene = ctx.scene().getScene();
         if (preview_targets_.empty()) {
-            for (const auto id : resolvePointPickTargets(ctx, true)) {
+            const auto [reference, mobile] = comparisonPair(ctx);
+            if (pair_ && (!reference || !mobile || reference->uuid != (*pair_)[0] ||
+                          mobile->uuid != (*pair_)[1] || scene.isNodeEffectivelyLocked(mobile->id)))
+                return false;
+            const auto targets = pair_ ? std::vector{mobile->id} : resolvePointPickTargets(ctx, true);
+            for (const auto id : targets) {
                 const auto* node = scene.getNodeById(id);
                 preview_targets_.push_back({id, node->uuid, node->transform(),
                                             vis::scene_coords::nodeVisualizerWorldTransform(scene, id)});
@@ -155,14 +232,21 @@ namespace lfs::vis::op {
             preview_snap_world_ = resolveAlignSnapTargetWorld(ctx.scene());
             preview_camera_ = services().getAlignCameraPosition();
         }
-        AlignTransformInputs inputs{picked_points_[0], picked_points_[1], picked_points_[2], preview_camera_, std::nullopt, false};
-        if (services().getAlignAxisSnapEnabled()) {
-            inputs.snap_node_world = preview_snap_world_;
-        }
-        inputs.edge_to_world_x = services().getAlignEdgeToAxisEnabled();
-        const auto transform = computeAlignTransform(inputs);
+        const auto transform = [&]() -> std::optional<glm::mat4> {
+            if (pair_)
+                return computePairPreviewTransform();
+            AlignTransformInputs inputs{picked_points_[0], picked_points_[1], picked_points_[2], preview_camera_, std::nullopt, false};
+            if (services().getAlignAxisSnapEnabled()) {
+                inputs.snap_node_world = preview_snap_world_;
+            }
+            inputs.edge_to_world_x = services().getAlignEdgeToAxisEnabled();
+            return computeAlignTransform(inputs);
+        }();
         if (!transform) {
             restorePreview(ctx);
+            if (pair_) {
+                setStatus(picked_points_.size() == 6 ? "align.pair_degenerate" : "align.pair_incomplete", 3.0);
+            }
             return false;
         }
         for (const auto& saved : preview_targets_) {
@@ -177,11 +261,14 @@ namespace lfs::vis::op {
                 restorePreview(ctx);
                 return false;
             }
-            ctx.scene().setNodeTransform(node->name, *local);
+            if (!ctx.scene().setNodeTransform(node->name, *local)) {
+                restorePreview(ctx);
+                return false;
+            }
         }
         auto displayed_points = picked_points_;
-        for (auto& point : displayed_points) {
-            point = glm::vec3(*transform * glm::vec4(point, 1.0f));
+        for (size_t i = pair_ ? 1 : 0; i < displayed_points.size(); i += pair_ ? 2 : 1) {
+            displayed_points[i] = glm::vec3(*transform * glm::vec4(displayed_points[i], 1.0f));
         }
         services().alignPointPick().setPickedPoints(std::move(displayed_points));
         services().setAlignPreviewEnabled(true);
@@ -204,7 +291,7 @@ namespace lfs::vis::op {
         std::vector<std::string> names;
         for (const auto& saved : preview_targets_) {
             const auto* node = scene.getNodeById(saved.id);
-            if (!node || node->uuid != saved.uuid || node->locked) {
+            if (!node || node->uuid != saved.uuid || scene.isNodeEffectivelyLocked(saved.id)) {
                 restorePreview(ctx);
                 return false;
             }
@@ -342,7 +429,7 @@ namespace lfs::vis::op {
                     if (std::abs(symmetric[q][p]) <= 1e-14)
                         continue;
                     const double angle = 0.5 * std::atan2(
-                        2.0 * symmetric[q][p], symmetric[p][p] - symmetric[q][q]);
+                                                   2.0 * symmetric[q][p], symmetric[p][p] - symmetric[q][q]);
                     glm::dmat4 jacobi(1.0);
                     jacobi[p][p] = jacobi[q][q] = std::cos(angle);
                     jacobi[p][q] = std::sin(angle);

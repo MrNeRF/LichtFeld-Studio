@@ -20,16 +20,20 @@ namespace lfs::vis::op {
 
     protected:
         PointPickOperator(PointPickState& state, size_t max_points, const char* no_surface_key)
-            : state_(state), max_points_(max_points), no_surface_key_(no_surface_key) {}
+            : max_points_(max_points), state_(state), no_surface_key_(no_surface_key) {}
 
         virtual std::optional<OperatorResult> prepareModal(OperatorContext&) { return std::nullopt; }
         virtual bool pointEditingBlocked() const { return false; }
         virtual void beforePointEdit(OperatorContext&) {}
         virtual void pointSampleApplied() {}
+        struct PointSample;
+        virtual bool acceptsPointSample(const PointSample&, std::optional<int>) const { return true; }
+        virtual bool sequentialPoints() const { return false; }
         virtual bool applyPickedPoints(OperatorContext& ctx, float value) = 0;
         virtual void handleToolUiAction(OperatorContext&, PointPickState::UiAction) {}
         virtual OperatorResult handleToolAction(OperatorContext&, input::Action) { return OperatorResult::PASS_THROUGH; }
 
+        size_t max_points_;
         std::vector<glm::vec3> picked_points_;
         int pick_button_ = 0;
         bool press_active_ = false;
@@ -53,7 +57,7 @@ namespace lfs::vis::op {
         void resolvePendingPoint();
         [[nodiscard]] bool requestPoint(const PendingPick& pick);
         [[nodiscard]] bool applyPointSample(const PointSample& sample, std::optional<int> index);
-        [[nodiscard]] PointSample sampleScreenPoint(glm::dvec2 position) const;
+        [[nodiscard]] PointSample sampleScreenPoint(const PendingPick& pick) const;
         [[nodiscard]] std::optional<int> hitTestPoint(double x, double y) const;
         void syncPickedPointsToServices();
         void removeLastPoint();
@@ -66,7 +70,7 @@ namespace lfs::vis::op {
         OperatorResult handlePendingUiAction(OperatorContext& ctx);
         void markOverlayDirty() const;
         PointPickState& state_;
-        size_t max_points_;
+
         const char* no_surface_key_;
     };
 

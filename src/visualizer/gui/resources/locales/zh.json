@@ -3212,6 +3212,13 @@
     "training_session_not_ready": "训练会话尚未准备好恢复。"
   },
   "align": {
+    "pair_entry": "{0}：比较两个溅射模型，对齐对应的点。",
+    "pair_preview": "点击“应用”以保留对齐结果。{0}：恢复原始位置。",
+    "pair_incomplete": "请选择三对对应点。",
+    "pair_degenerate": "请选择彼此相距更远且不在同一直线上的点。",
+    "pair_reference": "在左侧高斯模型（参考）上选择一个特征点。",
+    "pair_mobile": "在右侧高斯模型（待移动）上选择同一特征点。",
+    "pair_apply": "{0}：对齐右侧高斯模型。",
     "preview": "预览对齐",
     "hint_preview": "预览：切换对齐选项以比较效果。关闭预览后可编辑点。应用：保留结果。{0}：恢复原始状态。",
     "click_1st": "点击第 1 个点",

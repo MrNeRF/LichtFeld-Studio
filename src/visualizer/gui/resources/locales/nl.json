@@ -3212,6 +3212,13 @@
     "training_session_not_ready": "De trainingssessie is nog niet klaar om te hervatten."
   },
   "align": {
+    "pair_entry": "{0}: vergelijk twee splats om overeenkomende punten uit te lijnen.",
+    "pair_preview": "Pas toe om de uitlijning te behouden. {0}: herstel de oorspronkelijke positie.",
+    "pair_incomplete": "Kies drie paren overeenkomstige punten.",
+    "pair_degenerate": "Kies punten die verder uit elkaar liggen en niet op één rechte lijn liggen.",
+    "pair_reference": "Kies een detail op de linker splat, die als referentie dient.",
+    "pair_mobile": "Kies hetzelfde detail op de rechter splat, die wordt verplaatst.",
+    "pair_apply": "{0}: rechter splat uitlijnen.",
     "preview": "Uitlijning vooraf bekijken",
     "hint_preview": "Voorbeeld: wissel de uitlijningsopties om te vergelijken. Schakel het voorbeeld uit om punten te bewerken. Toepassen: resultaat behouden. {0}: origineel herstellen.",
     "click_1st": "Klik 1e punt",

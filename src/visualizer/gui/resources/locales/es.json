@@ -3212,6 +3212,13 @@
     "training_session_not_ready": "La sesión de entrenamiento no está lista para reanudarse."
   },
   "align": {
+    "pair_entry": "{0}: compara dos splats para alinear los puntos correspondientes.",
+    "pair_preview": "Aplica para conservar la alineación. {0}: restaura la posición original.",
+    "pair_incomplete": "Elige tres pares de puntos correspondientes.",
+    "pair_degenerate": "Elige puntos más separados que no estén en una misma recta.",
+    "pair_reference": "Elige un detalle en el splat izquierdo, que sirve de referencia.",
+    "pair_mobile": "Elige el mismo detalle en el splat derecho, que se moverá.",
+    "pair_apply": "{0}: alinear el splat derecho.",
     "preview": "Vista previa de alineación",
     "hint_preview": "Vista previa: cambia las opciones para comparar. Desactiva la vista previa para editar puntos. Aplicar: conservar el resultado. {0}: restaurar el original.",
     "click_1st": "Clic en el 1.er punto",

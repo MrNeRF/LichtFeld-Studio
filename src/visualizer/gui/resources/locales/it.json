@@ -3225,6 +3225,13 @@
     "training_session_not_ready": "La sessione di training non è pronta per essere ripresa."
   },
   "align": {
+    "pair_entry": "{0}: confronta due splat per allineare i punti corrispondenti.",
+    "pair_preview": "Applica per mantenere l’allineamento. {0}: ripristina la posizione originale.",
+    "pair_incomplete": "Scegli tre coppie di punti corrispondenti.",
+    "pair_degenerate": "Scegli punti più distanti tra loro che non siano sulla stessa retta.",
+    "pair_reference": "Scegli un dettaglio sullo splat a sinistra, che resta fermo.",
+    "pair_mobile": "Scegli lo stesso dettaglio sullo splat a destra, che verrà spostato.",
+    "pair_apply": "{0}: allinea lo splat a destra.",
     "preview": "Anteprima allineamento",
     "hint_preview": "Anteprima: cambia le opzioni per confrontare. Disattiva l’anteprima per modificare i punti. Applica: mantieni il risultato. {0}: ripristina l’originale.",
     "click_1st": "Clicca il 1° punto",

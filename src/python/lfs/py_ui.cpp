@@ -4617,6 +4617,9 @@ namespace lfs::python {
             "can_apply_align",
             []() -> bool {
                 const auto* scene = lfs::vis::services().sceneOrNull();
+                const auto* rendering = lfs::vis::services().renderingOrNull();
+                if (scene && rendering && lfs::vis::splitViewUsesPLYComparison(rendering->getSettings().split_view_mode))
+                    return lfs::vis::services().alignPointPick().getPickedPoints().size() == 6;
                 return scene &&
                        lfs::vis::op::pointsAreNonDegenerate(lfs::vis::services().alignPointPick().getPickedPoints()) &&
                        lfs::vis::op::resolveAlignSnapTargetWorld(*scene).has_value();

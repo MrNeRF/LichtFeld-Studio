@@ -3212,6 +3212,13 @@
     "training_session_not_ready": "Sesja treningowa nie jest gotowa do wznowienia."
   },
   "align": {
+    "pair_entry": "{0}: porównaj dwa splaty, aby wyrównać odpowiadające sobie punkty.",
+    "pair_preview": "Zastosuj, aby zachować wyrównanie. {0}: przywróć pierwotne położenie.",
+    "pair_incomplete": "Wybierz trzy pary odpowiadających sobie punktów.",
+    "pair_degenerate": "Wybierz punkty położone dalej od siebie, które nie leżą na jednej prostej.",
+    "pair_reference": "Wybierz detal na lewym splacie, który jest odniesieniem.",
+    "pair_mobile": "Wybierz ten sam detal na prawym splacie, który zostanie przesunięty.",
+    "pair_apply": "{0}: wyrównaj prawy splat.",
     "preview": "Podgląd wyrównania",
     "hint_preview": "Podgląd: przełączaj opcje wyrównania, aby porównać wyniki. Wyłącz podgląd, aby edytować punkty. Zastosuj: zachowaj wynik. {0}: przywróć oryginał.",
     "click_1st": "Kliknij 1. punkt",

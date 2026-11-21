@@ -118,10 +118,10 @@ namespace lfs::vis::op {
     }
 
     OperatorResult PointPickOperator::modal(OperatorContext& ctx, OperatorProperties& /*props*/) {
-        resolvePendingPoint();
         if (const auto result = prepareModal(ctx)) {
             return *result;
         }
+        resolvePendingPoint();
 
         OperatorResult ui_result = OperatorResult::RUNNING_MODAL;
         if (state_.hasUiAction()) {
@@ -169,7 +169,8 @@ namespace lfs::vis::op {
 
             if (drag_active_ && press_point_index_ &&
                 static_cast<size_t>(*press_point_index_) < picked_points_.size()) {
-                (void)requestPoint({mm->position, press_point_index_});
+                if (!sequentialPoints())
+                    (void)requestPoint({mm->position, press_point_index_});
                 return OperatorResult::RUNNING_MODAL;
             }
             return OperatorResult::PASS_THROUGH;
@@ -285,8 +286,10 @@ namespace lfs::vis::op {
                 return OperatorResult::RUNNING_MODAL;
 
             case lfs::vis::input::Action::DELETE_SELECTED:
-                beforePointEdit(ctx);
-                removeSelectedPoint();
+                if (!sequentialPoints()) {
+                    beforePointEdit(ctx);
+                    removeSelectedPoint();
+                }
                 return OperatorResult::RUNNING_MODAL;
 
             default:
@@ -411,20 +414,21 @@ namespace lfs::vis::op {
 
     bool PointPickOperator::requestPoint(const PendingPick& pick) {
         pending_pick_.reset();
-        const auto sample = sampleScreenPoint(pick.screen_position);
+        const auto sample = sampleScreenPoint(pick);
         if (sample.pending) {
             pending_pick_ = pick;
             return false;
         }
         if (!Viewport::isValidWorldPosition(sample.world)) {
-            setStatus(no_surface_key_);
+            if (acceptsPointSample(sample, pick.point_index))
+                setStatus(no_surface_key_);
             return false;
         }
         return applyPointSample(sample, pick.point_index);
     }
 
     bool PointPickOperator::applyPointSample(const PointSample& sample, std::optional<int> index) {
-        if (!Viewport::isValidWorldPosition(sample.world))
+        if (!Viewport::isValidWorldPosition(sample.world) || !acceptsPointSample(sample, index))
             return false;
         if (index) {
             if (*index < 0 || static_cast<size_t>(*index) >= picked_points_.size())
@@ -482,7 +486,14 @@ namespace lfs::vis::op {
         std::optional<int> best;
         float best_dist = std::numeric_limits<float>::max();
 
+        const auto comparison_panel = x >= panel_info->x +
+                                                  splitViewDividerPixel(static_cast<int>(panel_info->width), render_settings.split_position)
+                                          ? SplitViewPanelId::Right
+                                          : SplitViewPanelId::Left;
         for (size_t i = 0; i < picked_points_.size(); ++i) {
+            if (sequentialPoints() &&
+                !acceptsPointSample({.panel = comparison_panel}, static_cast<int>(i)))
+                continue;
             const auto projected = lfs::rendering::projectWorldPoint(
                 projection_viewport.camera.R,
                 projection_viewport.camera.t,
@@ -517,13 +528,14 @@ namespace lfs::vis::op {
         return best;
     }
 
-    PointPickOperator::PointSample PointPickOperator::sampleScreenPoint(const glm::dvec2 position) const {
+    PointPickOperator::PointSample PointPickOperator::sampleScreenPoint(const PendingPick& pick) const {
         auto* rm = services().renderingOrNull();
         auto* gm = services().guiOrNull();
         if (!rm || !gm || !gm->getViewer()) {
             return {};
         }
 
+        const auto position = pick.screen_position;
         const auto viewport_pos = gm->getViewportPos();
         const auto viewport_size = gm->getViewportSize();
 
@@ -549,11 +561,27 @@ namespace lfs::vis::op {
         const int depth_y = static_cast<int>(render_y);
 
         // Hover, placement and marker dragging all follow the displayed surface.
-        const float depth = rm->getSurfaceDepthAtPixel(depth_x, depth_y, {panel_info->render_width, panel_info->render_height}, panel_info->panel);
+        const auto panel = sequentialPoints()
+                               ? (depth_x >= splitViewDividerPixel(panel_info->render_width, render_settings.split_position)
+                                      ? SplitViewPanelId::Right
+                                      : SplitViewPanelId::Left)
+                               : panel_info->panel;
+        if (!acceptsPointSample({.panel = panel}, pick.point_index))
+            return {.panel = panel};
+        const float depth = sequentialPoints()
+                                ? rm->renderExpectedDepthAtPixel({.scene_manager = gm->getViewer()->getSceneManager(),
+                                                                  .viewport = &projection_viewport,
+                                                                  .render_size = projection_viewport.windowSize,
+                                                                  .pixel = {depth_x, depth_y},
+                                                                  .focal_length_mm = render_settings.focal_length_mm,
+                                                                  .orthographic = render_settings.orthographic,
+                                                                  .ortho_scale = pointPickPanelOrthoScale(projection_viewport, render_settings),
+                                                                  .panel = panel})
+                                : rm->getSurfaceDepthAtPixel(depth_x, depth_y, {panel_info->render_width, panel_info->render_height}, panel);
         if (depth == PointCloudVulkanRenderer::kDepthSamplePending)
-            return {.panel = panel_info->panel, .pending = true};
+            return {.panel = panel, .pending = true};
         if (!std::isfinite(depth) || depth <= 0.0f || depth >= 1e9f) {
-            return {};
+            return {.panel = panel};
         }
 
         return {.world = projection_viewport.unprojectPixel(
@@ -563,7 +591,7 @@ namespace lfs::vis::op {
                     render_settings.focal_length_mm,
                     render_settings.orthographic,
                     pointPickPanelOrthoScale(projection_viewport, render_settings)),
-                .panel = panel_info->panel};
+                .panel = panel};
     }
 
     float pointPickMarkerScreenRadius(const glm::vec3& world_pos,

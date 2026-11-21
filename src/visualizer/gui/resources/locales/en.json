@@ -3224,6 +3224,13 @@
     "training_session_not_ready": "The training session is not ready to resume."
   },
   "align": {
+    "pair_entry": "{0}: compare two splats to align matching points.",
+    "pair_preview": "Apply to keep the alignment. {0}: restore the original position.",
+    "pair_incomplete": "Choose three pairs of matching points.",
+    "pair_degenerate": "Choose points farther apart that do not lie on a straight line.",
+    "pair_reference": "Pick a detail on the left splat (reference).",
+    "pair_mobile": "Pick the same detail on the right splat (moves).",
+    "pair_apply": "{0}: align the right splat.",
     "preview": "Preview alignment",
     "hint_preview": "Preview: toggle the alignment options to compare. Turn Preview off to edit points. Apply: keep result. {0}: restore original.",
     "click_1st": "Click 1st point",

@@ -2723,6 +2723,8 @@ def test_align_toolbar_signature_tracks_can_apply(toolbar_module):
     controller = module._ViewportToolbarController()
 
     lf_stub.ui.get_active_tool = lambda: "builtin.align"
+    split_mode = {"value": "none"}
+    lf_stub.ui.get_split_view_mode = lambda: split_mode["value"]
     can_apply = {"value": False}
     lf_stub.ui.can_apply_align = lambda: can_apply["value"]
     lf_stub.ui.get_align_axis_snap = lambda: True
@@ -2736,6 +2738,10 @@ def test_align_toolbar_signature_tracks_can_apply(toolbar_module):
     assert signature_disabled != signature_enabled
     assert signature_disabled[-4:-1] == (False, True, False)
     assert signature_enabled[-4:-1] == (True, True, False)
+
+    split_mode["value"] = "ply_comparison"
+    assert controller._toolbar_signature(None) != signature_enabled
+    split_mode["value"] = "none"
 
     preview["value"] = True
     assert controller._toolbar_signature(None) != signature_enabled
@@ -2771,6 +2777,7 @@ def test_align_toolbar_buttons_follow_native_state(toolbar_module):
     module, _hook_calls, _remove_calls = toolbar_module
     lf_stub = sys.modules["lichtfeld"]
     ready = {"value": False}
+    lf_stub.ui.get_split_view_mode = lambda: "none"
     lf_stub.ui.can_apply_align = lambda: ready["value"]
     lf_stub.ui.get_align_axis_snap = lambda: True
     lf_stub.ui.get_align_edge_to_axis = lambda: False
@@ -2798,6 +2805,12 @@ def test_align_toolbar_buttons_follow_native_state(toolbar_module):
     assert buttons[1]["enabled"] is True
     assert buttons[3]["selected"] is False
     assert buttons[4]["selected"] is True
+
+    lf_stub.ui.get_split_view_mode = lambda: "ply_comparison"
+    buttons = controller._build_align_action_records("builtin.align")
+    assert [button["action"] for button in buttons] == [
+        "align_toggle_preview", "align_apply", "align_clear"
+    ]
 
 
 @pytest.mark.parametrize("mode,error,handled", [("walk", "No Walk support below the camera", True),

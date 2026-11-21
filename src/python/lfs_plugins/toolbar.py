@@ -789,9 +789,7 @@ class _GizmoToolbarController:
 
         active = active_tool_id == self._ALIGN_TOOL_ID
         can_apply = active and lf.ui.can_apply_align()
-        snap_on = lf.ui.get_align_axis_snap()
-        edge_to_axis_on = lf.ui.get_align_edge_to_axis()
-        return [
+        records = [
             _button_record(
                 "align-preview", "align_toggle_preview", "", _icon_src("scene/visible"),
                 tooltip_key="align.preview", tooltip_text="Preview alignment",
@@ -816,6 +814,11 @@ class _GizmoToolbarController:
                 tooltip_text="Clear",
                 enabled=active,
             ),
+        ]
+        if lf.ui.get_split_view_mode() == "ply_comparison":
+            return records
+
+        return records + [
             _button_record(
                 "align-snap",
                 "align_toggle_snap",
@@ -824,7 +827,7 @@ class _GizmoToolbarController:
                 tooltip_key="align.snap",
                 tooltip_text="Axis snap",
                 label=_ui_label("align.snap", "Axis snap"),
-                selected=snap_on,
+                selected=lf.ui.get_align_axis_snap(),
                 enabled=active,
             ),
             _button_record(
@@ -835,7 +838,7 @@ class _GizmoToolbarController:
                 tooltip_key="align.edge_to_axis",
                 tooltip_text="Levels the plane, then turns edge 1 to 2 toward the red X arrow. Use Preview to compare.",
                 label=_ui_label("align.edge_label", "1 → 2 along X"),
-                selected=edge_to_axis_on,
+                selected=lf.ui.get_align_edge_to_axis(),
                 enabled=active,
             ),
         ]
@@ -2133,11 +2136,13 @@ class _ViewportToolbarController:
             )
         )
         if active_tool == "builtin.align":
+            align_split_mode = lf.ui.get_split_view_mode()
             align_can_apply = bool(call(False, getattr(lf.ui, "can_apply_align", None)))
             align_axis_snap = bool(call(True, getattr(lf.ui, "get_align_axis_snap", None)))
             align_edge_to_axis = lf.ui.get_align_edge_to_axis()
             align_preview = lf.ui.get_align_preview()
         else:
+            align_split_mode = None
             align_can_apply = False
             align_axis_snap = True
             align_edge_to_axis = False
@@ -2203,6 +2208,7 @@ class _ViewportToolbarController:
             scale_distance_points,
             self._scale_distance_target_str,
             align_preview,
+            align_split_mode,
             align_can_apply,
             align_axis_snap,
             align_edge_to_axis,

@@ -5,6 +5,7 @@
 #pragma once
 
 #include "point_pick_operator.hpp"
+#include <array>
 #include <glm/glm.hpp>
 #include <optional>
 #include <span>
@@ -15,6 +16,7 @@ namespace lfs::vis::op {
     class LFS_VIS_API AlignPickPointOperator : public PointPickOperator {
     public:
         AlignPickPointOperator();
+        OperatorResult invoke(OperatorContext& ctx, OperatorProperties& props) override;
 
         static LFS_LOCAL_SYMBOL const OperatorDescriptor DESCRIPTOR;
 
@@ -23,6 +25,10 @@ namespace lfs::vis::op {
 
     private:
         friend class AlignPreviewTest;
+        std::optional<std::array<core::Uuid, 2>> pair_;
+        bool sequentialPoints() const override { return pair_.has_value(); }
+        bool acceptsPointSample(const PointSample& sample, std::optional<int> index) const override;
+        [[nodiscard]] std::optional<glm::mat4> computePairPreviewTransform() const;
 
         struct PreviewTarget {
             core::NodeId id;
