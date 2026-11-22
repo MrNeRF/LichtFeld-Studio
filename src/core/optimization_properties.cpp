@@ -35,7 +35,7 @@ namespace lfs::core::param {
             .json_required()
             .all_strategies()
             .size_prop(&OptimizationParameters::sh_degree_interval,
-                       "sh_degree_interval", "SH Interval", d.sh_degree_interval, 100, 10000,
+                       "sh_degree_interval", "SH Interval", d.sh_degree_interval, 1, 10000,
                        "Iterations between SH degree increases")
             .locale("training.refinement.sh_upgrade_every")
             .tooltip("training.tooltip.sh_upgrade_every")

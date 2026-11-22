@@ -128,7 +128,7 @@
   "scaling_lr_end": 0.004999999888241291,
   "screen_share_penalty": 0.8470849990844727,
   "sh_degree": 3,
-  "sh_degree_interval": 1000,
+  "sh_degree_interval": 1,
   "sh_rest_reg": 0.375,
   "shs_lr": -1.0,
   "start_refine": 0,

@@ -317,6 +317,7 @@ namespace lfs::training {
         config.param_lrs["scaling"] = params.scaling_lr;
         config.param_lrs["rotation"] = params.rotation_lr;
         config.param_lrs["opacity"] = params.opacity_lr;
+        config.sh_warmup = !lfs::core::param::is_mrnf_strategy(params.strategy);
 
         // Pre-allocate optimizer state capacity to avoid reallocations during training
         // This dramatically reduces peak memory usage by avoiding double-buffering during growth

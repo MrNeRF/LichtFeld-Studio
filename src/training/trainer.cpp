@@ -1876,6 +1876,26 @@ namespace lfs::training {
         return mask_regularization_loss.is_valid() ? loss + mask_regularization_loss : loss;
     }
 
+    void Trainer::select_blur_tolerant_ssim(const core::param::OptimizationParameters& params,
+                                            const core::Tensor& gt_image, const bool in_popspa) {
+        blur_sigma_ = 0.0f;
+        if (in_popspa || !core::param::is_mrnf_strategy(params.strategy) || !(params.lambda_dssim > 0.0f) ||
+            gt_image.ndim() < 2)
+            return;
+        const int height = static_cast<int>(gt_image.shape()[gt_image.ndim() - 2]);
+        const int width = static_cast<int>(gt_image.shape()[gt_image.ndim() - 1]);
+        blur_sigma_ = kernels::blur_tolerant_ssim_sigma(height, width);
+        if (std::ranges::find(blur_sigma_logged_sizes_, std::pair{width, height}) != blur_sigma_logged_sizes_.end())
+            return;
+        blur_sigma_logged_sizes_.emplace_back(width, height);
+        if (blur_sigma_ > 0.0f)
+            LOG_INFO("MRNF blur-tolerant SSIM: {}x{} photos, blur sigma {:.4f} (radius {})", width, height, blur_sigma_,
+                     static_cast<int>(std::ceil(3.0 * blur_sigma_)));
+        else
+            LOG_INFO("MRNF blur-tolerant SSIM: {}x{} photos, blur sigma 0 (plain SSIM below a short side of {} pixels)",
+                     width, height, kernels::BLUR_TOLERANT_SSIM_MIN_SHORT_SIDE);
+    }
+
     // Compute photometric loss AND gradient manually
     std::expected<Trainer::PhotometricLossResult, std::string> Trainer::compute_photometric_loss_with_gradient(
         const lfs::core::Tensor& corrected,
@@ -1893,6 +1913,24 @@ namespace lfs::training {
             raw_rendered.is_valid() &&
             raw_rendered.numel() > 0 &&
             opt_params.lambda_dssim > 0.0f;
+
+        if (blur_sigma_ > 0.0f) {
+            auto result = kernels::blur_tolerant_loss(
+                corrected, use_decoupled_appearance_loss ? raw_rendered : core::Tensor{}, gt_image, core::Tensor{},
+                opt_params.lambda_dssim, blur_sigma_, photometric_loss_.arena());
+            auto grad_corrected = corrected.ndim() == 3 ? result.grad_corrected.squeeze(0) : result.grad_corrected;
+            std::optional<RawGradientResidual> raw_residual;
+            if (fit)
+                fit->accumulate(corrected, grad_corrected, {}, photometric_value_count(), photometric_valid_padding,
+                                result.raw ? &*result.raw : nullptr, loss_step_scratch_);
+            add_gradient_residual(corrected, gt_image, raw_rendered, {}, opt_params, iteration, result.loss,
+                                  grad_corrected, raw_residual);
+            return PhotometricLossResult{
+                .loss = result.loss,
+                .grad_corrected = grad_corrected,
+                .raw_gradient = result.raw,
+                .raw_residual = raw_residual};
+        }
 
         if (use_decoupled_appearance_loss) {
             auto& decoupled_ws = photometric_loss_.arena().decoupled();
@@ -2071,7 +2109,19 @@ namespace lfs::training {
 
         if (photometric_weight.is_valid()) {
             float mask_normalization = 0.0f;
-            if (use_decoupled_appearance_loss) {
+            if (blur_sigma_ > 0.0f) {
+                auto result = kernels::blur_tolerant_loss(
+                    corrected, use_decoupled_appearance_loss ? raw_rendered : Tensor{}, gt_image, photometric_weight,
+                    opt_params.lambda_dssim, blur_sigma_, photometric_loss_.arena(), base_denominator);
+                mask_normalization = result.mask_sum_value;
+                grad_corrected = result.grad_corrected;
+                raw_gradient = result.raw;
+                loss = result.loss;
+
+                if (grad_corrected.ndim() == 4 && corrected.ndim() == 3) {
+                    grad_corrected = grad_corrected.squeeze(0);
+                }
+            } else if (use_decoupled_appearance_loss) {
                 auto& masked_decoupled_ws = photometric_loss_.arena().masked_decoupled();
                 auto [loss_tensor, ctx] = lfs::training::kernels::masked_decoupled_fused_l1_ssim_forward(
                     corrected, raw_rendered, gt_image, photometric_weight, opt_params.lambda_dssim,
@@ -6787,6 +6837,7 @@ namespace lfs::training {
                                                                           (core::param::is_mrnf_strategy(step_params.strategy) &&
                                                                            step_params.use_error_map));
                 const bool use_ssim_error = use_pixel_error_densification;
+                select_blur_tolerant_ssim(step_params, gt_image, in_popspa);
                 DensificationType densification_type = DensificationType::None;
                 if (!in_popspa && step_params.strategy == "mcmc")
                     densification_type = DensificationType::MCMC;
@@ -8301,16 +8352,20 @@ namespace lfs::training {
                         if (use_pixel_error_densification) {
                             LFS_VRAM_SCOPE("train.densification_error_map");
                             LOG_VRAM_DIFF("train.densification_error_map");
+                            // The blur-tolerant SSIM always fills the decoupled workspaces; its error map is
+                            // squared, so well-fit pixels add little and strong structure errors lead, and keeps
+                            // its scale across views (no per-view normalization below).
+                            const bool blur_tolerant = blur_sigma_ > 0.0f;
                             if (use_ssim_error && step_params.lambda_dssim > 0.0f) {
                                 lfs::core::Tensor ssim_map;
                                 lfs::core::Tensor cs_map;
-                                if (used_masked_fused && raw_loss_input.is_valid()) {
+                                if (used_masked_fused && (raw_loss_input.is_valid() || blur_tolerant)) {
                                     ssim_map = photometric_loss_.arena().masked_decoupled().ssim_map;
                                     cs_map = photometric_loss_.arena().masked_decoupled().cs_map;
                                 } else if (used_masked_fused) {
                                     ssim_map = photometric_loss_.arena().masked_fused().ssim_map;
                                     cs_map = photometric_loss_.arena().masked_fused().cs_map;
-                                } else if (raw_loss_input.is_valid()) {
+                                } else if (raw_loss_input.is_valid() || blur_tolerant) {
                                     ssim_map = photometric_loss_.arena().decoupled().ssim_map;
                                     cs_map = photometric_loss_.arena().decoupled().cs_map;
                                 } else if (step_params.lambda_dssim < 1.0f) {
@@ -8330,7 +8385,8 @@ namespace lfs::training {
                                     const size_t H = densify_src.shape()[2];
                                     const size_t W = densify_src.shape()[3];
                                     tile_error_map = densify_src.reshape({static_cast<int>(H), static_cast<int>(W)});
-                                    lfs::training::kernels::launch_ssim_to_error_map(densify_src, tile_error_map);
+                                    lfs::training::kernels::launch_ssim_to_error_map(densify_src, tile_error_map,
+                                                                                     blur_tolerant);
                                 } else {
                                     const size_t H = densify_src.shape()[2];
                                     const size_t W = densify_src.shape()[3];
@@ -8342,7 +8398,7 @@ namespace lfs::training {
                                             core::Device::CUDA);
                                     }
                                     lfs::training::kernels::launch_ssim_to_error_map(
-                                        densify_src, densification_error_map_);
+                                        densify_src, densification_error_map_, blur_tolerant);
                                     tile_error_map = densification_error_map_;
                                 }
                             } else if (use_ssim_error) {
@@ -8414,7 +8470,8 @@ namespace lfs::training {
                                                                     params_.optimization.densify_structure_weight);
                         }
 
-                        if (tile_error_map.is_valid() && core::param::is_mrnf_strategy(step_params.strategy)) {
+                        if (tile_error_map.is_valid() && core::param::is_mrnf_strategy(step_params.strategy) &&
+                            !(blur_sigma_ > 0.0f)) {
                             LFS_VRAM_SCOPE("train.densification_error_map");
                             LOG_VRAM_DIFF("train.densification_error_map.normalize");
                             const auto map_mean = tile_error_map.mean();

@@ -1081,6 +1081,27 @@ TEST(MRNFStrategyTest, ShNReservationTracksMaxDegreeAndMaxCap) {
     expect_shN_capacity(scheduled_splat, scheduled_strategy.get_optimizer(), 1);
 }
 
+// Catches MRNF holding the higher SH coefficients back: its defaults raise the SH degree every step and its optimizer
+// steps them from the first iteration, while the other strategies keep the 1,000-iteration warm-up.
+TEST(MRNFStrategyTest, ShNTrainsFromTheFirstStep) {
+    EXPECT_EQ(param::OptimizationParameters::mrnf_defaults().sh_degree_interval, 1);
+
+    auto splat_data = create_mrnf_test_splat_data(10, 1);
+    MRNF strategy(splat_data);
+    auto params = vanilla_mrnf_params();
+    params.iterations = 10'000;
+    strategy.initialize(params);
+    EXPECT_FALSE(strategy.get_optimizer().get_config().sh_warmup);
+    EXPECT_TRUE(strategy.get_optimizer().prepare_fastgs_fused_adam(1).shN.enabled);
+
+    auto other_splat = create_mrnf_test_splat_data(10, 1);
+    auto other_params = param::OptimizationParameters::mcmc_defaults();
+    const auto other = create_optimizer(other_splat, other_params);
+    EXPECT_TRUE(other->get_config().sh_warmup);
+    EXPECT_FALSE(other->prepare_fastgs_fused_adam(1).shN.enabled);
+    EXPECT_TRUE(other->prepare_fastgs_fused_adam(1001).shN.enabled);
+}
+
 TEST(MRNFStrategyTest, DirectAuxiliaryGrowthPreservesPrefix) {
     constexpr size_t sfm_points = 8;
     constexpr size_t grown_points = sfm_points * 3;

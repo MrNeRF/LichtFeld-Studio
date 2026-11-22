@@ -150,7 +150,7 @@ EXPECTED_NUMBER_ROWS = {
         "training.tooltip.sh_upgrade_every",
         0,
         100,
-        100,
+        1,
         10_000,
         True,
     ),

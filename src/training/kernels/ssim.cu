@@ -10,11 +10,15 @@
 #include "lfs/kernels/ssim.cuh"
 #include "lfs/kernels/ssim_reduction.cuh"
 #include <algorithm>
+#include <cmath>
 #include <cooperative_groups.h>
 #include <cstdint>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
+#include <mutex>
 #include <type_traits>
+#include <utility>
+#include <vector>
 
 namespace cg = cooperative_groups;
 
@@ -2749,10 +2753,28 @@ namespace lfs::training::kernels {
             .W = ctx.W};
     }
 
+    namespace {
+        __global__ void add_gradient_kernel(float* __restrict__ dst, const float* __restrict__ src, const size_t n) {
+            const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+            if (idx < n)
+                dst[idx] += src[idx];
+        }
+    } // namespace
+
     void accumulate_decoupled_raw_gradient(const DecoupledRawGradient& raw, lfs::core::Tensor& grad_image) {
-        validate_loss_context_images(raw.raw_img, raw.gt_img, raw.H, raw.W);
         LFS_ASSERT(grad_image.is_contiguous() && grad_image.dtype() == lfs::core::DataType::Float32 &&
                    grad_image.numel() == raw.raw_img.numel());
+        if (raw.precomputed.is_valid()) {
+            LFS_ASSERT(raw.precomputed.is_contiguous() && raw.precomputed.dtype() == lfs::core::DataType::Float32 &&
+                       raw.precomputed.numel() == grad_image.numel());
+            const size_t n = grad_image.numel();
+            const auto stream = lfs::core::getCurrentCUDAStream();
+            add_gradient_kernel<<<static_cast<unsigned>((n + 255) / 256), 256, 0, stream>>>(
+                grad_image.ptr<float>(), raw.precomputed.ptr<float>(), n);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.decoupled_raw_precomputed");
+            return;
+        }
+        validate_loss_context_images(raw.raw_img, raw.gt_img, raw.H, raw.W);
 
         constexpr float C1 = 0.01f * 0.01f;
         constexpr float C2 = 0.03f * 0.03f;
@@ -3138,7 +3160,7 @@ namespace lfs::training::kernels {
         __global__ void ssim_to_error_map_kernel(
             const float* __restrict__ ssim_map,
             float* __restrict__ error_map,
-            int C, int H, int W) {
+            int C, int H, int W, bool square) {
 
             int idx = blockIdx.x * blockDim.x + threadIdx.x;
             int HW = H * W;
@@ -3150,14 +3172,15 @@ namespace lfs::training::kernels {
                 sum += ssim_map[c * HW + idx];
             }
             float inv_c = 1.0f / static_cast<float>(C);
-            float err = 1.0f - sum * inv_c;
-            error_map[idx] = fmaxf(err, 0.0f);
+            const float err = fmaxf(1.0f - sum * inv_c, 0.0f);
+            error_map[idx] = square ? err * err : err;
         }
     } // namespace
 
     void launch_ssim_to_error_map(
         const lfs::core::Tensor& ssim_map,
-        lfs::core::Tensor& error_map) {
+        lfs::core::Tensor& error_map,
+        const bool square) {
 
         LFS_ASSERT_MSG(ssim_map.is_valid() && ssim_map.device() == lfs::core::Device::CUDA &&
                            ssim_map.dtype() == lfs::core::DataType::Float32 &&
@@ -3190,8 +3213,591 @@ namespace lfs::training::kernels {
         ssim_to_error_map_kernel<<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
             ssim_map.ptr<float>(),
             error_map.ptr<float>(),
-            C, H, W);
+            C, H, W, square);
         LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.to_error_map");
+    }
+
+    // =========================================================================
+    // Blur-tolerant SSIM (MRNF)
+    // =========================================================================
+    // G is a normalised Gaussian blur over the kept pixels: G v = n * W(keep v) with n = 1 / W(keep), W the taps of
+    // the image's blur sigma. Four passes, none recomputing a neighbour's values:
+    //   blur:     G corrected, G raw and n;
+    //   forward:  both branches from shared photo statistics; the soft-maximum map the loss reduces, the sharp
+    //             branch's SSIM map, the blend's contrast-structure map, fp16 partials of both branches;
+    //   branch:   the blurred branch's backward at the blurred images, times keep * n (fp16, chain factored out);
+    //   gradient: both images' gradients at once, the sharp backward plus the adjoint W of the branch pass.
+    // The raw render's gradient is written once; its readers add it (DecoupledRawGradient::precomputed).
+    namespace {
+        constexpr int BT_THREADS = BLOCK_X * BLOCK_Y;
+
+        // Centre-first normalised Gaussian taps of a blur sigma in (0, 1.5]: radius ceil(3 sigma) <= HALO, so G and
+        // its adjoint fit the SSIM tile halo.
+        struct BlurTaps {
+            float weight[HALO + 1];
+            int radius;
+        };
+
+        // The taps of each sigma are computed once (one sigma per photo size).
+        BlurTaps blur_taps(const float sigma) {
+            LFS_ASSERT_MSG(std::isfinite(sigma) && sigma > 0.0f && sigma <= BLUR_TOLERANT_SSIM_MAX_SIGMA,
+                           "Blur-tolerant SSIM sigma must be within (0, 1.5]");
+            static std::mutex mutex;
+            static std::vector<std::pair<float, BlurTaps>> cache;
+            const std::lock_guard lock(mutex);
+            for (const auto& [key, taps] : cache)
+                if (key == sigma)
+                    return taps;
+            BlurTaps taps{};
+            taps.radius = static_cast<int>(std::ceil(3.0 * sigma));
+            LFS_ASSERT_MSG(taps.radius >= 1 && taps.radius <= HALO, "Blur radius must fit the SSIM tile halo");
+            double raw[HALO + 1] = {};
+            double sum = 0.0;
+            for (int d = 0; d <= taps.radius; ++d) {
+                raw[d] = std::exp(-0.5 * d * d / (static_cast<double>(sigma) * sigma));
+                sum += d == 0 ? raw[d] : 2.0 * raw[d];
+            }
+            for (int d = 0; d <= taps.radius; ++d)
+                taps.weight[d] = static_cast<float>(raw[d] / sum);
+            cache.emplace_back(sigma, taps);
+            return taps;
+        }
+
+        // The taps in registers for a compile-time radius.
+        template <int R>
+        struct RadiusTaps {
+            static_assert(R >= 1 && R <= HALO, "The blur fits the SSIM tile halo");
+            float w[R + 1];
+            __device__ __forceinline__ explicit RadiusTaps(const BlurTaps& taps) {
+#pragma unroll
+                for (int k = 0; k <= R; ++k)
+                    w[k] = taps.weight[k];
+            }
+            __device__ __forceinline__ float operator()(const int d) const { return w[d < 0 ? -d : d]; }
+        };
+
+        template <typename Fn>
+        void dispatch_blur_radius(const int radius, Fn&& fn) {
+            switch (radius) {
+            case 1: fn(std::integral_constant<int, 1>{}); break;
+            case 2: fn(std::integral_constant<int, 2>{}); break;
+            case 3: fn(std::integral_constant<int, 3>{}); break;
+            case 4: fn(std::integral_constant<int, 4>{}); break;
+            case 5: fn(std::integral_constant<int, 5>{}); break;
+            default: LFS_ASSERT_MSG(false, "Blur radius must be within [1, 5]");
+            }
+        }
+
+        struct BtHalves {
+            __half* p[4]; // raw mu, raw sigma^2, raw sigma12, corrected mu
+        };
+
+        // One decoupled SSIM branch from window means (luminance of mc, contrast-structure of the raw render), as
+        // decoupledFusedL1SSIMForwardCUDA: returns S, writes cs and the partials in BtHalves order.
+        __device__ __forceinline__ float bt_branch(const float mc, const float mr, const float mrr, const float my,
+                                                   const float myy, const float mry, const float C1, const float C2,
+                                                   const float ssim_weight, float& cs, float (&p)[4]) {
+            const float A = mc * mc + my * my + C1;
+            const float Cn = 2.f * mc * my + C1;
+            const float lum = Cn / A;
+            const float B = (mrr - mr * mr) + (myy - my * my) + C2;
+            const float D = 2.f * (mry - mr * my) + C2;
+            cs = D / B;
+            const float ds1 = ssim_weight * (-(lum * D) / (B * B));
+            const float ds12 = ssim_weight * ((2.f * lum) / B);
+            p[0] = ds1 * (-2.f * mr) + ds12 * (-my);
+            p[1] = ds1;
+            p[2] = ds12;
+            p[3] = cs * (2.f * (my * A - mc * Cn) / (A * A));
+            return lum * cs;
+        }
+
+        template <bool Masked, typename MaskT>
+        __device__ __forceinline__ float bt_mask_at(const MaskT* mask, const int H, const int W, const int gy, const int gx) {
+            if constexpr (Masked)
+                return gx >= 0 && gx < W && gy >= 0 && gy < H ? mask_value(mask, gy * W + gx) : 0.f;
+            return gx >= 0 && gx < W && gy >= 0 && gy < H ? 1.f : 0.f;
+        }
+
+        // Blur pass: G corrected, G raw (zero outside the image) and n = 1 / W(keep), vertical then horizontal.
+        template <bool Masked, typename MaskT, int R>
+        __global__ void __launch_bounds__(BT_THREADS) blurTolerantBlurCUDA(
+            const int H, const int W, const int CH, const float* __restrict__ xc, const float* __restrict__ xr,
+            const MaskT* __restrict__ mask, float* __restrict__ gxc, float* __restrict__ gxr, float* __restrict__ inv_support,
+            const BlurTaps blur_taps) {
+            const RadiusTaps<R> taps(blur_taps);
+            auto block = cg::this_thread_block();
+            const int b = block.group_index().z;
+            const int x0 = block.group_index().x * BLOCK_X, y0 = block.group_index().y * BLOCK_Y;
+            const int px = x0 + threadIdx.x, py = y0 + threadIdx.y, tid = block.thread_rank();
+            const bool in_image = px < W && py < H;
+            const int num_pix = H * W;
+            __shared__ float keep[SHARED_Y][SHARED_X];
+            __shared__ float tile[3][SHARED_Y][SHARED_X]; // keep, keep corrected, keep raw
+            __shared__ float cols[3][BLOCK_Y][SHARED_X];
+            for (int i = tid; i < SHARED_Y * SHARED_X; i += BT_THREADS) {
+                const int gy = y0 - HALO + i / SHARED_X, gx = x0 - HALO + i % SHARED_X;
+                keep[i / SHARED_X][i % SHARED_X] = bt_mask_at<Masked>(mask, H, W, gy, gx) > 0.f ? 1.f : 0.f;
+            }
+            float inv = 0.f;
+            for (int c = 0; c < CH; ++c) {
+                const int planes = c == 0 ? 3 : 2, first = c == 0 ? 0 : 1;
+                block.sync();
+                for (int i = tid; i < SHARED_Y * SHARED_X; i += BT_THREADS) {
+                    const int r = i / SHARED_X, cc = i % SHARED_X, gy = y0 - HALO + r, gx = x0 - HALO + cc;
+                    const float k = keep[r][cc];
+                    tile[0][r][cc] = k;
+                    tile[1][r][cc] = k > 0.f ? get_pix_value(xc, b, c, gy, gx, CH, H, W) : 0.f;
+                    tile[2][r][cc] = k > 0.f ? get_pix_value(xr, b, c, gy, gx, CH, H, W) : 0.f;
+                }
+                block.sync();
+                for (int i = tid; i < BLOCK_Y * SHARED_X; i += BT_THREADS) {
+                    const int r = i / SHARED_X, cc = i % SHARED_X;
+                    for (int p = first; p < first + planes; ++p) {
+                        float s = 0.f;
+#pragma unroll
+                        for (int d = -R; d <= R; ++d)
+                            s += taps(d) * tile[p][r + HALO + d][cc];
+                        cols[p][r][cc] = s;
+                    }
+                }
+                block.sync();
+                float s[3] = {};
+#pragma unroll
+                for (int p = 0; p < 3; ++p) {
+                    if (p < first)
+                        continue;
+#pragma unroll
+                    for (int d = -R; d <= R; ++d)
+                        s[p] += taps(d) * cols[p][threadIdx.y][threadIdx.x + HALO + d];
+                }
+                if (c == 0)
+                    inv = s[0] > 1.0e-30f ? 1.f / s[0] : 0.f;
+                if (in_image) {
+                    const int idx = (b * CH + c) * num_pix + py * W + px;
+                    gxc[idx] = s[1] * inv;
+                    gxr[idx] = s[2] * inv;
+                    if (c == 0 && b == 0)
+                        inv_support[py * W + px] = inv;
+                }
+            }
+        }
+
+        // Forward pass: ten window moments per channel, both branches, their soft maximum. A photo window flatter
+        // than flat_variance keeps the sharp branch alone (w1 = 0).
+        template <bool Masked, typename TargetT, typename MaskT>
+        __global__ void __launch_bounds__(BT_THREADS, 3) blurTolerantForwardCUDA(
+            const int H, const int W, const int CH, const float C1, const float C2, const float ssim_weight,
+            const float flat_variance, const float* __restrict__ xc, const float* __restrict__ xr,
+            const TargetT* __restrict__ y, const MaskT* __restrict__ mask, const float* __restrict__ gxc,
+            const float* __restrict__ gxr, const BtHalves sharp, const BtHalves blurred, float* __restrict__ ssim_map,
+            float* __restrict__ cs_map, float* __restrict__ blend_map) {
+            auto block = cg::this_thread_block();
+            const int b = block.group_index().z;
+            const int x0 = block.group_index().x * BLOCK_X, y0 = block.group_index().y * BLOCK_Y;
+            const int px = x0 + threadIdx.x, py = y0 + threadIdx.y, tid = block.thread_rank();
+            const bool in_image = px < W && py < H;
+            const int num_pix = H * W, pix = py * W + px;
+
+            __shared__ float xconv[CONV_Y][CONV_X][5];
+            __shared__ float sTile[SHARED_Y][SHARED_X][5];  // corrected, raw, photo, G corrected, G raw
+            __shared__ float mask_tile[SHARED_Y][SHARED_X]; // window weights (masked loss)
+
+            float inv_window = 1.f, center = 1.f, dw = 1.f;
+            if constexpr (Masked) {
+                bool full_support;
+                inv_window = load_mask_window(mask, H, W, mask_tile, xconv, full_support);
+                center = mask_tile[threadIdx.y + HALO][threadIdx.x + HALO];
+                dw = center * inv_window;
+                // Ignored centers contribute no loss or partials, even near a kept tile.
+                if (!__syncthreads_or(in_image && center != 0.0f)) {
+                    if (in_image) {
+                        for (int c = 0; c < CH; ++c)
+                            for (int k = 0; k < 4; ++k) {
+                                sharp.p[k][(b * CH + c) * num_pix + pix] = __float2half(0.f);
+                                blurred.p[k][(b * CH + c) * num_pix + pix] = __float2half(0.f);
+                            }
+                        ssim_map[b * num_pix + pix] = cs_map[b * num_pix + pix] = blend_map[b * num_pix + pix] = 1.f;
+                    }
+                    return;
+                }
+            }
+            // Partial scaling as the masked decoupled kernels: the masked raw mean partial is stored / 16.
+            const float scale[4] = {Masked ? dw * (1.f / 16.f) : 1.f, dw, dw, dw};
+
+            float ssim_sum = 0.f, blend_sum = 0.f, cs_blend_sum = 0.f;
+            for (int c = 0; c < CH; ++c) {
+                block.sync();
+                for (int i = tid; i < SHARED_Y * SHARED_X; i += BT_THREADS) {
+                    const int r = i / SHARED_X, cc = i % SHARED_X;
+                    const int gy = y0 - HALO + r, gx = x0 - HALO + cc;
+                    sTile[r][cc][0] = get_pix_value(xc, b, c, gy, gx, CH, H, W);
+                    sTile[r][cc][1] = get_pix_value(xr, b, c, gy, gx, CH, H, W);
+                    sTile[r][cc][2] = get_pix_value(y, b, c, gy, gx, CH, H, W);
+                    sTile[r][cc][3] = get_pix_value(gxc, b, c, gy, gx, CH, H, W);
+                    sTile[r][cc][4] = get_pix_value(gxr, b, c, gy, gx, CH, H, W);
+                }
+                block.sync();
+                // Ten window moments in two halves of five: corrected, raw, raw^2, photo, photo^2, then raw photo,
+                // G corrected, G raw, (G raw)^2, G raw photo.
+                float m[10] = {};
+#pragma unroll
+                for (int half = 0; half < 2; ++half) {
+                    for (int yy = threadIdx.y; yy < CONV_Y; yy += BLOCK_Y) {
+                        const int lx = threadIdx.x + HALO;
+                        float s[5] = {};
+#pragma unroll
+                        for (int d = -HALO; d <= HALO; ++d) {
+                            float w = cGauss[HALO + d];
+                            if constexpr (Masked)
+                                w *= mask_tile[yy][lx + d];
+                            const float* t = sTile[yy][lx + d];
+                            if (half == 0) {
+                                s[0] += w * t[0];
+                                s[1] += w * t[1];
+                                s[2] += w * (t[1] * t[1]);
+                                s[3] += w * t[2];
+                                s[4] += w * (t[2] * t[2]);
+                            } else {
+                                s[0] += w * (t[1] * t[2]);
+                                s[1] += w * t[3];
+                                s[2] += w * t[4];
+                                s[3] += w * (t[4] * t[4]);
+                                s[4] += w * (t[4] * t[2]);
+                            }
+                        }
+#pragma unroll
+                        for (int k = 0; k < 5; ++k)
+                            xconv[yy][threadIdx.x][k] = s[k];
+                    }
+                    block.sync();
+                    if (in_image) {
+#pragma unroll
+                        for (int d = -HALO; d <= HALO; ++d)
+#pragma unroll
+                            for (int k = 0; k < 5; ++k)
+                                m[5 * half + k] += cGauss[HALO + d] * xconv[threadIdx.y + HALO + d][threadIdx.x][k];
+                    }
+                    block.sync(); // xconv is rewritten by the next half
+                }
+                if (!in_image)
+                    continue;
+#pragma unroll
+                for (int k = 0; k < 10; ++k)
+                    m[k] *= inv_window;
+                float p0[4], p1[4], cs0, cs1;
+                const float s0 = bt_branch(m[0], m[1], m[2], m[3], m[4], m[5], C1, C2, ssim_weight, cs0, p0);
+                const float s1 = bt_branch(m[6], m[7], m[8], m[3], m[4], m[9], C1, C2, ssim_weight, cs1, p1);
+                const float d = BLUR_TOLERANT_SSIM_TEMPERATURE * (s0 - s1);
+                float w0 = 1.f / (1.f + expf(-d)), w1 = 1.f / (1.f + expf(d));
+                float S = fmaxf(s0, s1) + (log1pf(expf(-fabsf(d))) - 0.69314718055994531f) / BLUR_TOLERANT_SSIM_TEMPERATURE;
+                if (m[4] - m[3] * m[3] < flat_variance) { // flat photo window: plain SSIM
+                    w0 = 1.f;
+                    w1 = 0.f;
+                    S = s0;
+                }
+                const int idx = (b * CH + c) * num_pix + pix;
+#pragma unroll
+                for (int k = 0; k < 4; ++k) {
+                    sharp.p[k][idx] = __float2half(p0[k] * (w0 * scale[k]));
+                    blurred.p[k][idx] = __float2half(p1[k] * (w1 * scale[k] * (k == 3 ? ssim_weight : 1.f)));
+                }
+                ssim_sum += s0;
+                blend_sum += S;
+                cs_blend_sum += w0 * cs0 + w1 * cs1;
+            }
+            if (in_image) {
+                const float inv_c = 1.f / static_cast<float>(CH);
+                const bool kept = !Masked || center > 0.f;
+                ssim_map[b * num_pix + pix] = kept ? ssim_sum * inv_c : 1.f;
+                cs_map[b * num_pix + pix] = kept ? cs_blend_sum * inv_c : 1.f;
+                blend_map[b * num_pix + pix] = kept ? blend_sum * inv_c : 1.f;
+            }
+        }
+
+        // Window weight of a partial's center without the chain factor: the masked partials carry their own window
+        // weights; unmasked, the valid padding counts only centers 5 pixels or more inside the border.
+        template <bool Masked>
+        __device__ __forceinline__ float bt_valid(const int H, const int W, const int gy, const int gx) {
+            if (gx < 0 || gx >= W || gy < 0 || gy >= H)
+                return 0.f;
+            if constexpr (Masked)
+                return 1.f;
+            return (H <= 10 || (gy >= 5 && gy < H - 5)) && (W <= 10 || (gx >= 5 && gx < W - 5)) ? 1.f : 0.f;
+        }
+
+        // Branch pass: the blurred branch's backward at the blurred images, g_b = -W(partials) with the raw sigma
+        // terms at G raw and the photo, times keep * n, chain factored out (fp16).
+        template <bool Masked, typename TargetT, typename MaskT>
+        __global__ void __launch_bounds__(BT_THREADS) blurTolerantBranchCUDA(
+            const int H, const int W, const int CH, const float* __restrict__ gxr, const TargetT* __restrict__ y,
+            const MaskT* __restrict__ mask, const BtHalves blurred, const float* __restrict__ inv_support,
+            __half* __restrict__ bc, __half* __restrict__ br) {
+            auto block = cg::this_thread_block();
+            const int b = block.group_index().z;
+            const int x0 = block.group_index().x * BLOCK_X, y0 = block.group_index().y * BLOCK_Y;
+            const int px = x0 + threadIdx.x, py = y0 + threadIdx.y, tid = block.thread_rank();
+            const bool in_image = px < W && py < H;
+            const int num_pix = H * W;
+            const float keep = in_image ? bt_mask_at<Masked>(mask, H, W, py, px) : 0.f;
+            if constexpr (Masked) {
+                if (!__syncthreads_or(keep != 0.0f)) {
+                    if (in_image)
+                        for (int c = 0; c < CH; ++c) {
+                            bc[(b * CH + c) * num_pix + py * W + px] = __float2half(0.f);
+                            br[(b * CH + c) * num_pix + py * W + px] = __float2half(0.f);
+                        }
+                    return;
+                }
+            }
+            const float kn = in_image ? keep * inv_support[py * W + px] : 0.f;
+            __shared__ float sData[SHARED_Y][SHARED_X][4];
+            __shared__ float sScratch[CONV_Y][CONV_X][4];
+            for (int c = 0; c < CH; ++c) {
+                const size_t plane = static_cast<size_t>(b * CH + c) * num_pix;
+                block.sync();
+                for (int i = tid; i < SHARED_Y * SHARED_X; i += BT_THREADS) {
+                    const int r = i / SHARED_X, cc = i % SHARED_X, gy = y0 - HALO + r, gx = x0 - HALO + cc;
+                    const float v = bt_valid<Masked>(H, W, gy, gx);
+#pragma unroll
+                    for (int k = 0; k < 4; ++k) {
+                        const float unscale = Masked && k == 0 ? -16.f : -1.f;
+                        sData[r][cc][k] = v != 0.f ? v * unscale * __half2float(blurred.p[k][plane + gy * W + gx]) : 0.f;
+                    }
+                }
+                block.sync();
+                for (int yy = threadIdx.y; yy < CONV_Y; yy += BLOCK_Y) {
+                    float acc[4] = {};
+#pragma unroll
+                    for (int d = -HALO; d <= HALO; ++d)
+#pragma unroll
+                        for (int k = 0; k < 4; ++k)
+                            acc[k] += cGauss[HALO + d] * sData[yy][threadIdx.x + HALO + d][k];
+#pragma unroll
+                    for (int k = 0; k < 4; ++k)
+                        sScratch[yy][threadIdx.x][k] = acc[k];
+                }
+                block.sync();
+                if (!in_image)
+                    continue;
+                float sum[4] = {};
+#pragma unroll
+                for (int d = -HALO; d <= HALO; ++d)
+#pragma unroll
+                    for (int k = 0; k < 4; ++k)
+                        sum[k] += cGauss[HALO + d] * sScratch[threadIdx.y + HALO + d][threadIdx.x][k];
+                const size_t q = plane + py * W + px;
+                br[q] = __float2half(kn * (sum[0] + 2.f * gxr[q] * sum[1] + pixel_value(y, q) * sum[2]));
+                bc[q] = __float2half(kn * sum[3]);
+            }
+        }
+
+        // Gradient pass: both images at once. corrected: the sharp backward (SSIM weight sw, L1 1 - sw) plus
+        // keep * W(bc); raw: the sharp backward plus keep * W(br). The chain factor multiplies at the end.
+        template <bool Masked, typename TargetT, typename MaskT, int R>
+        __global__ void __launch_bounds__(BT_THREADS) blurTolerantGradientCUDA(
+            const int H, const int W, const int CH, const float sw, const float chain, const float* __restrict__ xc,
+            const float* __restrict__ xr, const TargetT* __restrict__ y, const MaskT* __restrict__ mask,
+            const BtHalves sharp, const __half* __restrict__ bc, const __half* __restrict__ br,
+            float* __restrict__ out_c, float* __restrict__ out_r, const BlurTaps blur_taps) {
+            const RadiusTaps<R> taps(blur_taps); // the adjoint of G (k = 4, 5)
+            auto block = cg::this_thread_block();
+            const int b = block.group_index().z;
+            const int x0 = block.group_index().x * BLOCK_X, y0 = block.group_index().y * BLOCK_Y;
+            const int px = x0 + threadIdx.x, py = y0 + threadIdx.y, tid = block.thread_rank();
+            const bool in_image = px < W && py < H;
+            const int num_pix = H * W;
+            const float center = in_image ? bt_mask_at<Masked>(mask, H, W, py, px) : 0.f;
+            if constexpr (Masked) {
+                if (!__syncthreads_or(center != 0.0f)) { // the masked rule: no gradient crosses into the tile
+                    if (in_image)
+                        for (int c = 0; c < CH; ++c) {
+                            out_c[(b * CH + c) * num_pix + py * W + px] = 0.f;
+                            out_r[(b * CH + c) * num_pix + py * W + px] = 0.f;
+                        }
+                    return;
+                }
+            }
+            __shared__ float sData[SHARED_Y][SHARED_X][6]; // raw mu, sigma^2, sigma12, corrected mu, bc, br
+            __shared__ float sScratch[CONV_Y][CONV_X][6];
+            for (int c = 0; c < CH; ++c) {
+                const size_t plane = static_cast<size_t>(b * CH + c) * num_pix;
+                block.sync();
+                for (int i = tid; i < SHARED_Y * SHARED_X; i += BT_THREADS) {
+                    const int r = i / SHARED_X, cc = i % SHARED_X, gy = y0 - HALO + r, gx = x0 - HALO + cc;
+                    const bool inside = gx >= 0 && gx < W && gy >= 0 && gy < H;
+                    const float v = bt_valid<Masked>(H, W, gy, gx);
+                    const size_t q = plane + gy * W + gx;
+#pragma unroll
+                    for (int k = 0; k < 3; ++k) {
+                        const float unscale = Masked && k == 0 ? -16.f : -1.f;
+                        sData[r][cc][k] = v != 0.f ? v * unscale * __half2float(sharp.p[k][q]) : 0.f;
+                    }
+                    sData[r][cc][3] = v != 0.f ? -sw * v * __half2float(sharp.p[3][q]) : 0.f;
+                    sData[r][cc][4] = inside ? __half2float(bc[q]) : 0.f;
+                    sData[r][cc][5] = inside ? __half2float(br[q]) : 0.f;
+                }
+                block.sync();
+                for (int yy = threadIdx.y; yy < CONV_Y; yy += BLOCK_Y) {
+                    float acc[6] = {};
+#pragma unroll
+                    for (int d = -HALO; d <= HALO; ++d) {
+#pragma unroll
+                        for (int k = 0; k < 4; ++k)
+                            acc[k] += cGauss[HALO + d] * sData[yy][threadIdx.x + HALO + d][k];
+                        if (d >= -R && d <= R) {
+#pragma unroll
+                            for (int k = 4; k < 6; ++k)
+                                acc[k] += taps(d) * sData[yy][threadIdx.x + HALO + d][k];
+                        }
+                    }
+#pragma unroll
+                    for (int k = 0; k < 6; ++k)
+                        sScratch[yy][threadIdx.x][k] = acc[k];
+                }
+                block.sync();
+                if (!in_image)
+                    continue;
+                float sum[6] = {};
+#pragma unroll
+                for (int d = -HALO; d <= HALO; ++d) {
+#pragma unroll
+                    for (int k = 0; k < 4; ++k)
+                        sum[k] += cGauss[HALO + d] * sScratch[threadIdx.y + HALO + d][threadIdx.x][k];
+                    if (d >= -R && d <= R) {
+#pragma unroll
+                        for (int k = 4; k < 6; ++k)
+                            sum[k] += taps(d) * sScratch[threadIdx.y + HALO + d][threadIdx.x][k];
+                    }
+                }
+                const size_t q = plane + py * W + px;
+                const float pc = xc[q], pr = xr[q], p2 = pixel_value(y, q);
+                const float adj = center > 0.f ? 1.f : 0.f; // keep(q): the adjoint lands on kept pixels only
+                const float sign = pc == p2 ? 0.f : copysignf(1.f, pc - p2);
+                const float l1 = (1.f - sw) * sign * (Masked ? center : bt_valid<false>(H, W, py, px));
+                out_c[q] = chain * (center * sum[3] + l1 + adj * sum[4]);
+                out_r[q] = chain * (center * (sum[0] + 2.f * pr * sum[1] + p2 * sum[2]) + adj * sum[5]);
+            }
+        }
+    } // namespace
+
+    BlurTolerantResult blur_tolerant_loss(const lfs::core::Tensor& corrected_input, const lfs::core::Tensor& raw_input,
+                                          const lfs::core::Tensor& target_input, const lfs::core::Tensor& weight,
+                                          const float ssim_weight, const float blur_sigma, LossWorkspaceArena& arena,
+                                          const float denominator) {
+        using lfs::core::DataType;
+        using lfs::core::Tensor;
+        constexpr float C1 = 0.01f * 0.01f;
+        constexpr float C2 = 0.03f * 0.03f;
+        validate_loss_weight(ssim_weight);
+        LFS_ASSERT(std::isfinite(denominator) && denominator >= 0.0f);
+        const BlurTaps taps = blur_taps(blur_sigma);
+        const bool decoupled = raw_input.is_valid() && raw_input.numel() > 0;
+        const auto corrected = prepare_loss_prediction(corrected_input, "Corrected loss image");
+        const auto raw = decoupled ? prepare_loss_prediction(raw_input, "Raw loss image") : corrected;
+        const auto gt = prepare_loss_target(target_input, "Loss target");
+        LFS_ASSERT_MSG(corrected.shape() == raw.shape() && corrected.shape() == gt.shape(),
+                       lfs::core::detail::format_cuda_safe(
+                           "Blur-tolerant loss image shapes must match (corrected={}, raw={}, target={})",
+                           corrected.shape().str(), raw.shape().str(), gt.shape().str()));
+        const bool masked = weight.is_valid() && weight.numel() > 0;
+        const Tensor mask = masked ? prepare_loss_mask(weight, corrected) : Tensor{};
+        const auto& dims = corrected.shape().dims();
+        const int N = static_cast<int>(dims[0]), C = static_cast<int>(dims[1]);
+        const int H = static_cast<int>(dims[2]), W = static_cast<int>(dims[3]);
+        const auto stream = lfs::core::getCurrentCUDAStream();
+        const dim3 grid((W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, N);
+        const dim3 block(BLOCK_X, BLOCK_Y);
+
+        BlurTolerantResult result;
+        const auto run = [&](auto& aws, const auto* y, const auto* m) {
+            using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(y)>>;
+            using MaskT = std::remove_cv_t<std::remove_pointer_t<decltype(m)>>;
+            constexpr bool Masked = std::is_same_v<std::remove_reference_t<decltype(aws)>, MaskedDecoupledFusedL1SSIMWorkspace>;
+            // The sharp branch, the maps and the corrected-image gradient live in the decoupled workspace; its
+            // partials and everything below are read only until the gradients are formed. G corrected lives only
+            // until the branch pass, which reuses its bytes for the two fp16 branch images.
+            aws.ensure_size(dims);
+            const size_t image = static_cast<size_t>(N) * C * H * W, plane = static_cast<size_t>(H) * W;
+            const auto align = [](const size_t bytes) { return (bytes + 255) & ~size_t{255}; };
+            char* const base = arena.take_step_scratch(
+                3 * align(image * 4) + 4 * align(image * 2) + align(plane * 4) + align(N * plane * 4),
+                "loss.blur_tolerant");
+            size_t offset = 0;
+            const auto view_at = [&](const size_t at, const lfs::core::TensorShape& shape, const DataType dtype) {
+                return Tensor::from_blob(base + at, shape, lfs::core::Device::CUDA, dtype, stream);
+            };
+            const auto view = [&](const lfs::core::TensorShape& shape, const DataType dtype) {
+                auto t = view_at(offset, shape, dtype);
+                offset += align(shape.elements() * lfs::core::dtype_size(dtype));
+                return t;
+            };
+            Tensor blurred_raw = view(corrected.shape(), DataType::Float32);
+            Tensor branch_c = view_at(offset, corrected.shape(), DataType::Float16);
+            Tensor branch_r = view_at(offset + image * 2, corrected.shape(), DataType::Float16);
+            Tensor blurred_corrected = view(corrected.shape(), DataType::Float32);
+            Tensor raw_grad = view(corrected.shape(), DataType::Float32);
+            BtHalves blurred;
+            for (auto& p : blurred.p)
+                p = view(corrected.shape(), DataType::Float16).template ptr<__half>();
+            Tensor inv_support = view({plane / W, static_cast<size_t>(W)}, DataType::Float32);
+            Tensor blend_map = view({static_cast<size_t>(N), 1, plane / W, static_cast<size_t>(W)}, DataType::Float32);
+
+            const BtHalves sharp{{aws.raw_dm_dmu1.template ptr<__half>(), aws.raw_dm_dsigma1_sq.template ptr<__half>(),
+                                  aws.raw_dm_dsigma12.template ptr<__half>(), aws.app_dm_dmu1.template ptr<__half>()}};
+            dispatch_blur_radius(taps.radius, [&](auto radius) {
+                blurTolerantBlurCUDA<Masked, MaskT, decltype(radius)::value><<<grid, block, 0, stream>>>(
+                    H, W, C, corrected.ptr<float>(), raw.ptr<float>(), m, blurred_corrected.ptr<float>(),
+                    blurred_raw.ptr<float>(), inv_support.ptr<float>(), taps);
+            });
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.blur_tolerant_blur");
+            blurTolerantForwardCUDA<Masked, TargetT, MaskT><<<grid, block, 0, stream>>>(
+                H, W, C, C1, C2, ssim_weight, BLUR_TOLERANT_SSIM_FLAT_VARIANCE, corrected.ptr<float>(), raw.ptr<float>(),
+                y, m, blurred_corrected.ptr<float>(), blurred_raw.ptr<float>(), sharp, blurred,
+                aws.ssim_map.template ptr<float>(), aws.cs_map.template ptr<float>(), blend_map.ptr<float>());
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.blur_tolerant_forward");
+            float chain;
+            if constexpr (Masked) {
+                launch_masked_fused_l1_ssim_mean_device(corrected.ptr<float>(), y, blend_map.ptr<float>(), m, ssim_weight,
+                                                        aws.reduction_temp.template ptr<float>(), aws.masked_loss.template ptr<float>(),
+                                                        aws.mask_sum.template ptr<float>(), N, C, H, W, stream, denominator);
+                result.loss = aws.masked_loss;
+                result.mask_sum_value = denominator > 0.0f ? denominator : aws.mask_sum.template item<float>();
+                LFS_ASSERT_MSG(std::isfinite(result.mask_sum_value) && result.mask_sum_value > 0.0f,
+                               "Masked loss normalization must be positive and finite");
+                chain = 1.0f / result.mask_sum_value;
+            } else {
+                launch_fused_l1_ssim_mean_device(corrected.ptr<float>(), y, blend_map.ptr<float>(), ssim_weight,
+                                                 aws.reduction_temp.template ptr<float>(), aws.reduction_result.template ptr<float>(),
+                                                 N, C, H, W, /*apply_valid_padding=*/true, stream);
+                result.loss = aws.reduction_result;
+                chain = 1.0f / static_cast<float>(static_cast<size_t>(N) * C * (H > 10 ? H - 10 : H) * (W > 10 ? W - 10 : W));
+            }
+            blurTolerantBranchCUDA<Masked, TargetT, MaskT><<<grid, block, 0, stream>>>(
+                H, W, C, blurred_raw.ptr<float>(), y, m, blurred, inv_support.ptr<float>(),
+                branch_c.ptr<__half>(), branch_r.ptr<__half>());
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.blur_tolerant_branch");
+            dispatch_blur_radius(taps.radius, [&](auto radius) {
+                blurTolerantGradientCUDA<Masked, TargetT, MaskT, decltype(radius)::value><<<grid, block, 0, stream>>>(
+                    H, W, C, ssim_weight, chain, corrected.ptr<float>(), raw.ptr<float>(), y, m, sharp,
+                    branch_c.ptr<__half>(), branch_r.ptr<__half>(), aws.grad_corrected.template ptr<float>(),
+                    raw_grad.ptr<float>(), taps);
+            });
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.blur_tolerant_gradient");
+            result.grad_corrected = aws.grad_corrected;
+            const DecoupledRawGradient raw_gradient{.raw_img = raw, .gt_img = gt, .mask = mask, .mask_sum_value = result.mask_sum_value, .H = H, .W = W, .apply_valid_padding = true, .precomputed = raw_grad};
+            if (decoupled)
+                result.raw = raw_gradient;
+            else // the plain loss: the render is both images
+                accumulate_decoupled_raw_gradient(raw_gradient, result.grad_corrected);
+        };
+        dispatch_target_ptr(gt, [&](const auto* y) {
+            if (masked)
+                dispatch_mask_ptr(mask, [&](const auto* m) { run(arena.masked_decoupled(), y, m); });
+            else
+                run(arena.decoupled(), y, static_cast<const float*>(nullptr));
+        });
+        return result;
     }
 
     // =========================================================================
@@ -3614,6 +4220,26 @@ namespace lfs::training::kernels {
         clear_all_views();
     }
 
+    char* LossWorkspaceArena::take_step_scratch(const size_t bytes, const char* const operation) {
+        if (step_scratch_) {
+            char* const ptr = step_scratch_(bytes);
+            if (!ptr)
+                throw lfs::core::MemoryAllocationError(lfs::core::AllocationFailure{
+                    .requested_bytes = bytes,
+                    .label = "training.loss_step_scratch",
+                    .operation = operation});
+            return ptr;
+        }
+        if (step_fallback_.numel() < bytes) {
+            step_fallback_ = {};
+            step_fallback_ = lfs::core::Tensor::empty_exact({align_up_bytes(bytes)}, lfs::core::DataType::UInt8);
+            if (step_fallback_.stream() != lfs::core::getCurrentCUDAStream()) {
+                step_fallback_.set_stream(lfs::core::getCurrentCUDAStream());
+            }
+        }
+        return static_cast<char*>(step_fallback_.data_ptr());
+    }
+
     void LossWorkspaceArena::bind_fused(const std::vector<size_t>& shape) {
         std::vector<size_t> map_shape = shape;
         map_shape[1] = 1;
@@ -3761,6 +4387,7 @@ namespace lfs::training::kernels {
     }
 
     void LossWorkspaceArena::shrink_to_required() {
+        step_fallback_ = {};
         if (active_kind_ == Kind::None || active_shape_.empty()) {
             reset();
             return;
@@ -3808,6 +4435,7 @@ namespace lfs::training::kernels {
     void LossWorkspaceArena::reset() {
         clear_all_views();
         storage_ = {};
+        step_fallback_ = {};
         capacity_bytes_ = 0;
         active_kind_ = Kind::None;
         active_shape_.clear();

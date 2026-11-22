@@ -1397,6 +1397,7 @@ namespace lfs::core {
             p.sh_rest_reg = 0.375f;
             p.use_error_map = true;
             p.use_edge_map = true;
+            p.sh_degree_interval = 1; // every SH degree from the first steps
             return p;
         }
 
