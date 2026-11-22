@@ -374,11 +374,6 @@ body {
     z-index: 2;
 }
 
-.model-alignment-title {
-    font-weight: 600;
-    padding: 0 8dp;
-}
-
 .crop-roi-popover {
     position: absolute;
     top: 42dp;

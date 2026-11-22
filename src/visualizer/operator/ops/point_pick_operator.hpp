@@ -29,6 +29,8 @@ namespace lfs::vis::op {
         struct PointSample;
         virtual bool acceptsPointSample(const PointSample&, std::optional<int>) const { return true; }
         virtual bool sequentialPoints() const { return false; }
+        virtual bool editablePairs() const { return false; }
+        virtual void showPointMenu(glm::dvec2, int) {}
         virtual bool applyPickedPoints(OperatorContext& ctx, float value) = 0;
         virtual void handleToolUiAction(OperatorContext&, PointPickState::UiAction) {}
         virtual OperatorResult handleToolAction(OperatorContext&, input::Action) { return OperatorResult::PASS_THROUGH; }
@@ -62,13 +64,24 @@ namespace lfs::vis::op {
         void syncPickedPointsToServices();
         void removeLastPoint();
         void removeSelectedPoint();
-        void clearAllPoints();
+        void clearAllPoints(bool preserve_history = false);
+        void undoPointEdit();
+        [[nodiscard]] bool pendingPairOnRight() const { return state_.pendingPairOnRight(); }
         [[nodiscard]] bool tryPlacePoint(double x, double y);
         void setStatus(const char* locale_key, double duration_seconds = 1.5) const;
 
     private:
         OperatorResult handlePendingUiAction(OperatorContext& ctx);
         void markOverlayDirty() const;
+        struct PointEdit {
+            std::vector<glm::vec3> points;
+            std::optional<int> selected;
+            std::optional<SplitViewPanelId> panel;
+            bool pending_right;
+        };
+        void rememberPointEdit();
+        std::vector<PointEdit> edits_;
+        bool drag_edit_recorded_ = false;
         PointPickState& state_;
 
         const char* no_surface_key_;

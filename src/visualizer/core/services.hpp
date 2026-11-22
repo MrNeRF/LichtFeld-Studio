@@ -39,6 +39,7 @@ namespace lfs::vis {
             Clear,
             TogglePreview,
             RefreshPreview,
+            DeleteSelected,
         };
 
         void setPickedPoints(std::vector<glm::vec3> points) {
@@ -53,7 +54,10 @@ namespace lfs::vis {
             notify_();
         }
         [[nodiscard]] const std::vector<glm::vec3>& getPickedPoints() const { return picked_points_; }
+        [[nodiscard]] bool pendingPairOnRight() const { return pending_pair_on_right_; }
+        void setPendingPairOnRight(bool right) { pending_pair_on_right_ = right; }
         void clearPickedPoints() {
+            pending_pair_on_right_ = false;
             const bool changed = !picked_points_.empty() || !status_message_.empty();
             picked_points_.clear();
             selected_point_.reset();
@@ -131,6 +135,7 @@ namespace lfs::vis {
     private:
         void (*notify_)();
         bool notify_status_;
+        bool pending_pair_on_right_ = false;
         std::vector<glm::vec3> picked_points_;
         std::optional<int> selected_point_;
         UiAction ui_action_ = UiAction::None;

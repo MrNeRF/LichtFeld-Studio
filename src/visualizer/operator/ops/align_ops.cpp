@@ -106,8 +106,33 @@ namespace lfs::vis::op {
     bool AlignPickPointOperator::acceptsPointSample(const PointSample& sample, std::optional<int> index) const {
         if (!pair_)
             return true;
+        if (editablePairs()) {
+            const bool incomplete = picked_points_.size() % 2 != 0;
+            if (!index)
+                return !incomplete || sample.panel == (pendingPairOnRight() ? SplitViewPanelId::Left : SplitViewPanelId::Right);
+            if (incomplete && static_cast<size_t>(*index) + 1 == picked_points_.size())
+                return sample.panel == (pendingPairOnRight() ? SplitViewPanelId::Right : SplitViewPanelId::Left);
+        }
         const bool right = index.value_or(static_cast<int>(picked_points_.size())) % 2 != 0;
         return sample.panel == (right ? SplitViewPanelId::Right : SplitViewPanelId::Left);
+    }
+
+    void AlignPickPointOperator::showPointMenu(const glm::dvec2 position, const int point) {
+        auto* gui = services().guiOrNull();
+        if (!gui)
+            return;
+        gui->globalContextMenu().request(
+            {{.label = LOC("align.delete_pair"), .action = "delete_pair"}},
+            static_cast<float>(position.x), static_cast<float>(position.y),
+            [point](std::string_view) {
+                auto& state = services().alignPointPick();
+                auto& registry = operators();
+                if (registry.activeModalId() != to_string(BuiltinOp::AlignPickPoint) ||
+                    state.getSelectedPoint() != point)
+                    return;
+                state.requestUiAction(PointPickState::UiAction::DeleteSelected);
+                (void)registry.dispatchModalEvent({});
+            });
     }
 
     std::optional<glm::mat4> AlignPickPointOperator::computePairPreviewTransform() const {
@@ -215,6 +240,11 @@ namespace lfs::vis::op {
     }
 
     OperatorResult AlignPickPointOperator::handleToolAction(OperatorContext& ctx, const input::Action action) {
+        if (model_alignment_ && action == input::Action::UNDO) {
+            beforePointEdit(ctx);
+            undoPointEdit();
+            return OperatorResult::RUNNING_MODAL;
+        }
         if (action != input::Action::APPLY_ALIGNMENT)
             return OperatorResult::PASS_THROUGH;
         if (applyPickedPoints(ctx, 0.0f)) {

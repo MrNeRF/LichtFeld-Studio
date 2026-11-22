@@ -832,13 +832,12 @@ class _GizmoToolbarController:
             preview = lf.ui.get_align_preview()
             cancel = ("cancel", "align.cancel_session", "Cancel", "scene/x", "", False, True)
             if preview:
-                edit_points = _ui_label("align.edit_points", "Edit points")
+                exit_preview = _ui_label("align.edit_points", "Exit preview")
                 records[0].update(
-                    tooltip_key="align.edit_points", tooltip_text=edit_points, label=edit_points,
-                    selected=False, enabled=True, opacity="1",
+                    tooltip_key="align.edit_points", tooltip_text=exit_preview, label=exit_preview,
+                    selected=True, enabled=True, opacity="1", icon_src=_icon_src("scene/hidden"),
                 )
                 records = records[:2]
-                records[1]["label"] = _ui_label("align.apply", "Apply")
                 link_tooltip = "align.unlink_cameras" if linked else "align.link_cameras_help"
                 controls = (
                     ("separate", "align.separate", "Separate", "", _ui_label("align.separate", "Separate"),
@@ -853,9 +852,11 @@ class _GizmoToolbarController:
                 )
             else:
                 del records[1]
+                records[0]["label"] = ""
                 controls = (
                     ("swap", "align.swap_roles" if can_swap else "align.swap_unavailable", "Swap roles", "",
-                     _ui_label("align.swap_roles", "Swap roles"), False, can_swap),
+                     "⇄", False, can_swap),
+                    ("delete", "align.delete_pair", "Delete selected pair", "scene/trash", "", False, True),
                     cancel,
                 )
             return records + [

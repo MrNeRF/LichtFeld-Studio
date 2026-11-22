@@ -180,7 +180,7 @@ namespace lfs::vis::op {
 
             if (drag_active_ && press_point_index_ &&
                 static_cast<size_t>(*press_point_index_) < picked_points_.size()) {
-                if (!sequentialPoints())
+                if (!sequentialPoints() || editablePairs())
                     (void)requestPoint({mm->position, press_point_index_});
                 return OperatorResult::RUNNING_MODAL;
             }
@@ -203,7 +203,17 @@ namespace lfs::vis::op {
                 if (event->over_gui) {
                     return OperatorResult::PASS_THROUGH;
                 }
+                if (editablePairs() && !is_pick_button && mb->button == static_cast<int>(input::AppMouseButton::RIGHT)) {
+                    if (const auto hit = hitTestPoint(mb->position.x, mb->position.y)) {
+                        selected_point_ = hit;
+                        state_.setSelectedPoint(hit);
+                        markOverlayDirty();
+                        showPointMenu(mb->position, *hit);
+                        return OperatorResult::RUNNING_MODAL;
+                    }
+                }
                 if (is_pick_button) {
+                    drag_edit_recorded_ = false;
                     press_active_ = true;
                     press_button_ = mb->button;
                     press_pos_ = mb->position;
@@ -219,6 +229,8 @@ namespace lfs::vis::op {
                         }
                     }
                 }
+                if (editablePairs() && is_pick_button && press_point_index_)
+                    return OperatorResult::RUNNING_MODAL;
                 // Let camera navigation own press so orbit/pan can begin.
                 return OperatorResult::PASS_THROUGH;
             }
@@ -325,7 +337,13 @@ namespace lfs::vis::op {
             break;
         case PointPickState::UiAction::Clear:
             beforePointEdit(ctx);
-            clearAllPoints();
+            if (!picked_points_.empty())
+                rememberPointEdit();
+            clearAllPoints(true);
+            break;
+        case PointPickState::UiAction::DeleteSelected:
+            if (editablePairs() && !pointEditingBlocked())
+                removeSelectedPoint();
             break;
         default:
             handleToolUiAction(ctx, action);
@@ -359,7 +377,31 @@ namespace lfs::vis::op {
         markOverlayDirty();
     }
 
-    void PointPickOperator::clearAllPoints() {
+    void PointPickOperator::rememberPointEdit() {
+        if (editablePairs())
+            edits_.push_back({picked_points_, selected_point_, pick_panel_, pendingPairOnRight()});
+    }
+
+    void PointPickOperator::undoPointEdit() {
+        pending_pick_.reset();
+        press_active_ = false;
+        press_point_index_.reset();
+        drag_active_ = false;
+        drag_edit_recorded_ = false;
+        if (edits_.empty())
+            return;
+        auto edit = std::move(edits_.back());
+        edits_.pop_back();
+        picked_points_ = std::move(edit.points);
+        selected_point_ = edit.selected;
+        pick_panel_ = edit.panel;
+        state_.setPendingPairOnRight(edit.pending_right);
+        syncPickedPointsToServices();
+    }
+
+    void PointPickOperator::clearAllPoints(bool preserve_history) {
+        if (!preserve_history)
+            edits_.clear();
         pending_pick_.reset();
         press_active_ = false;
         picked_points_.clear();
@@ -379,7 +421,9 @@ namespace lfs::vis::op {
         if (picked_points_.empty()) {
             return;
         }
+        rememberPointEdit();
         const int last = static_cast<int>(picked_points_.size()) - 1;
+        state_.setPendingPairOnRight(false);
         if (selected_point_ && *selected_point_ >= last) {
             selected_point_.reset();
         }
@@ -405,7 +449,10 @@ namespace lfs::vis::op {
             state_.clearSelectedPoint();
             return;
         }
+        rememberPointEdit();
         const int first = sequentialPoints() ? idx - idx % 2 : idx;
+        if (static_cast<size_t>(first) + 1 == picked_points_.size())
+            state_.setPendingPairOnRight(false);
         const auto last = std::min(picked_points_.size(), static_cast<size_t>(first) + (sequentialPoints() ? 2u : 1u));
         picked_points_.erase(picked_points_.begin() + first, picked_points_.begin() + last);
         selected_point_.reset();
@@ -448,12 +495,24 @@ namespace lfs::vis::op {
         if (index) {
             if (*index < 0 || static_cast<size_t>(*index) >= picked_points_.size())
                 return false;
+            if (!drag_edit_recorded_ && picked_points_[*index] != sample.world) {
+                rememberPointEdit();
+                drag_edit_recorded_ = true;
+            }
             picked_points_[*index] = sample.world;
         } else {
             if (picked_points_.size() >= max_points_)
                 return false;
+            rememberPointEdit();
+            const bool completes_right_first = editablePairs() && pendingPairOnRight();
             picked_points_.push_back(sample.world);
             selected_point_ = static_cast<int>(picked_points_.size()) - 1;
+            if (completes_right_first) {
+                std::iter_swap(picked_points_.end() - 2, picked_points_.end() - 1);
+                --*selected_point_;
+            }
+            if (editablePairs())
+                state_.setPendingPairOnRight(picked_points_.size() % 2 != 0 && sample.panel == SplitViewPanelId::Right);
         }
         if (!pick_panel_)
             pick_panel_ = sample.panel;

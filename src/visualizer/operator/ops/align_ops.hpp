@@ -35,6 +35,8 @@ namespace lfs::vis::op {
         void endModelAlignment();
         void publishPairPreviewFeedback(const glm::mat4& transform);
         bool sequentialPoints() const override { return pair_.has_value(); }
+        bool editablePairs() const override { return model_alignment_; }
+        void showPointMenu(glm::dvec2 position, int point) override;
         bool acceptsPointSample(const PointSample& sample, std::optional<int> index) const override;
         [[nodiscard]] std::optional<glm::mat4> computePairPreviewTransform() const;
 

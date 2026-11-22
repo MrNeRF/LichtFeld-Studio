@@ -196,11 +196,12 @@ namespace lfs::vis::tools {
                           const std::vector<glm::vec3>& picked_points, std::optional<int> selected_point,
                           const lfs::rendering::OverlayColor& color, float label_size,
                           std::optional<float> pair_divider_x,
-                          std::optional<SplitViewPanelId> pair_panel) {
+                          std::optional<SplitViewPanelId> pair_panel, bool pending_pair_on_right) {
         const auto& t = theme();
         const bool paired = pair_divider_x || pair_panel;
         for (size_t i = 0; i < picked_points.size(); ++i) {
-            if (pair_panel && splitViewPanelIndex(*pair_panel) != i % 2)
+            const bool pending_right = pending_pair_on_right && i + 1 == picked_points.size();
+            if (pair_panel && splitViewPanelIndex(*pair_panel) != (pending_right ? 1u : i % 2))
                 continue;
             const glm::vec2 screen_pos = projectToScreen(panel_proj, picked_points[i]);
             if (pair_divider_x && (screen_pos.x >= *pair_divider_x) != (i % 2 != 0))
@@ -210,14 +211,21 @@ namespace lfs::vis::tools {
             const bool is_selected = selected_point &&
                                      (paired ? *selected_point / 2 == static_cast<int>(i / 2)
                                              : *selected_point == static_cast<int>(i));
-            overlay.addCircleFilled(screen_pos, screen_radius, color, 32);
+            auto fill = color;
+            if (pair_panel)
+                fill.a *= 0.22f;
+            overlay.addCircleFilled(screen_pos, screen_radius, fill, 32);
+            if (pair_panel) {
+                overlay.addCircleFilled(screen_pos, 2.0f, toOverlay(t.overlay.text), 12);
+            }
             overlay.addCircle(screen_pos, screen_radius,
                               is_selected ? toOverlay(t.palette.primary) : toOverlay(t.overlay.text),
                               32, is_selected ? 2.5f : 1.5f);
 
             const auto label = std::to_string((paired ? i / 2 : i) + 1);
-            overlay.addText({screen_pos.x - 4.0f, screen_pos.y - 6.0f},
-                            label, toOverlay(t.overlay.text), label_size);
+            const glm::vec2 label_pos = pair_panel ? screen_pos + glm::vec2(screen_radius + 4.0f, -6.0f)
+                                                   : screen_pos - glm::vec2(4.0f, 6.0f);
+            overlay.addText(label_pos, label, toOverlay(t.overlay.text), label_size);
         }
     }
 

@@ -2820,7 +2820,8 @@ def test_model_alignment_replaces_active_tool_controls_and_refreshes_on_preview(
     assert "align-clear" not in preview
     lf.ui.model_alignment_controls = lambda action="": (False, -1, False) if not action else controls(action)
     separate = controller._gizmo.snapshot()["align_action_buttons"]
-    assert [record["value"] for record in separate if record["selected"]] == ["separate"]
+    assert [record["value"] for record in separate
+            if record["action"] == "model_alignment_control" and record["selected"]] == ["separate"]
     for action in ("right", "separate", "cancel"):
         controller._on_toolbar_action(None, None, ["model_alignment_control", action])
     assert calls == ["right", "separate", "cancel"]

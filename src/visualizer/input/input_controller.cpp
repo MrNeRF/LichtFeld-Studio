@@ -176,7 +176,9 @@ namespace lfs::vis {
                  isSelectionModalAction(action)) ||
                 ((modal_id == op::to_string(op::BuiltinOp::AlignPickPoint) ||
                   modal_id == op::to_string(op::BuiltinOp::ScaleDistancePickPoint)) &&
-                 isAlignModalAction(action));
+                 isAlignModalAction(action)) ||
+                (modal_id == op::to_string(op::BuiltinOp::AlignPickPoint) &&
+                 action == input::Action::UNDO);
             if (!accepted) {
                 return false;
             }

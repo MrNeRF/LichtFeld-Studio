@@ -57,7 +57,8 @@ namespace lfs::vis::tools {
                           const std::vector<glm::vec3>& picked_points, std::optional<int> selected_point,
                           const lfs::rendering::OverlayColor& color, float label_size,
                           std::optional<float> pair_divider_x = std::nullopt,
-                          std::optional<SplitViewPanelId> pair_panel = std::nullopt);
+                          std::optional<SplitViewPanelId> pair_panel = std::nullopt,
+                          bool pending_pair_on_right = false);
     void drawPointPickHud(lfs::rendering::ScreenOverlayRenderer& overlay, const PanelProjection& panel_proj,
                           std::string_view hint, const std::string& count_text, const std::string* status,
                           std::string_view option_text = {});

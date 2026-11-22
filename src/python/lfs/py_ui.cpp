@@ -4662,6 +4662,11 @@ namespace lfs::python {
             "model_alignment_controls",
             [](const std::string& action) {
                 using Controls = std::tuple<bool, int, bool>;
+                if (action == "delete") {
+                    (void)dispatchPointPickUiAction(vis::op::BuiltinOp::AlignPickPoint, vis::services().alignPointPick(),
+                                                    vis::PointPickState::UiAction::DeleteSelected);
+                    return Controls{false, -1, false};
+                }
                 return invoke_on_viewer([action]() -> Controls {
                     auto* renderer = get_rendering_manager();
                     auto* gui = vis::services().guiOrNull();

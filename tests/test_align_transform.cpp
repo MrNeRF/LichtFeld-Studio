@@ -616,6 +616,20 @@ namespace lfs::vis::op {
             operation_.syncPickedPointsToServices();
         }
 
+        void startDedicatedAlignment(RenderingManager& renderer, Viewport& viewport) {
+            startPairAlignment(renderer);
+            ASSERT_FALSE(HasFatalFailure());
+            operation_.cancel(*context_);
+            auto& scene = manager_->getScene();
+            ASSERT_TRUE(renderer.beginModelAlignment(viewport, scene, *scene.getNode("reference"), *scene.getNode("mobile")));
+            OperatorProperties properties;
+            ASSERT_EQ(operation_.invoke(*context_, properties), OperatorResult::RUNNING_MODAL);
+        }
+
+        bool sample(const glm::vec3 point, SplitViewPanelId panel, std::optional<int> index = {}) {
+            return operation_.applyPointSample({.world = point, .panel = panel}, index);
+        }
+
         glm::mat4 transform() const { return manager_->getScene().getNode("target")->transform(); }
 
         std::unique_ptr<SceneManager> manager_;
@@ -718,6 +732,42 @@ namespace lfs::vis::op {
         EXPECT_EQ(renderer.projectSecondaryViewport().camera.t, saved_right);
         renderer.endModelAlignment(primary);
         EXPECT_EQ(renderer.getSplitViewMode(), SplitViewMode::IndependentDual);
+    }
+
+    TEST_F(AlignPreviewTest, DedicatedPointsCanStartOnEitherSideAndUndoStaysInTheSession) {
+        Viewport primary;
+        pair_rendering_ = std::make_unique<RenderingManager>();
+        startDedicatedAlignment(*pair_rendering_, primary);
+        ASSERT_FALSE(HasFatalFailure());
+
+        const glm::vec3 right{1, 2, 3};
+        const glm::vec3 left{4, 5, 6};
+        auto& state = services().alignPointPick();
+        ASSERT_TRUE(sample(right, SplitViewPanelId::Right));
+        EXPECT_TRUE(state.pendingPairOnRight());
+        EXPECT_FALSE(sample(left, SplitViewPanelId::Right));
+        ASSERT_TRUE(sample(left, SplitViewPanelId::Left));
+        EXPECT_FALSE(state.pendingPairOnRight());
+        EXPECT_EQ(state.getPickedPoints(), (std::vector<glm::vec3>{left, right}));
+
+        ASSERT_TRUE(sample({5, 6, 7}, SplitViewPanelId::Left, 0));
+        ASSERT_TRUE(sample({6, 7, 8}, SplitViewPanelId::Left, 0));
+        EXPECT_EQ(bound(input::Action::UNDO), OperatorResult::RUNNING_MODAL);
+        EXPECT_EQ(state.getPickedPoints(), (std::vector<glm::vec3>{left, right}));
+        EXPECT_EQ(bound(input::Action::UNDO), OperatorResult::RUNNING_MODAL);
+        EXPECT_EQ(state.getPickedPoints(), (std::vector<glm::vec3>{right}));
+        EXPECT_TRUE(state.pendingPairOnRight());
+
+        ASSERT_TRUE(sample(left, SplitViewPanelId::Left));
+        ASSERT_TRUE(sample(left, SplitViewPanelId::Left));
+        EXPECT_FALSE(state.pendingPairOnRight());
+        state.requestUiAction(PointPickState::UiAction::DeleteSelected);
+        EXPECT_EQ(send({}), OperatorResult::RUNNING_MODAL);
+        EXPECT_EQ(state.getPickedPoints(), (std::vector<glm::vec3>{left, right}));
+        EXPECT_EQ(bound(input::Action::UNDO), OperatorResult::RUNNING_MODAL);
+        EXPECT_EQ(state.getPickedPoints(), (std::vector<glm::vec3>{left, right, left}));
+        EXPECT_EQ(undoHistory().undoCount(), 0u);
+        pair_rendering_->endModelAlignment(primary);
     }
 
     TEST_F(AlignPreviewTest, MovedReferenceInvalidatesPairsBeforeApply) {

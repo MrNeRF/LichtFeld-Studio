@@ -178,7 +178,6 @@
             </div>
             <div id="primary-align-toolbar" class="toolbar-container align-toolbar hidden"
                  data-class-hidden="!show_align_toolbar">
-                <span class="model-alignment-title" data-if="show_model_alignment_toolbar">@tr:align.models</span>
                 <div class="icon-btn"
                      data-for="button : align_action_buttons"
                      data-attr-id="button.button_id"

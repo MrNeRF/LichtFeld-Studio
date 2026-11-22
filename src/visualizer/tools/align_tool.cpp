@@ -276,6 +276,7 @@ namespace lfs::vis::tools {
         const auto settings = rendering_manager ? rendering_manager->getSettings() : RenderSettings{};
         auto* const sm = tool_context_->getSceneManager();
         if (alignment) {
+            const bool pending_right = services().alignPointPick().pendingPairOnRight();
             if (!alignment->preview) {
                 for (const auto panel : {SplitViewPanelId::Left, SplitViewPanelId::Right}) {
                     const auto projection = pointPickOverlayFrame(*tool_context_, panel).panel;
@@ -283,14 +284,15 @@ namespace lfs::vis::tools {
                     const lfs::rendering::ScreenOverlayRenderer::ScopedClipRect pane_clip(
                         *overlay, {info.x, info.y}, {info.x + info.width, info.y + info.height});
                     drawPointMarkers(*overlay, projection, picked_points, selected_point,
-                                     SPHERE_COLOR, label_size, std::nullopt, panel);
+                                     SPHERE_COLOR, label_size, std::nullopt, panel, pending_right);
                 }
                 const auto count = picked_points.size();
-                const auto next = count % 2 ? SplitViewPanelId::Right : SplitViewPanelId::Left;
+                const auto next = count % 2 && !pending_right ? SplitViewPanelId::Right : SplitViewPanelId::Left;
                 const auto projection = pointPickOverlayFrame(*tool_context_, next).panel;
-                const char* hint = count % 2 != 0                       ? "align.pair_mobile"
+                const char* hint = pending_right                        ? "align.pair_match_left"
+                                   : count % 2 != 0                     ? "align.pair_mobile"
                                    : op::hasEnoughAlignmentPairs(count) ? "align.pair_ready"
-                                                                        : "align.pair_reference";
+                                                                        : "align.pair_start_either";
                 drawPointPickHud(*overlay, projection, LOC(hint),
                                  LOCF("align.pair_progress", count / 2),
                                  services().alignPointPick().getStatusMessage());
