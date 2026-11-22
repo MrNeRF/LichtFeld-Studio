@@ -199,8 +199,7 @@ namespace lfs::vis {
 
     bool RenderingManager::beginModelAlignment(
         Viewport& primary, const core::Scene& scene,
-        const core::SceneNode& reference, const core::SceneNode& mobile,
-        const Viewport& left, const Viewport& right) {
+        const core::SceneNode& reference, const core::SceneNode& mobile) {
         if (model_alignment_view_ || reference.type != core::NodeType::SPLAT ||
             mobile.type != core::NodeType::SPLAT || !reference.model || !mobile.model ||
             !scene.isNodeEffectivelyVisible(reference.id) || !scene.isNodeEffectivelyVisible(mobile.id) ||
@@ -224,13 +223,13 @@ namespace lfs::vis {
             .previous_secondary = secondary,
         });
         restoreSplitViewMode(SplitViewMode::IndependentDual, primary);
-        primary.camera = left.camera;
         auto& secondary_viewport = projectSecondaryViewport();
-        secondary_viewport.camera = right.camera;
-        primary.ortho_scale_override = left.ortho_scale_override.value_or(settings.ortho_scale);
-        secondary_viewport.ortho_scale_override = right.ortho_scale_override.value_or(settings.ortho_scale);
+        primary.ortho_scale_override = primary.ortho_scale_override.value_or(settings.ortho_scale);
+        secondary_viewport.ortho_scale_override = secondary_viewport.ortho_scale_override.value_or(settings.ortho_scale);
         setFocusedSplitPanel(SplitViewPanelId::Left);
-        handleSplitPositionChanged(0.5f);
+        if (!splitViewUsesIndependentPanels(settings.split_view_mode))
+            handleSplitPositionChanged(0.5f);
+        publish_align_state_generation();
         markDirty(DirtyFlag::ALL, FrameReason::SceneChange);
         return true;
     }
@@ -249,6 +248,7 @@ namespace lfs::vis {
         restoreAlignmentCamera(primary, saved.previous_primary);
         restoreAlignmentCamera(projectSecondaryViewport(), saved.previous_secondary);
         setFocusedSplitPanel(saved.previous_focus);
+        publish_align_state_generation();
         markDirty(DirtyFlag::ALL, FrameReason::SceneChange);
     }
 
@@ -278,6 +278,7 @@ namespace lfs::vis {
             view.linked = false;
         }
         view.preview = std::move(transform);
+        publish_align_state_generation();
         markDirty(DirtyFlag::ALL, FrameReason::SceneChange);
     }
 
@@ -300,7 +301,10 @@ namespace lfs::vis {
         if (!canSwapModelAlignmentRoles(scene))
             return;
         std::swap(model_alignment_view_->nodes[0], model_alignment_view_->nodes[1]);
-        std::swap(primary.camera, projectSecondaryViewport().camera);
+        auto& right = projectSecondaryViewport();
+        std::swap(primary.camera, right.camera);
+        std::swap(primary.ortho_scale_override, right.ortho_scale_override);
+        publish_align_state_generation();
         markDirty(DirtyFlag::ALL, FrameReason::SceneChange);
     }
 
@@ -316,6 +320,7 @@ namespace lfs::vis {
         view.composite = panel;
         if (panel)
             setFocusedSplitPanel(*panel);
+        publish_align_state_generation();
         markDirty(DirtyFlag::ALL, FrameReason::SceneChange);
     }
 
@@ -333,6 +338,7 @@ namespace lfs::vis {
             restoreAlignmentCamera(right, (*view.unlinked_preview_views)[1]);
             view.unlinked_preview_views.reset();
         }
+        publish_align_state_generation();
         markDirty(DirtyFlag::ALL, FrameReason::SceneChange);
     }
 

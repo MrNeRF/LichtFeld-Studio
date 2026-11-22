@@ -437,8 +437,7 @@ namespace lfs::vis {
         };
 
         bool beginModelAlignment(Viewport& primary, const core::Scene& scene,
-                                 const core::SceneNode& reference, const core::SceneNode& mobile,
-                                 const Viewport& left, const Viewport& right);
+                                 const core::SceneNode& reference, const core::SceneNode& mobile);
         void endModelAlignment(Viewport& primary);
         [[nodiscard]] const ModelAlignmentView* modelAlignmentView() const {
             return model_alignment_view_ ? &*model_alignment_view_ : nullptr;

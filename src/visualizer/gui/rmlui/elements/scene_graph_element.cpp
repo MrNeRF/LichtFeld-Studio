@@ -31,7 +31,6 @@
 #include "gui/utils/splat_drag_selection.hpp"
 #include "gui/utils/splat_export_request.hpp"
 #include "gui/utils/splat_transfer.hpp"
-#include "input/input_controller.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/colmap.hpp"
 #include "operator/operator_registry.hpp"
@@ -3495,14 +3494,8 @@ namespace lfs::vis::gui {
             if (!reference || !mobile)
                 return;
             auto& viewer = *gui->getViewer();
-            auto* input = viewer.getInputController();
-            auto left = viewer.getViewport();
-            auto right = left;
-            if (!input || !input->frameVisibleNode(left, *scene, *reference) ||
-                !input->frameVisibleNode(right, *scene, *mobile))
-                return;
             op::operators().cancelModalOperator();
-            if (!renderer->beginModelAlignment(viewer.getViewport(), *scene, *reference, *mobile, left, right))
+            if (!renderer->beginModelAlignment(viewer.getViewport(), *scene, *reference, *mobile))
                 return;
             op::operators().invoke(op::BuiltinOp::AlignPickPoint);
             if (!op::operators().hasModalOperator())

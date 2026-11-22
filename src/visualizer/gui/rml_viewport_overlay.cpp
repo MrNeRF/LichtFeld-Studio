@@ -1023,7 +1023,7 @@ namespace lfs::vis::gui {
         }
         const auto apply_name = [&](const char* id, const std::string& name, float right) {
             if (auto* element = document_->GetElementById(id)) {
-                element->SetClass("hidden", !split_divider_overlay_.visible || name.empty());
+                element->SetClass("hidden", name.empty());
                 element->SetInnerRML(Rml::StringUtilities::EncodeRml(name));
                 element->SetProperty("right", std::format("{:.1f}px", vp_size_.x - right));
                 element->SetProperty("bottom", std::format("{:.1f}px", vp_size_.y - split_divider_overlay_.name_bottom));

@@ -830,19 +830,20 @@ class _GizmoToolbarController:
         if split_mode == "model_alignment":
             linked, composite, can_swap = lf.ui.model_alignment_controls()
             preview = lf.ui.get_align_preview()
+            records[0]["label"] = ""
             controls = (
-                ("swap", "align.swap_roles", "Swap roles", False, can_swap),
-                ("link", "align.link_cameras", "Link cameras", linked, preview),
-                ("separate", "align.separate", "Separate", composite == -1, preview),
-                ("left", "align.composite_left", "Composite left", composite == 0, preview),
-                ("right", "align.composite_right", "Composite right", composite == 1, preview),
-                ("cancel", "align.cancel_session", "Cancel", False, True),
+                ("swap", "align.swap_roles", "Swap roles", "", "⇄", False, can_swap),
+                ("link", "align.link_cameras", "Link cameras", "magnet", "", linked, preview),
+                ("separate", "align.separate", "Separate", "layout-columns", "", composite == -1, preview),
+                ("left", "align.composite_left", "Composite left", "", "←", composite == 0, preview),
+                ("right", "align.composite_right", "Composite right", "", "→", composite == 1, preview),
+                ("cancel", "align.cancel_session", "Cancel", "scene/x", "", False, True),
             )
             return records + [
                 _button_record(f"model-alignment-{action}", "model_alignment_control", action,
-                               "", tooltip_key=key, tooltip_text=fallback,
-                               label=_ui_label(key, fallback), selected=selected, enabled=enabled)
-                for action, key, fallback, selected, enabled in controls
+                               _icon_src(icon) if icon else "", tooltip_key=key, tooltip_text=fallback,
+                               label=label, selected=selected, enabled=enabled)
+                for action, key, fallback, icon, label, selected, enabled in controls
             ]
         if split_mode == "ply_comparison":
             return records
@@ -1803,7 +1804,6 @@ class _ViewportToolbarController:
         signature = self._toolbar_signature(cropbox_toolbar_signature)
         if signature == self._last_toolbar_signature:
             return False
-        self._last_toolbar_signature = signature
 
         utility_state = self._utility.snapshot()
         gt_compare_active = self._gt_compare_controls._gt_compare_active()
@@ -1854,6 +1854,7 @@ class _ViewportToolbarController:
         dirty |= self._sync_records("gizmo_buttons", gizmo_state["gizmo_buttons"])
         dirty |= self._sync_records("submode_buttons", gizmo_state["submode_buttons"])
         dirty |= self._sync_records("pivot_buttons", gizmo_state["pivot_buttons"])
+        self._last_toolbar_signature = signature
         return dirty
 
     def _sync_crop_roi_params(self, cropbox_toolbar_signature):

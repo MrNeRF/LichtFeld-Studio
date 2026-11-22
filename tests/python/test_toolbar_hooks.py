@@ -2160,7 +2160,6 @@ def test_empty_viewport_rejects_independent_split_activation_and_hides_orphan_ui
     toolbar_block = gui_manager[toolbar_start:toolbar_end]
 
     assert "rendering->isIndependentSplitViewActive() && !editor_ctx.isEmpty()" in toolbar_block
-    assert "!rendering->modelAlignmentView()" in toolbar_block
     assert "show_secondary_toolbar = secondary_panel->valid();" in toolbar_block
 
     divider_start = gui_manager.index(
@@ -2173,7 +2172,8 @@ def test_empty_viewport_rejects_independent_split_activation_and_hides_orphan_ui
     divider_block = gui_manager[divider_start:divider_end]
 
     assert "rendering && rendering->isSplitViewActive()" in divider_block
-    assert "(!rendering->isIndependentSplitViewActive() || rendering->modelAlignmentView())" in divider_block
+    assert "const bool comparison_divider = !rendering->isIndependentSplitViewActive();" in divider_block
+    assert "split_divider_state.visible = comparison_divider;" in divider_block
     assert "rendering->getSplitDividerScreenX" in divider_block
     assert "rendering->getContentBounds" in divider_block
 

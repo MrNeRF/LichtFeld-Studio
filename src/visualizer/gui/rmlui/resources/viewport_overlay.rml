@@ -147,7 +147,7 @@
             </div>
         </div>
 
-        <div class="toolbar-hcenter toolbar-layer-primary" data-class-align-active="show_align_toolbar" data-class-model-alignment-active="show_model_alignment_toolbar" data-class-scale-distance-active="show_scale_distance_toolbar">
+        <div class="toolbar-hcenter toolbar-layer-primary" data-class-align-active="show_align_toolbar" data-class-scale-distance-active="show_scale_distance_toolbar">
             <div id="primary-transform-toolbar" class="toolbar-container hidden"
                  data-class-hidden="!show_transform_toolbar">
                 <div class="icon-btn"
@@ -459,7 +459,7 @@
             </div>
         </div>
 
-        <div class="toolbar-hcenter toolbar-layer-primary" data-class-align-active="show_align_toolbar" data-class-model-alignment-active="show_model_alignment_toolbar" data-class-scale-distance-active="show_scale_distance_toolbar">
+        <div class="toolbar-hcenter toolbar-layer-primary" data-class-align-active="show_align_toolbar" data-class-scale-distance-active="show_scale_distance_toolbar">
             <div id="secondary-transform-toolbar" class="toolbar-container hidden"
                  data-class-hidden="!show_transform_toolbar">
                 <div class="icon-btn"
@@ -489,8 +489,7 @@
                 </div>
             </div>
             <div id="secondary-align-toolbar" class="toolbar-container align-toolbar hidden"
-                 data-class-hidden="!show_align_toolbar">
-                <span class="model-alignment-title" data-if="show_model_alignment_toolbar">@tr:align.models</span>
+                 data-class-hidden="!show_align_toolbar || show_model_alignment_toolbar">
                 <div class="icon-btn"
                      data-for="button : align_action_buttons"
                      data-attr-id="button.button_id"

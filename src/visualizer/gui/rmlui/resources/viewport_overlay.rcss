@@ -374,12 +374,6 @@ body {
     z-index: 2;
 }
 
-.toolbar-layer-primary.model-alignment-active {
-    top: 0;
-    pointer-events: auto;
-    padding: 4dp 6dp;
-}
-
 .model-alignment-title {
     font-weight: 600;
     padding: 0 8dp;

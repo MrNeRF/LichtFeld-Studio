@@ -663,28 +663,24 @@ namespace lfs::vis::op {
         const auto saved_right = renderer.projectSecondaryViewport().camera.t;
         const auto saved_mode = renderer.getSplitViewMode();
 
-        auto left = primary;
-        auto right = primary;
-        left.camera.t = {1, 2, 3};
-        right.camera.t = {4, 5, 6};
-        ASSERT_TRUE(renderer.beginModelAlignment(primary, scene, reference, mobile, left, right));
+        ASSERT_TRUE(renderer.beginModelAlignment(primary, scene, reference, mobile));
         ASSERT_TRUE(renderer.isIndependentSplitViewActive());
         ASSERT_NE(renderer.modelAlignmentView(), nullptr);
-        EXPECT_EQ(primary.camera.t, left.camera.t);
-        EXPECT_EQ(renderer.projectSecondaryViewport().camera.t, right.camera.t);
+        EXPECT_EQ(primary.camera.t, saved_left);
+        EXPECT_EQ(renderer.projectSecondaryViewport().camera.t, saved_left);
 
         const auto similarity = glm::scale(glm::mat4(1), glm::vec3(2));
         renderer.setModelAlignmentPreview(primary, similarity);
-        EXPECT_EQ(renderer.projectSecondaryViewport().camera.t, right.camera.t * 2.0f);
+        EXPECT_EQ(renderer.projectSecondaryViewport().camera.t, saved_left * 2.0f);
         EXPECT_EQ(mobile.transform(), original);
         renderer.setModelAlignmentComposite(primary, SplitViewPanelId::Left);
-        EXPECT_EQ(primary.camera.t, right.camera.t * 2.0f);
-        EXPECT_EQ(renderer.projectSecondaryViewport().camera.t, left.camera.t);
+        EXPECT_EQ(primary.camera.t, saved_left * 2.0f);
+        EXPECT_EQ(renderer.projectSecondaryViewport().camera.t, saved_left);
         renderer.toggleModelAlignmentCameraLink(primary);
         EXPECT_EQ(renderer.projectSecondaryViewport().camera.t, primary.camera.t);
         renderer.toggleModelAlignmentCameraLink(primary);
         EXPECT_EQ(renderer.modelAlignmentView()->composite, SplitViewPanelId::Left);
-        EXPECT_EQ(renderer.projectSecondaryViewport().camera.t, left.camera.t);
+        EXPECT_EQ(renderer.projectSecondaryViewport().camera.t, saved_left);
 
         const glm::ivec2 new_size{512, 384};
         primary.windowSize = new_size;
@@ -696,6 +692,14 @@ namespace lfs::vis::op {
         EXPECT_EQ(renderer.projectSecondaryViewport().camera.t, saved_right);
         EXPECT_EQ(mobile.transform(), original);
         EXPECT_EQ(undoHistory().undoCount(), 0u);
+
+        renderer.restoreSplitViewMode(SplitViewMode::IndependentDual, primary);
+        renderer.projectSecondaryViewport().camera.t = saved_right;
+        ASSERT_TRUE(renderer.beginModelAlignment(primary, scene, reference, mobile));
+        EXPECT_EQ(primary.camera.t, saved_left);
+        EXPECT_EQ(renderer.projectSecondaryViewport().camera.t, saved_right);
+        renderer.endModelAlignment(primary);
+        EXPECT_EQ(renderer.getSplitViewMode(), SplitViewMode::IndependentDual);
     }
 
     TEST_F(AlignPreviewTest, MovedReferenceInvalidatesPairsBeforeApply) {
