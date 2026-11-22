@@ -6981,7 +6981,7 @@ namespace lfs::vis::gui {
                     const float divider_width =
                         std::max(kSplitDividerMinWidthPx * current_ui_scale_,
                                  std::round(t.viewport.border_size * current_ui_scale_ * 4.0f));
-                    split_divider_state.visible = comparison_divider;
+                    split_divider_state.visible = true;
                     split_divider_state.x = std::round((*divider_x - screen.work_pos.x) - divider_width * 0.5f);
                     split_divider_state.y = content_bounds.y;
                     split_divider_state.width = divider_width;

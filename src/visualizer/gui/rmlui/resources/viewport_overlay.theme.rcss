@@ -392,6 +392,10 @@
     border-color: transparent;
 }
 
+.icon-btn.disabled .align-button-label {
+    color: @{viewport.icon_disabled};
+}
+
 .icon-btn.disabled img {
     image-color: @{viewport.icon_disabled};
 }

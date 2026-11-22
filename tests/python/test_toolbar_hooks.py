@@ -2173,7 +2173,8 @@ def test_empty_viewport_rejects_independent_split_activation_and_hides_orphan_ui
 
     assert "rendering && rendering->isSplitViewActive()" in divider_block
     assert "const bool comparison_divider = !rendering->isIndependentSplitViewActive();" in divider_block
-    assert "split_divider_state.visible = comparison_divider;" in divider_block
+    assert "if (comparison_divider || model_alignment)" in divider_block
+    assert "split_divider_state.visible = true;" in divider_block
     assert "rendering->getSplitDividerScreenX" in divider_block
     assert "rendering->getContentBounds" in divider_block
 
@@ -2795,6 +2796,12 @@ def test_model_alignment_replaces_active_tool_controls_and_refreshes_on_preview(
     assert not snapshot["selection_group_buttons"]
     assert not snapshot["transform_group_buttons"]
     assert not snapshot["gizmo_buttons"]
+    picking = {record["button_id"]: record for record in snapshot["align_action_buttons"]}
+    assert picking["model-alignment-swap"]["enabled"]
+    assert not picking["model-alignment-swap"]["selected"]
+    assert "model-alignment-link" not in picking
+    assert "model-alignment-separate" not in picking
+    assert "align-apply" not in picking
     signature = controller._toolbar_signature(None)
 
     lf.ui.can_apply_align = lambda: True
@@ -2805,7 +2812,15 @@ def test_model_alignment_replaces_active_tool_controls_and_refreshes_on_preview(
     by_value = {record["value"]: record for record in records if record["action"] == "model_alignment_control"}
     assert by_value["left"]["selected"]
     assert by_value["link"]["selected"]
-    assert not by_value["swap"]["enabled"]
+    assert "swap" not in by_value
+    assert not by_value["separate"]["selected"]
+    preview = {record["button_id"]: record for record in records}
+    assert preview["align-preview"]["tooltip_key"] == "align.edit_points"
+    assert preview["align-apply"]["enabled"]
+    assert "align-clear" not in preview
+    lf.ui.model_alignment_controls = lambda action="": (False, -1, False) if not action else controls(action)
+    separate = controller._gizmo.snapshot()["align_action_buttons"]
+    assert [record["value"] for record in separate if record["selected"]] == ["separate"]
     for action in ("right", "separate", "cancel"):
         controller._on_toolbar_action(None, None, ["model_alignment_control", action])
     assert calls == ["right", "separate", "cancel"]

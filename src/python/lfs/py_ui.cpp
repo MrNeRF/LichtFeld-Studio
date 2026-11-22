@@ -4682,11 +4682,11 @@ namespace lfs::python {
                     else if (action == "link")
                         renderer->toggleModelAlignmentCameraLink(viewer->getViewport());
                     else if (action == "left")
-                        renderer->setModelAlignmentComposite(viewer->getViewport(), vis::SplitViewPanelId::Left);
+                        renderer->setModelAlignmentComposite(vis::SplitViewPanelId::Left);
                     else if (action == "right")
-                        renderer->setModelAlignmentComposite(viewer->getViewport(), vis::SplitViewPanelId::Right);
+                        renderer->setModelAlignmentComposite(vis::SplitViewPanelId::Right);
                     else if (action == "separate")
-                        renderer->setModelAlignmentComposite(viewer->getViewport(), std::nullopt);
+                        renderer->setModelAlignmentComposite(std::nullopt);
                     const auto& view = *renderer->modelAlignmentView();
                     return {view.linked, view.composite ? static_cast<int>(vis::splitViewPanelIndex(*view.composite)) : -1, can_swap};
                 }, Controls{false, -1, false});

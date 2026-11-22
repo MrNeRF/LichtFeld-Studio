@@ -273,7 +273,6 @@ namespace lfs::vis {
                 restoreAlignmentCamera(right, (*view.free_views)[1]);
             }
             view.free_views.reset();
-            view.unlinked_preview_views.reset();
             view.composite.reset();
             view.linked = false;
         }
@@ -308,18 +307,10 @@ namespace lfs::vis {
         markDirty(DirtyFlag::ALL, FrameReason::SceneChange);
     }
 
-    void RenderingManager::setModelAlignmentComposite(Viewport& primary, std::optional<SplitViewPanelId> panel) {
+    void RenderingManager::setModelAlignmentComposite(std::optional<SplitViewPanelId> panel) {
         if (!model_alignment_view_ || !model_alignment_view_->preview || model_alignment_view_->composite == panel)
             return;
-        auto& view = *model_alignment_view_;
-        if (panel && view.composite && panel != view.composite && !view.linked) {
-            auto& right = projectSecondaryViewport();
-            std::swap(primary.camera, right.camera);
-            std::swap(primary.ortho_scale_override, right.ortho_scale_override);
-        }
-        view.composite = panel;
-        if (panel)
-            setFocusedSplitPanel(*panel);
+        model_alignment_view_->composite = panel;
         publish_align_state_generation();
         markDirty(DirtyFlag::ALL, FrameReason::SceneChange);
     }
@@ -330,14 +321,8 @@ namespace lfs::vis {
         auto& view = *model_alignment_view_;
         auto& right = projectSecondaryViewport();
         view.linked = !view.linked;
-        if (view.linked) {
-            view.unlinked_preview_views = std::array{primary, right};
+        if (view.linked)
             syncModelAlignmentCamera(primary, getFocusedSplitPanel() == SplitViewPanelId::Right ? right : primary);
-        } else if (view.unlinked_preview_views) {
-            restoreAlignmentCamera(primary, (*view.unlinked_preview_views)[0]);
-            restoreAlignmentCamera(right, (*view.unlinked_preview_views)[1]);
-            view.unlinked_preview_views.reset();
-        }
         publish_align_state_generation();
         markDirty(DirtyFlag::ALL, FrameReason::SceneChange);
     }

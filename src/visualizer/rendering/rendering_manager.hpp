@@ -432,7 +432,6 @@ namespace lfs::vis {
             std::optional<glm::mat4> preview;
             std::optional<SplitViewPanelId> composite;
             std::optional<std::array<Viewport, 2>> free_views;
-            std::optional<std::array<Viewport, 2>> unlinked_preview_views;
             bool linked = false;
         };
 
@@ -443,7 +442,7 @@ namespace lfs::vis {
             return model_alignment_view_ ? &*model_alignment_view_ : nullptr;
         }
         void setModelAlignmentPreview(Viewport& primary, std::optional<glm::mat4> transform);
-        void setModelAlignmentComposite(Viewport& primary, std::optional<SplitViewPanelId> panel);
+        void setModelAlignmentComposite(std::optional<SplitViewPanelId> panel);
         [[nodiscard]] bool canSwapModelAlignmentRoles(const core::Scene& scene) const;
         void swapModelAlignmentRoles(Viewport& primary, const core::Scene& scene);
         void toggleModelAlignmentCameraLink(Viewport& primary);

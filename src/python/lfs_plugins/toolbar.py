@@ -830,15 +830,34 @@ class _GizmoToolbarController:
         if split_mode == "model_alignment":
             linked, composite, can_swap = lf.ui.model_alignment_controls()
             preview = lf.ui.get_align_preview()
-            records[0]["label"] = ""
-            controls = (
-                ("swap", "align.swap_roles", "Swap roles", "", "⇄", False, can_swap),
-                ("link", "align.link_cameras", "Link cameras", "magnet", "", linked, preview),
-                ("separate", "align.separate", "Separate", "layout-columns", "", composite == -1, preview),
-                ("left", "align.composite_left", "Composite left", "", "←", composite == 0, preview),
-                ("right", "align.composite_right", "Composite right", "", "→", composite == 1, preview),
-                ("cancel", "align.cancel_session", "Cancel", "scene/x", "", False, True),
-            )
+            cancel = ("cancel", "align.cancel_session", "Cancel", "scene/x", "", False, True)
+            if preview:
+                edit_points = _ui_label("align.edit_points", "Edit points")
+                records[0].update(
+                    tooltip_key="align.edit_points", tooltip_text=edit_points, label=edit_points,
+                    selected=False, enabled=True, opacity="1",
+                )
+                records = records[:2]
+                records[1]["label"] = _ui_label("align.apply", "Apply")
+                link_tooltip = "align.unlink_cameras" if linked else "align.link_cameras_help"
+                controls = (
+                    ("separate", "align.separate", "Separate", "", _ui_label("align.separate", "Separate"),
+                     composite == -1, True),
+                    ("left", "align.composite_left", "Overlay left", "", _ui_label("align.composite_left", "Overlay left"),
+                     composite == 0, True),
+                    ("right", "align.composite_right", "Overlay right", "", _ui_label("align.composite_right", "Overlay right"),
+                     composite == 1, True),
+                    ("link", link_tooltip, "Link cameras", "", _ui_label("align.link_cameras", "Link cameras"),
+                     linked, True),
+                    cancel,
+                )
+            else:
+                del records[1]
+                controls = (
+                    ("swap", "align.swap_roles" if can_swap else "align.swap_unavailable", "Swap roles", "",
+                     _ui_label("align.swap_roles", "Swap roles"), False, can_swap),
+                    cancel,
+                )
             return records + [
                 _button_record(f"model-alignment-{action}", "model_alignment_control", action,
                                _icon_src(icon) if icon else "", tooltip_key=key, tooltip_text=fallback,

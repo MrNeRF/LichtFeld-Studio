@@ -4016,6 +4016,10 @@ namespace lfs::vis {
                         info.mode_label = LOC("align.models");
                         info.left_name = LOCF("align.reference_name", reference ? reference->name : "");
                         info.right_name = LOCF("align.mobile_name", mobile ? mobile->name : "");
+                        if (alignment->composite == SplitViewPanelId::Left)
+                            info.left_name = LOC("align.composite_name");
+                        else if (alignment->composite == SplitViewPanelId::Right)
+                            info.right_name = LOC("align.composite_name");
                         info.detail_label = std::format("{} | {}", info.left_name, info.right_name);
                     }
                 } else {

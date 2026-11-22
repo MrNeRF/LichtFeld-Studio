@@ -288,8 +288,10 @@ namespace lfs::vis::tools {
                 const auto count = picked_points.size();
                 const auto next = count % 2 ? SplitViewPanelId::Right : SplitViewPanelId::Left;
                 const auto projection = pointPickOverlayFrame(*tool_context_, next).panel;
-                drawPointPickHud(*overlay, projection,
-                                 LOC(count % 2 ? "align.pair_mobile" : "align.pair_reference"),
+                const char* hint = count % 2 != 0                       ? "align.pair_mobile"
+                                   : op::hasEnoughAlignmentPairs(count) ? "align.pair_ready"
+                                                                        : "align.pair_reference";
+                drawPointPickHud(*overlay, projection, LOC(hint),
                                  LOCF("align.pair_progress", count / 2),
                                  services().alignPointPick().getStatusMessage());
             } else {
