@@ -11,6 +11,7 @@
 #include "lfs/kernels/ssim.cuh"
 #include "training/losses/photometric_loss.hpp"
 #include "training/trainer.hpp"
+#include <algorithm>
 #include <cmath>
 #include <gtest/gtest.h>
 #include <memory>
@@ -62,6 +63,29 @@ namespace {
     }
 
     float sum_of_products(const Tensor& a, const Tensor& b) { return a.mul(b).sum().item<float>(); }
+
+    // Reproducible values in [lo, hi) over {channels, height, width} ({height, width} without channels); holes leaves
+    // zero-weight blocks and rows.
+    Tensor fixed_values(const size_t channels, const size_t height, const size_t width, const unsigned seed,
+                        const float lo, const float hi, const bool holes = false) {
+        std::mt19937 rng(seed);
+        std::vector<float> values(std::max<size_t>(channels, 1) * height * width);
+        for (size_t i = 0; i < values.size(); ++i) {
+            const size_t y = i / width % height, x = i % width;
+            const bool hole = holes && ((y % 37 >= 10 && y % 37 < 17 && x % 41 >= 5 && x % 41 < 30) || y % 53 == 3);
+            values[i] = hole ? 0.0f : lo + (hi - lo) * static_cast<float>(rng() >> 8) * (1.0f / 16777216.0f);
+        }
+        return channels ? Tensor::from_vector(values, {channels, height, width}, Device::CUDA)
+                        : Tensor::from_vector(values, {height, width}, Device::CUDA);
+    }
+
+    double l1_norm(const Tensor& t) {
+        const auto cpu = t.contiguous().cpu();
+        double sum = 0.0;
+        for (size_t i = 0; i < cpu.numel(); ++i)
+            sum += std::abs(cpu.ptr<float>()[i]);
+        return sum;
+    }
 } // namespace
 
 // Catches a change of the blur sigma rule: plain SSIM below a short side of 1,200 pixels, sigma growing with the
@@ -163,20 +187,21 @@ TEST_F(BlurTolerantSsimTrainerTest, SigmaZeroIsPlainSsim) {
 
 // Catches a wrong gradient of the blur-tolerant SSIM: directional derivatives of the loss match <gradient, d> for
 // the plain, decoupled and weighted forms, with the blurred branch in force (the photo is a blur of the render). The
-// SSIM weight is 1, so no L1 kink sits inside the finite difference.
+// SSIM weight is 1, so no L1 kink sits inside the finite difference. d raises a random half of the pixels: random signs
+// cancel the corrected image's derivative in the decoupled form to below the float rounding of the loss.
 TEST(BlurTolerantSsim, GradientMatchesDirectionalDerivative) {
     constexpr size_t H = 40, W = 48;
     constexpr float sigma = 0.8f, eps = 1e-3f;
     const auto image = random_image(H, W, 3), target = box_blurred(image);
     const auto raw_base = random_image(H, W, 5).mul(0.2f).add(image.mul(0.8f)).contiguous();
-    std::vector<float> signs(3 * H * W), weights(H * W);
+    std::vector<float> picks(3 * H * W), weights(H * W);
     std::mt19937 rng(13);
     std::uniform_real_distribution<float> uniform(0.5f, 1.5f);
-    for (auto& s : signs)
-        s = rng() % 2 == 0 ? 1.0f : -1.0f;
+    for (auto& p : picks)
+        p = rng() % 2 == 0 ? 1.0f : 0.0f;
     for (size_t i = 0; i < weights.size(); ++i)
         weights[i] = (i / W) % 9 == 4 ? 0.0f : uniform(rng);
-    const auto direction = Tensor::from_vector(signs, {size_t{3}, H, W}, Device::CUDA);
+    const auto direction = Tensor::from_vector(picks, {size_t{3}, H, W}, Device::CUDA);
     const auto weight = Tensor::from_vector(weights, {H, W}, Device::CUDA);
 
     for (const bool decoupled : {false, true}) {
@@ -209,5 +234,59 @@ TEST(BlurTolerantSsim, GradientMatchesDirectionalDerivative) {
                 EXPECT_NEAR(numeric_r, analytic_r, 0.03f * std::abs(analytic_r) + 1e-5f);
             }
         }
+    }
+}
+
+// Catches a change of the blur-tolerant SSIM's values: the loss and the L1 norms of both gradients on a fixed input
+// (sigma 0.6 and 1.5; plain and decoupled; unweighted, weighted with holes, weighted with an 8-bit photo and a fixed
+// denominator) match the four-pass implementation this one replaced. Measured against it: loss within 3.0e-8,
+// gradient elements within 2.4e-7 (2.8e-3 of the largest; the fp16 partials round at other points), norms within 6e-6.
+TEST(BlurTolerantSsim, MatchesReferenceValues) {
+    constexpr size_t H = 301, W = 437;
+    const auto image = fixed_values(3, H, W, 1, 0.02f, 0.98f);
+    const auto target = box_blurred(image.mul(0.7f).add(fixed_values(3, H, W, 2, 0.0f, 0.3f)).contiguous());
+    const auto raw = fixed_values(3, H, W, 5, 0.0f, 1.0f).mul(0.2f).add(image.mul(0.8f)).contiguous();
+    const auto weight = fixed_values(0, H, W, 9, 0.5f, 1.5f, true);
+    const auto target_u8 = [&] {
+        const auto cpu = target.cpu();
+        std::vector<float> values(cpu.numel());
+        for (size_t i = 0; i < values.size(); ++i)
+            values[i] = std::round(std::clamp(cpu.ptr<float>()[i], 0.0f, 1.0f) * 255.0f);
+        return Tensor::from_vector(values, {size_t{3}, H, W}, Device::CUDA).to(DataType::UInt8);
+    }();
+    struct Case {
+        float sigma;
+        bool decoupled;
+        int weighting; // 0 none, 1 weights, 2 weights with the 8-bit photo and denominator 50,000
+        float loss;
+        double corrected_l1, raw_l1;
+    };
+    const Case cases[] = {
+        {0.6f, false, 0, 0.304602087f, 1.040200202, 0},
+        {0.6f, false, 1, 0.3034347f, 1.03684406, 0},
+        {0.6f, false, 2, 2.07304907f, 7.083815804, 0},
+        {0.6f, true, 0, 0.296424866f, 0.7809249387, 0.6007441256},
+        {0.6f, true, 1, 0.295226306f, 0.7811272925, 0.589753502},
+        {0.6f, true, 2, 2.01698184f, 5.336627963, 4.029545959},
+        {1.5f, false, 0, 0.247425988f, 0.819398238, 0},
+        {1.5f, false, 1, 0.24595879f, 0.8363325159, 0},
+        {1.5f, false, 2, 1.6805985f, 5.712948791, 0},
+        {1.5f, true, 0, 0.261338472f, 0.7804109969, 0.7261689108},
+        {1.5f, true, 1, 0.25874871f, 0.7804907897, 0.6983592078},
+        {1.5f, true, 2, 1.76796758f, 5.332270833, 4.77068885},
+    };
+    for (const Case& c : cases) {
+        SCOPED_TRACE(testing::Message() << "sigma " << c.sigma << ", decoupled " << c.decoupled << ", weighting " << c.weighting);
+        LossWorkspaceArena arena;
+        const auto result = blur_tolerant_loss(image, c.decoupled ? raw : Tensor{}, c.weighting == 2 ? target_u8 : target,
+                                               c.weighting ? weight : Tensor{}, 0.22f, c.sigma, arena,
+                                               c.weighting == 2 ? 50000.0f : 0.0f);
+        const auto grad_corrected = result.grad_corrected.squeeze(0);
+        auto grad_raw = Tensor::zeros_like(grad_corrected);
+        if (result.raw)
+            accumulate_decoupled_raw_gradient(*result.raw, grad_raw);
+        EXPECT_NEAR(result.loss.item<float>(), c.loss, 1e-6f);
+        EXPECT_NEAR(l1_norm(grad_corrected), c.corrected_l1, 1e-4 * c.corrected_l1);
+        EXPECT_NEAR(l1_norm(grad_raw), c.raw_l1, 1e-4 * c.raw_l1);
     }
 }
