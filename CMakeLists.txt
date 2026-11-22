@@ -1496,7 +1496,8 @@ if(BUILD_PORTABLE)
     endforeach()
 
     # Helper: bundle runtime dependencies for a target.
-    # On Windows DLLs must live beside the exe (bin/); on Linux they go in lib/.
+    # Windows DLLs stay in bin/; the portable root EXE uses a private assembly.
+    # Linux runtime libraries go in lib/.
     if(WIN32)
         set(_BUNDLE_DEST "${CMAKE_INSTALL_BINDIR}")
     else()

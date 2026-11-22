@@ -209,6 +209,8 @@ cloud exist on disk.
 
 ## Distribution Contents
 
+Linux:
+
 ```
 dist/
 ├── bin/
@@ -218,6 +220,14 @@ dist/
 ├── share/LichtFeld-Studio/ # Shaders, icons, fonts
 └── LICENSE                 # GPL-3.0
 ```
+
+Windows portable packages contain `LichtFeld-Studio.exe` at the root, runtime
+DLLs and `bin.manifest` in `bin/`, Python's standard library in `Lib/`, and
+resources in `share/LichtFeld-Studio/`. Launch the root executable and keep the
+whole package together; `bin/bin.manifest` is required to resolve its DLLs.
+Use a full `cmake --install` to assemble the distribution. Packaging requires
+the Windows SDK `mt.exe` selected by CMake to update the installed executable's
+manifest before distribution signing.
 
 ## CMake Options
 
@@ -248,7 +258,7 @@ cache entry.
 
 **"no kernel image is available"** - GPU is older than `BUILD_CUDA_MIN_SM`. Rebuild with lower value.
 
-**Missing libraries on target** - Use `run_lichtfeld.sh` (Linux) or ensure DLLs are with .exe (Windows).
+**Missing libraries on target** - Use `run_lichtfeld.sh` (Linux). For Windows portable packages, keep `bin/` and `bin/bin.manifest` beside the root executable; DLLs stay inside `bin/`. Regular Windows builds keep their existing DLL layout.
 
 **"SDL3 was found, but the resolved SDL build does not expose an X11 or Wayland video backend"** - A stale vcpkg SDL3 artifact is being reused. Remove SDL3 from the local vcpkg install/build cache, then reconfigure with binary-cache bypass enabled:
 

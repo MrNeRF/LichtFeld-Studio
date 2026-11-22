@@ -28,3 +28,23 @@ def test_bridge_keeps_development_only_flags_out_of_windows_portable_launch(
     if not (portable and os.name == "nt"):
         expected.append("--no-splash")
     assert bridge.pick_launch_command() == expected
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows portable installation layout")
+def test_bridge_discovers_portable_root_before_legacy_bin(tmp_path, monkeypatch):
+    script = Path(__file__).resolve().parents[2] / "scripts" / "lichtfeld_mcp_bridge.py"
+    spec = importlib.util.spec_from_file_location("bridge_discovery_test", script)
+    bridge = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bridge)
+    runtime = tmp_path / "dist" / "bin"
+    runtime.mkdir(parents=True)
+    (runtime / "bin.manifest").touch()
+    executable = runtime.parent / "LichtFeld-Studio.exe"
+    executable.touch()
+    legacy = runtime / executable.name
+    legacy.touch()
+    monkeypatch.delenv("LFS_EXECUTABLE", raising=False)
+    monkeypatch.setattr(bridge, "REPO_ROOT", tmp_path)
+    assert bridge.pick_launch_command() == [str(executable)]
+    executable.unlink()
+    assert bridge.pick_launch_command() == [str(legacy), "--no-splash"]
