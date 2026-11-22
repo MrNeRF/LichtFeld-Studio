@@ -9,6 +9,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <cuda_runtime.h>
 #include <filesystem>
 #include <gtest/gtest.h>
@@ -22,8 +24,10 @@ namespace {
     using lfs::core::Tensor;
     using lfs::training::BilateralGrid;
     using lfs::training::BilateralGridParameterization;
+    using lfs::training::kernels::launch_bilateral_grid_slice_backward;
     using lfs::training::kernels::launch_bilateral_grid_slice_backward_chw;
     using lfs::training::kernels::launch_bilateral_grid_slice_backward_chw_reference;
+    using lfs::training::kernels::launch_bilateral_grid_slice_backward_exposure_chroma;
     using lfs::training::kernels::launch_bilateral_grid_slice_backward_exposure_chroma_chw;
     using lfs::training::kernels::launch_bilateral_grid_slice_backward_exposure_chroma_chw_reference;
     using lfs::training::kernels::launch_bilateral_grid_slice_backward_exposure_chroma_reference;
@@ -230,99 +234,241 @@ namespace {
         }
     }
 
-    template <typename Launch>
-    float cuda_event_ms(Launch&& launch, const int warmup, const int iters) {
-        for (int i = 0; i < warmup; ++i)
-            launch();
-        EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
-        cudaEvent_t start = nullptr;
-        cudaEvent_t stop = nullptr;
-        EXPECT_EQ(cudaEventCreate(&start), cudaSuccess);
-        EXPECT_EQ(cudaEventCreate(&stop), cudaSuccess);
-        EXPECT_EQ(cudaEventRecord(start), cudaSuccess);
-        for (int i = 0; i < iters; ++i)
-            launch();
-        EXPECT_EQ(cudaEventRecord(stop), cudaSuccess);
-        EXPECT_EQ(cudaEventSynchronize(stop), cudaSuccess);
-        float ms = 0.0f;
-        EXPECT_EQ(cudaEventElapsedTime(&ms, start, stop), cudaSuccess);
-        cudaEventDestroy(start);
-        cudaEventDestroy(stop);
-        return ms / static_cast<float>(iters);
+    float hash_uniform(const uint32_t i, const uint32_t seed) {
+        uint32_t x = i * 0x9E3779B1u ^ (seed * 0x85EBCA77u + 0x165667B1u);
+        x ^= x >> 16;
+        x *= 0x7FEB352Du;
+        x ^= x >> 15;
+        x *= 0x846CA68Bu;
+        x ^= x >> 16;
+        return static_cast<float>(x >> 8) * (1.0f / 16777216.0f);
     }
 
-    TEST_F(BilateralGridBackwardTiledTest, MicroBenchChw1237x822) {
-        constexpr int kH = 822;
-        constexpr int kW = 1237;
-        auto hwc = load_bicycle_hwc();
-        Tensor chw;
-        Tensor gout;
-        if (hwc.is_valid() && hwc.numel() > 0 &&
-            static_cast<int>(hwc.shape()[0]) == kH &&
-            static_cast<int>(hwc.shape()[1]) == kW) {
-            chw = hwc_to_chw(hwc);
-            gout = hwc_to_chw(random_grad(hwc.shape(), 13.0f));
-        } else {
-            chw = random_image({3, kH, kW}, 13.0f);
-            gout = random_grad(chw.shape(), 17.0f);
+    // Noise puts every pixel into an unrelated luminance cell; Smooth is a photo-like pattern with fine texture,
+    // so neighbouring pixels mostly share a grid cell.
+    enum class Content { Noise,
+                         Smooth };
+
+    Tensor make_image(const int h, const int w, const bool chw, const Content content, const uint32_t seed) {
+        const size_t hw = static_cast<size_t>(h) * static_cast<size_t>(w);
+        std::vector<float> values(3 * hw);
+        for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x) {
+                const size_t pix = static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x);
+                const float u = static_cast<float>(x) / static_cast<float>(w);
+                const float v = static_cast<float>(y) / static_cast<float>(h);
+                const float base = 0.5f + 0.28f * std::sin(6.1f * u + 1.3f) * std::cos(4.7f * v) +
+                                   0.1f * std::sin(0.11f * static_cast<float>(x) + 0.07f * static_cast<float>(y)) +
+                                   0.04f * std::sin(0.7f * static_cast<float>(x)) * std::sin(0.9f * static_cast<float>(y));
+                for (int c = 0; c < 3; ++c) {
+                    const uint32_t index = static_cast<uint32_t>(pix * 3 + static_cast<size_t>(c));
+                    const float value =
+                        content == Content::Noise
+                            ? 0.02f + 0.96f * hash_uniform(index, seed)
+                            : base + 0.06f * static_cast<float>(c - 1) * std::sin(3.0f * u + 2.0f * v + static_cast<float>(c)) +
+                                  0.03f * (hash_uniform(index, seed) - 0.5f);
+                    values[chw ? static_cast<size_t>(c) * hw + pix : pix * 3 + static_cast<size_t>(c)] = value;
+                }
+            }
         }
+        return Tensor::from_vector(values,
+                                   chw ? lfs::core::TensorShape{size_t{3}, static_cast<size_t>(h), static_cast<size_t>(w)}
+                                       : lfs::core::TensorShape{static_cast<size_t>(h), static_cast<size_t>(w), size_t{3}},
+                                   Device::CUDA);
+    }
 
-        auto run_param = [&](BilateralGridParameterization param, const char* name) {
-            BilateralGrid grid(1, 16, 16, 8, 20, {}, param);
-            fill_grid(grid, 4.1f);
-            auto grad_grid = Tensor::zeros(grid.grad_slice().shape(), Device::CUDA);
-            auto grad_rgb = Tensor::empty(chw.shape(), Device::CUDA);
-            const float* grid_ptr = grid.grids().ptr<float>();
-            const float* rgb_ptr = chw.ptr<float>();
-            const float* gout_ptr = gout.ptr<float>();
-            float* gg_ptr = grad_grid.ptr<float>();
-            float* gr_ptr = grad_rgb.ptr<float>();
-            const float* off = grid.shared_offset().ptr<float>();
-            const int L = grid.grid_guidance();
-            const int H = grid.grid_height();
-            const int W = grid.grid_width();
+    Tensor make_grad(const lfs::core::TensorShape& shape, const uint32_t seed) {
+        std::vector<float> values(shape.elements());
+        for (size_t i = 0; i < values.size(); ++i)
+            values[i] = 0.2f * (2.0f * hash_uniform(static_cast<uint32_t>(i), seed) - 1.0f);
+        return Tensor::from_vector(values, shape, Device::CUDA);
+    }
 
-            const auto ref = [&]() {
-                if (param == BilateralGridParameterization::ExposureChroma) {
-                    launch_bilateral_grid_slice_backward_exposure_chroma_chw_reference(
-                        grid_ptr, rgb_ptr, gout_ptr, gg_ptr, gr_ptr, L, H, W, kH, kW, off, nullptr);
-                } else {
-                    launch_bilateral_grid_slice_backward_chw_reference(
-                        grid_ptr, rgb_ptr, gout_ptr, gg_ptr, gr_ptr, L, H, W, kH, kW, off, nullptr);
-                }
-            };
-            const auto tiled = [&]() {
-                if (param == BilateralGridParameterization::ExposureChroma) {
-                    launch_bilateral_grid_slice_backward_exposure_chroma_chw(
-                        grid_ptr, rgb_ptr, gout_ptr, gg_ptr, gr_ptr, L, H, W, kH, kW, off, nullptr, false);
-                } else {
-                    launch_bilateral_grid_slice_backward_chw(
-                        grid_ptr, rgb_ptr, gout_ptr, gg_ptr, gr_ptr, L, H, W, kH, kW, off, nullptr, false);
-                }
-            };
-            const auto agg = [&]() {
-                if (param == BilateralGridParameterization::ExposureChroma) {
-                    launch_bilateral_grid_slice_backward_exposure_chroma_chw(
-                        grid_ptr, rgb_ptr, gout_ptr, gg_ptr, gr_ptr, L, H, W, kH, kW, off, nullptr, true);
-                } else {
-                    launch_bilateral_grid_slice_backward_chw(
-                        grid_ptr, rgb_ptr, gout_ptr, gg_ptr, gr_ptr, L, H, W, kH, kW, off, nullptr, true);
-                }
-            };
+    using Launcher = void (*)(const float*, const float*, const float*, float*, float*,
+                              int, int, int, int, int, const float*, cudaStream_t);
 
-            const float ref_ms = cuda_event_ms(ref, 3, 20);
-            const float tiled_ms = cuda_event_ms(tiled, 3, 20);
-            const float agg_ms = cuda_event_ms(agg, 3, 20);
-            std::cout << "[BwdMicroBench] " << name << " CHW " << kW << "x" << kH
-                      << " scatter=" << ref_ms << " ms  tiled_r3=" << tiled_ms
-                      << " ms  warp_agg=" << agg_ms << " ms/call\n";
-            EXPECT_GT(ref_ms, 0.0f);
-            EXPECT_GT(tiled_ms, 0.0f);
-            EXPECT_GT(agg_ms, 0.0f);
+    void launch_affine_hwc(const float* g, const float* rgb, const float* gout, float* gg, float* gr,
+                           int L, int H, int W, int h, int w, const float* off, cudaStream_t s) {
+        launch_bilateral_grid_slice_backward(g, rgb, gout, gg, gr, L, H, W, h, w, off, s);
+    }
+    void launch_affine_chw(const float* g, const float* rgb, const float* gout, float* gg, float* gr,
+                           int L, int H, int W, int h, int w, const float* off, cudaStream_t s) {
+        launch_bilateral_grid_slice_backward_chw(g, rgb, gout, gg, gr, L, H, W, h, w, off, s);
+    }
+    void launch_chroma_hwc(const float* g, const float* rgb, const float* gout, float* gg, float* gr,
+                           int L, int H, int W, int h, int w, const float* off, cudaStream_t s) {
+        launch_bilateral_grid_slice_backward_exposure_chroma(g, rgb, gout, gg, gr, L, H, W, h, w, off, s);
+    }
+    void launch_chroma_chw(const float* g, const float* rgb, const float* gout, float* gg, float* gr,
+                           int L, int H, int W, int h, int w, const float* off, cudaStream_t s) {
+        launch_bilateral_grid_slice_backward_exposure_chroma_chw(g, rgb, gout, gg, gr, L, H, W, h, w, off, s);
+    }
+
+    struct BackwardVariant {
+        const char* name;
+        BilateralGridParameterization param;
+        bool chw;
+        Launcher launch;
+        Launcher reference;
+    };
+
+    const BackwardVariant kVariants[] = {
+        {"affine HWC", BilateralGridParameterization::Affine, false, launch_affine_hwc,
+         launch_bilateral_grid_slice_backward_reference},
+        {"affine CHW", BilateralGridParameterization::Affine, true, launch_affine_chw,
+         launch_bilateral_grid_slice_backward_chw_reference},
+        {"chroma HWC", BilateralGridParameterization::ExposureChroma, false, launch_chroma_hwc,
+         launch_bilateral_grid_slice_backward_exposure_chroma_reference},
+        {"chroma CHW", BilateralGridParameterization::ExposureChroma, true, launch_chroma_chw,
+         launch_bilateral_grid_slice_backward_exposure_chroma_chw_reference},
+    };
+
+    // Normwise: max |got - ref| over max |ref|. Elementwise: |got - ref| over |ref|, with |ref| floored at 1 % of
+    // max |ref| so cells whose terms cancel to almost nothing do not divide by zero.
+    struct RelError {
+        double normwise = 0.0;
+        double elementwise = 0.0;
+    };
+
+    RelError relative_error(const std::vector<float>& got, const std::vector<float>& ref) {
+        double max_ref = 0.0;
+        for (const float r : ref)
+            max_ref = std::max(max_ref, static_cast<double>(std::abs(r)));
+        RelError err;
+        if (max_ref == 0.0)
+            return err;
+        for (size_t i = 0; i < ref.size(); ++i) {
+            const double diff = std::abs(static_cast<double>(got[i]) - static_cast<double>(ref[i]));
+            err.normwise = std::max(err.normwise, diff / max_ref);
+            err.elementwise =
+                std::max(err.elementwise, diff / std::max(static_cast<double>(std::abs(ref[i])), 0.01 * max_ref));
+        }
+        return err;
+    }
+
+    TEST_F(BilateralGridBackwardTiledTest, GridGradientMatchesReferenceAcrossSizes) {
+        struct Size {
+            int w;
+            int h;
         };
+        // 640x480 and 4000x3000 as the small and the large per-cell footprint; the odd and tiny sizes cover
+        // partial tiles and tiles wider than the grid.
+        const Size sizes[] = {{640, 480}, {4000, 3000}, {333, 97}, {37, 23}};
+        uint32_t seed = 101;
+        for (const Size size : sizes) {
+            for (const Content content : {Content::Noise, Content::Smooth}) {
+                for (const BackwardVariant& variant : kVariants) {
+                    ++seed;
+                    const std::string ctx = std::string(variant.name) + " " + std::to_string(size.w) + "x" +
+                                            std::to_string(size.h) +
+                                            (content == Content::Noise ? " noise" : " smooth");
+                    BilateralGrid grid(1, 16, 16, 8, 20, {}, variant.param);
+                    fill_grid(grid, 0.37f * static_cast<float>(seed));
+                    const auto image = make_image(size.h, size.w, variant.chw, content, seed);
+                    const auto gout = make_grad(image.shape(), seed + 7);
 
-        run_param(BilateralGridParameterization::Affine, "affine");
-        run_param(BilateralGridParameterization::ExposureChroma, "chroma");
+                    grid.zero_grad();
+                    const auto grad_rgb = grid.backward(image, gout, 0);
+                    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess) << ctx;
+                    const auto got_grid = cpu_copy(grid.grad_slice());
+                    const auto got_rgb = cpu_copy(grad_rgb);
+
+                    auto ref_grid = Tensor::zeros(grid.grad_slice().shape(), Device::CUDA);
+                    auto ref_rgb = Tensor::empty(image.shape(), Device::CUDA);
+                    variant.reference(grid.grids().ptr<float>(), image.ptr<float>(), gout.ptr<float>(),
+                                      ref_grid.ptr<float>(), ref_rgb.ptr<float>(),
+                                      grid.grid_guidance(), grid.grid_height(), grid.grid_width(),
+                                      size.h, size.w, grid.shared_offset().ptr<float>(), nullptr);
+                    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess) << ctx;
+
+                    const RelError grid_err = relative_error(got_grid, cpu_copy(ref_grid));
+                    const RelError rgb_err = relative_error(got_rgb, cpu_copy(ref_rgb));
+                    std::cout << "[GridGrad] " << ctx << " grad_grid rel normwise=" << grid_err.normwise
+                              << " elementwise=" << grid_err.elementwise
+                              << "  grad_rgb rel normwise=" << rgb_err.normwise << "\n";
+                    // The reference adds each pixel to global memory with its own float atomic, so its rounding
+                    // error grows with the pixels per cell: 1.3e-5 / 2.6e-4 at 640x480, 1.3e-4 / 2.6e-3 at
+                    // 4000x3000, several times what two runs of the reference differ by.
+                    const double pixels = static_cast<double>(size.w) * static_cast<double>(size.h);
+                    EXPECT_LT(grid_err.normwise, 1e-5 + 1e-11 * pixels) << ctx;
+                    EXPECT_LT(grid_err.elementwise, 2e-4 + 2e-10 * pixels) << ctx;
+                    EXPECT_LT(rgb_err.normwise, 1e-5) << ctx;
+
+                    // grad_rgb may overwrite grad_output: the grid gradient must read it first.
+                    auto in_place = gout.clone();
+                    grid.backward_in_place(image, in_place, 0);
+                    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess) << ctx;
+                    EXPECT_EQ(cpu_copy(in_place), got_rgb) << ctx;
+                    EXPECT_LT(relative_error(cpu_copy(grid.grad_slice()), got_grid).normwise, 1e-5) << ctx;
+                }
+            }
+        }
+    }
+
+    uint64_t fnv1a(const std::vector<float>& values) {
+        uint64_t hash = 1469598103934665603ull;
+        for (const float value : values) {
+            uint32_t bits = 0;
+            std::memcpy(&bits, &value, sizeof(bits));
+            for (int b = 0; b < 4; ++b) {
+                hash ^= (bits >> (8 * b)) & 0xFFu;
+                hash *= 1099511628211ull;
+            }
+        }
+        return hash;
+    }
+
+    // Median of 50 timed backward launches (grid gradient + grad_rgb) per variant, at 20 MP and 1 MP with a 16x16x8
+    // grid. Prints a hash of grad_rgb so runs of two builds can be checked bit for bit. Run with
+    // --gtest_also_run_disabled_tests.
+    TEST_F(BilateralGridBackwardTiledTest, DISABLED_MicroBenchBackward) {
+        struct Size {
+            int w;
+            int h;
+        };
+        const Size sizes[] = {{5262, 3927}, {1297, 840}};
+        for (const Size size : sizes) {
+            for (const Content content : {Content::Smooth, Content::Noise}) {
+                for (const BackwardVariant& variant : kVariants) {
+                    BilateralGrid grid(1, 16, 16, 8, 20, {}, variant.param);
+                    fill_grid(grid, 4.1f);
+                    const auto image = make_image(size.h, size.w, variant.chw, content, 21);
+                    const auto gout = make_grad(image.shape(), 23);
+                    auto grad_grid = Tensor::zeros(grid.grad_slice().shape(), Device::CUDA);
+                    auto grad_rgb = Tensor::empty(image.shape(), Device::CUDA);
+                    const auto launch = [&]() {
+                        variant.launch(grid.grids().ptr<float>(), image.ptr<float>(), gout.ptr<float>(),
+                                       grad_grid.ptr<float>(), grad_rgb.ptr<float>(),
+                                       grid.grid_guidance(), grid.grid_height(), grid.grid_width(),
+                                       size.h, size.w, grid.shared_offset().ptr<float>(), nullptr);
+                    };
+                    for (int i = 0; i < 5; ++i)
+                        launch();
+                    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+                    cudaEvent_t start = nullptr;
+                    cudaEvent_t stop = nullptr;
+                    ASSERT_EQ(cudaEventCreate(&start), cudaSuccess);
+                    ASSERT_EQ(cudaEventCreate(&stop), cudaSuccess);
+                    std::vector<float> times;
+                    for (int i = 0; i < 50; ++i) {
+                        cudaEventRecord(start);
+                        launch();
+                        cudaEventRecord(stop);
+                        ASSERT_EQ(cudaEventSynchronize(stop), cudaSuccess);
+                        float ms = 0.0f;
+                        cudaEventElapsedTime(&ms, start, stop);
+                        times.push_back(ms);
+                    }
+                    cudaEventDestroy(start);
+                    cudaEventDestroy(stop);
+                    std::sort(times.begin(), times.end());
+                    const float median = 0.5f * (times[24] + times[25]);
+                    std::cout << "[BwdMicroBench] " << variant.name << " " << size.w << "x" << size.h
+                              << (content == Content::Noise ? " noise " : " smooth ") << "median_ms=" << median
+                              << " grad_rgb_fnv=" << std::hex << fnv1a(cpu_copy(grad_rgb)) << std::dec << "\n";
+                }
+            }
+        }
     }
 
 } // namespace
