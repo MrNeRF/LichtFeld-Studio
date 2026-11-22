@@ -102,6 +102,8 @@ def executable_candidates() -> list[Path]:
         REPO_ROOT / "cmake-build-debug",
         REPO_ROOT / "dist" / "bin",
     ]
+    if os.name == "nt":
+        search_roots.insert(-1, REPO_ROOT / "dist")
 
     for root in search_roots:
         for name in names:
