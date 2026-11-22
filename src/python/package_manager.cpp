@@ -59,7 +59,7 @@ namespace lfs::python {
 
         std::filesystem::path get_executable_dir() {
 #ifdef _WIN32
-            return core::getExecutableDir();
+            return core::getRuntimeDir();
 #else
             char path[MAX_PATH_LEN];
             const ssize_t len = readlink("/proc/self/exe", path, sizeof(path) - 1);
@@ -403,7 +403,7 @@ namespace lfs::python {
         const auto embedded_python = lfs::core::getEmbeddedPython();
         if (embedded_python.empty()) {
             LOG_ERROR("Embedded Python not found (exe_dir={})",
-                      lfs::core::path_to_utf8(lfs::core::getExecutableDir()));
+                      lfs::core::path_to_utf8(lfs::core::getRuntimeDir()));
             return false;
         }
 

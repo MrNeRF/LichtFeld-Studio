@@ -68,8 +68,8 @@ namespace lfs::rendering {
 
             const std::array candidates{
                 lfs::core::getAssetsDir() / requested,
-                lfs::core::getExecutableDir() / requested,
-                lfs::core::getExecutableDir() / "assets" / requested,
+                lfs::core::getRuntimeDir() / requested,
+                lfs::core::getRuntimeDir() / "assets" / requested,
             };
             for (const auto& candidate : candidates) {
                 if (lfs::core::native_fs::exists(candidate)) {

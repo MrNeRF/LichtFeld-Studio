@@ -1,5 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "core/executable_path.hpp"
 #include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include <chrono>
@@ -38,6 +39,25 @@ namespace {
         }
         fs::path root_, deep_;
     };
+    TEST_F(NativeFilesystemTest, PortableRuntimeStaysInsideRelocatedPackage) {
+        const auto package = deep_ / "relocated package";
+        const auto runtime = package / "bin";
+        ASSERT_TRUE(fs::create_directories(runtime));
+        // A bin directory alone must not change the development layout.
+        EXPECT_EQ(lfs::core::getRuntimeDir(package), package);
+        {
+            std::ofstream manifest;
+            ASSERT_TRUE(lfs::core::open_file_for_write(runtime / "bin.manifest", std::ios::binary, manifest));
+            manifest << "portable runtime";
+        }
+#ifdef _WIN32
+        EXPECT_EQ(lfs::core::getRuntimeDir(package), runtime);
+#else
+        EXPECT_EQ(lfs::core::getRuntimeDir(package), package);
+#endif
+        EXPECT_EQ(lfs::core::getRuntimeDir(runtime), runtime);
+    }
+
     TEST_F(NativeFilesystemTest, StreamsAndFileOperationsWorkBeyondTraditionalLimit) {
         const auto file = deep_ / "source.bin";
         const std::string payload("native\0filesystem\r\n", 19);
