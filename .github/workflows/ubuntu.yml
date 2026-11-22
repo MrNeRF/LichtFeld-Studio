@@ -138,6 +138,13 @@ jobs:
           key: vcpkg-downloads-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', '.github/overlays/**') }}
           restore-keys: vcpkg-downloads-${{ runner.os }}-
 
+      # The patches that ports fetch from GitHub's commit endpoint are kept in the repository,
+      # because that endpoint can answer 503 for hours.
+      - name: Seed vcpkg downloads
+        run: |
+          mkdir -p "$VCPKG_ROOT/downloads"
+          cp .github/vcpkg-downloads/*.patch "$VCPKG_ROOT/downloads/"
+
       - name: Configure
         run: |
           python3 tools/ci_retry_configure.py -- cmake -B build -S . -G Ninja \

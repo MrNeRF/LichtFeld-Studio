@@ -125,14 +125,14 @@ MAIN_PANEL_RCSS = '''body.plugin-panel {
 .panel-kicker {
     color: #7fb8ff;
     font-size: 12dp;
-    font-weight: bold;
+    font-weight: 600;
     letter-spacing: 0.8dp;
     text-transform: uppercase;
 }
 
 .panel-title {
     font-size: 18dp;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .panel-note {

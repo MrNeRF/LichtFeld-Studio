@@ -18,6 +18,7 @@
 #include "depth_anchor_cache.hpp"
 
 #include "io/atomic_output.hpp"
+#include "io/filesystem_utils.hpp"
 #include "io/loader.hpp"
 #include <cuda_runtime.h>
 
@@ -738,12 +739,9 @@ namespace {
                              std::string_view folder,
                              const fs::path& image_path,
                              const fs::path& images_dir) {
-        fs::path rel = image_path.lexically_relative(images_dir);
-        const auto first = rel.begin();
-        if (rel.empty() || rel == "." || rel == ".." ||
-            (first != rel.end() && *first == fs::path(".."))) {
+        fs::path rel = lfs::io::sidecar_relative_path_normalized(image_path, dataset_root, images_dir);
+        if (rel.empty())
             rel = image_path.filename();
-        }
         rel.replace_extension(".png");
         return dataset_root / std::string(folder) / rel;
     }
@@ -1045,21 +1043,8 @@ namespace {
         return output_requested && (overwrite || !fs::is_regular_file(output_path));
     }
 
-    struct PreprocessJob {
-        fs::path image_path;
-        fs::path depth_path;
-        fs::path normals_path;
-        bool write_depth = false;
-        bool write_normals = false;
-    };
-
-    struct PreprocessPlan {
-        fs::path dataset_root;
-        fs::path images_dir;
-        std::vector<fs::path> images;
-        std::vector<PreprocessJob> jobs;
-        std::size_t skipped = 0;
-    };
+    using lfs::preprocessing::PreprocessJob;
+    using lfs::preprocessing::PreprocessPlan;
 
     struct LoadedImage {
         Image original;
@@ -1205,56 +1190,30 @@ namespace {
         std::size_t total_;
     };
 
-    PreprocessPlan build_preprocess_plan(const lfs::core::param::PreprocessParameters& params) {
-        PreprocessPlan plan;
-        plan.dataset_root = fs::absolute(params.dataset_path);
-        plan.images_dir = plan.dataset_root / params.images_folder;
-
-        // Flat COLMAP exports keep the images next to the sparse model files. Scan the
-        // root non-recursively there so generated depth/normals outputs are never
-        // picked up as inputs on a rerun.
-        bool flat_layout = is_same_directory(plan.images_dir, plan.dataset_root);
-        if (!flat_layout && !fs::is_directory(plan.images_dir) &&
-            fs::is_directory(plan.dataset_root) &&
-            !collect_images(plan.dataset_root, false).empty()) {
-            std::cout << "Images folder '" << params.images_folder
-                      << "' not found; using images in the dataset root (flat layout)\n";
-            flat_layout = true;
+    std::vector<fs::path> resolve_explicit_images(const std::vector<fs::path>& image_paths) {
+        std::unordered_set<std::string> seen;
+        seen.reserve(image_paths.size());
+        std::vector<fs::path> images;
+        images.reserve(image_paths.size());
+        for (const auto& raw_path : image_paths) {
+            if (raw_path.empty())
+                continue;
+            std::error_code ec;
+            const fs::path abs = fs::absolute(raw_path, ec);
+            if (ec)
+                continue;
+            const fs::path abs_path = fs::display_path(abs).lexically_normal();
+            if (!fs::is_regular_file(abs_path, ec) || ec)
+                continue;
+            const fs::path canon = fs::weakly_canonical(abs_path, ec);
+            const std::string key = path_to_string(ec ? abs_path : canon);
+            if (seen.insert(key).second)
+                images.push_back(abs_path);
         }
-        if (flat_layout)
-            plan.images_dir = plan.dataset_root;
-
-        plan.images = collect_images(plan.images_dir, !flat_layout);
-        if (plan.images.empty())
-            throw std::runtime_error("No images found under " + path_to_string(plan.images_dir));
-
-        if (!params.image_paths.empty()) {
-            std::unordered_set<std::string> requested;
-            requested.reserve(params.image_paths.size());
-            for (const auto& path : params.image_paths)
-                requested.insert(path_to_string(fs::weakly_canonical(path)));
-            std::erase_if(plan.images, [&requested](const fs::path& path) {
-                return !requested.contains(path_to_string(fs::weakly_canonical(path)));
-            });
-            if (plan.images.empty())
-                throw std::runtime_error("None of the requested image_paths are under " +
-                                         path_to_string(plan.images_dir));
-        }
-
-        plan.jobs.reserve(plan.images.size());
-        for (const auto& image_path : plan.images) {
-            PreprocessJob job{
-                .image_path = image_path,
-                .depth_path = output_path_for(plan.dataset_root, params.depth_folder, image_path, plan.images_dir),
-                .normals_path = output_path_for(plan.dataset_root, params.normals_folder, image_path, plan.images_dir),
-            };
-            job.write_depth = should_write_output(needs_depth(params.mode), params.overwrite, job.depth_path);
-            job.write_normals = should_write_output(needs_normals(params.mode), params.overwrite, job.normals_path);
-            if (job.write_depth || job.write_normals)
-                plan.jobs.push_back(std::move(job));
-        }
-        plan.skipped = plan.images.size() - plan.jobs.size();
-        return plan;
+        if (images.empty())
+            throw std::runtime_error("None of the requested image_paths exist");
+        std::sort(images.begin(), images.end());
+        return images;
     }
 
     void print_plan_summary(const lfs::core::param::PreprocessParameters& params,
@@ -1429,7 +1388,7 @@ namespace {
                 return result;
             }
 
-            const PreprocessPlan plan = build_preprocess_plan(params);
+            const PreprocessPlan plan = lfs::preprocessing::build_preprocess_plan(params);
             result.skipped = plan.skipped;
             if (plan.jobs.empty()) {
                 if (!progress) {
@@ -1570,6 +1529,55 @@ namespace lfs::preprocessing {
 
     lfs::Result<core::nn::WeightFile> ensure_llmdet_weights(const bool allow_download, const std::function<bool()>& cancel_requested) {
         return prepare_cached_model(CachedModel::LlmDet, allow_download, cancel_requested);
+    }
+
+    PreprocessPlan build_preprocess_plan(const lfs::core::param::PreprocessParameters& params) {
+        PreprocessPlan plan;
+        plan.dataset_root = lfs::io::normalize_absolute_dir_path(params.dataset_path);
+        std::error_code ec;
+        if (fs::is_regular_file(plan.dataset_root, ec))
+            plan.dataset_root = lfs::io::normalize_dir_path(plan.dataset_root.parent_path());
+        plan.images_dir = lfs::io::normalize_dir_path(
+            plan.dataset_root / lfs::core::utf8_to_path(params.images_folder));
+
+        if (!params.image_paths.empty()) {
+            plan.images = resolve_explicit_images(params.image_paths);
+            if (!fs::is_directory(plan.images_dir))
+                plan.images_dir = plan.dataset_root;
+        } else {
+            // Flat COLMAP exports keep the images next to the sparse model files. Scan the
+            // root non-recursively there so generated depth/normals outputs are never
+            // picked up as inputs on a rerun.
+            bool flat_layout = is_same_directory(plan.images_dir, plan.dataset_root);
+            if (!flat_layout && !fs::is_directory(plan.images_dir) &&
+                fs::is_directory(plan.dataset_root) &&
+                !collect_images(plan.dataset_root, false).empty()) {
+                std::cout << "Images folder '" << params.images_folder
+                          << "' not found; using images in the dataset root (flat layout)\n";
+                flat_layout = true;
+            }
+            if (flat_layout)
+                plan.images_dir = plan.dataset_root;
+
+            plan.images = collect_images(plan.images_dir, !flat_layout);
+            if (plan.images.empty())
+                throw std::runtime_error("No images found under " + path_to_string(plan.images_dir));
+        }
+
+        plan.jobs.reserve(plan.images.size());
+        for (const auto& image_path : plan.images) {
+            PreprocessJob job{
+                .image_path = image_path,
+                .depth_path = output_path_for(plan.dataset_root, params.depth_folder, image_path, plan.images_dir),
+                .normals_path = output_path_for(plan.dataset_root, params.normals_folder, image_path, plan.images_dir),
+            };
+            job.write_depth = should_write_output(needs_depth(params.mode), params.overwrite, job.depth_path);
+            job.write_normals = should_write_output(needs_normals(params.mode), params.overwrite, job.normals_path);
+            if (job.write_depth || job.write_normals)
+                plan.jobs.push_back(std::move(job));
+        }
+        plan.skipped = plan.images.size() - plan.jobs.size();
+        return plan;
     }
 
     PreprocessRunResult run_preprocess_ex(const lfs::core::param::PreprocessParameters& params,

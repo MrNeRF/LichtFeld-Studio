@@ -1,0 +1,24 @@
+From 9a486a72e43f92222969bfac7054554f97dd253f Mon Sep 17 00:00:00 2001
+From: Silvio Traversaro <silvio.traversaro@iit.it>
+Date: Tue, 2 Jun 2026 11:21:24 +0200
+Subject: [PATCH] Require C++17 for public headers in CMakeLists (#6627)
+
+Co-authored-by: Kim Kulling <kimkulling@users.noreply.github.com>
+---
+ code/CMakeLists.txt | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/code/CMakeLists.txt b/code/CMakeLists.txt
+index b7b08de3b7156e5e7d8ea3d574ed9b0f58f85fc1..985d872b9942b3bcb0d50874086f553fe446738f 100644
+--- a/code/CMakeLists.txt
++++ b/code/CMakeLists.txt
+@@ -1472,6 +1472,9 @@ ENDIF()
+ # adds C_FLAGS required to compile zip.c on old GCC 4.x compiler
+ TARGET_COMPILE_FEATURES(assimp PRIVATE c_std_99)
+ 
++# Public headers use inline constexpr that requires at least C++17
++TARGET_COMPILE_FEATURES(assimp PUBLIC cxx_std_17)
++
+ TARGET_INCLUDE_DIRECTORIES ( assimp PUBLIC
+   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
+   $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/../include>

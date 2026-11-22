@@ -246,6 +246,8 @@ namespace lfs::vis::gui {
         PollDependency poll_dependencies = PollDependency::ALL;
         bool is_native = true;
         bool tab_closeable = false;
+        // Session-only choice; retained when a desktop host is recreated.
+        bool native_window_pinned = false;
         int consecutive_errors = 0;
         bool error_disabled = false;
         float initial_width = 0;
@@ -463,6 +465,8 @@ namespace lfs::vis::gui {
         std::optional<double> nextScheduledAnimationDelayForVisiblePanels(
             PanelAnimationVisibility visibility) const;
         bool set_panel_label(const std::string& id, const std::string& new_label);
+        [[nodiscard]] bool native_window_pinned(std::string_view id) const;
+        bool set_native_window_pinned(std::string_view id, bool pinned);
         void refresh_localized_labels();
         bool set_panel_order(const std::string& id, int new_order);
         bool set_panel_space(const std::string& id, PanelSpace new_space);

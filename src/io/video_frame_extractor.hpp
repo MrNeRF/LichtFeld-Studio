@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <string>
@@ -13,6 +14,7 @@
 
 #include "core/extracted_frame.hpp"
 #include "io/hdr_tonemap.hpp"
+#include "io/sharpness_score.hpp"
 
 namespace lfs::io {
 
@@ -60,12 +62,6 @@ namespace lfs::io {
         Completed,
         Cancelled,
         Failed,
-    };
-
-    enum class SharpnessAlgorithm {
-        LAPLACIAN, // Laplacian variance — fast, blur detection
-        TENENGRAD, // Sobel energy — directional blur detection
-        COMBINED   // Tenengrad + Laplacian — best overall
     };
 
     struct SharpnessParams {

@@ -37,13 +37,13 @@ body {
     min-height: 34dp;
     padding: 4dp 0;
     border-bottom-width: 1dp;
-    border-bottom-color: rgb(55, 59, 70);
+
     background-color: rgb(24, 25, 32);
     flex-shrink: 0;
 }
 
 #content #python-console-toolbar {
-    border-bottom-color: rgb(55, 59, 70);
+
     background-color: rgb(24, 25, 32);
 }
 
@@ -80,8 +80,7 @@ button {
     padding: 0 8dp;
     margin: 0;
     border-width: 1dp;
-    border-color: rgb(70, 70, 70);
-    border-radius: 4dp;
+
     background-color: rgb(46, 46, 46);
     color: rgb(229, 229, 229);
     text-align: center;
@@ -94,8 +93,7 @@ button {
 #python-console-toolbar button {
     height: 22dp;
     padding: 0 6dp;
-    border-color: rgb(43, 48, 61);
-    border-radius: 4dp;
+
     background-color: rgb(28, 31, 40);
     color: rgb(232, 236, 244);
     font-size: 12dp;
@@ -124,13 +122,11 @@ button {
 #python-console-toolbar button:active,
 #python-console-toolbar button.active {
     background-color: rgb(31, 74, 111);
-    border-color: rgb(70, 123, 174);
 }
 
 #python-console-toolbar button.disabled {
     color: rgb(128, 134, 146);
     background-color: rgb(24, 26, 34);
-    border-color: rgb(36, 40, 52);
 }
 
 .toolbar-button {
@@ -187,18 +183,15 @@ button:hover {
 button:active,
 button.active {
     background-color: rgb(64, 96, 130);
-    border-color: rgb(84, 126, 170);
 }
 
 button.disabled {
     color: rgb(112, 112, 112);
     background-color: rgb(38, 38, 38);
-    border-color: rgb(50, 50, 50);
 }
 
 .run-button {
     background-color: rgb(40, 97, 63);
-    border-color: rgb(55, 132, 84);
 }
 
 .run-button:hover {
@@ -207,7 +200,6 @@ button.disabled {
 
 .stop-button {
     background-color: rgb(112, 44, 49);
-    border-color: rgb(148, 58, 65);
 }
 
 .stop-button:hover {
@@ -216,13 +208,13 @@ button.disabled {
 
 .stop-button.disabled {
     background-color: rgb(112, 44, 49);
-    border-color: rgb(148, 58, 65);
+
     color: rgb(245, 245, 245);
 }
 
 #python-console-toolbar .run-button {
     background-color: rgb(35, 197, 82);
-    border-color: rgb(36, 197, 82);
+
     color: rgb(255, 255, 255);
 }
 
@@ -232,7 +224,7 @@ button.disabled {
 
 #python-console-toolbar .stop-button {
     background-color: rgb(166, 63, 67);
-    border-color: rgb(166, 63, 67);
+
     color: rgb(255, 255, 255);
 }
 
@@ -242,7 +234,7 @@ button.disabled {
 
 #python-console-toolbar .stop-button.disabled {
     background-color: rgb(166, 63, 67);
-    border-color: rgb(166, 63, 67);
+
     color: rgb(255, 255, 255);
 }
 
@@ -327,8 +319,7 @@ button.disabled {
     max-height: 300dp;
     overflow-y: auto;
     border-width: 1dp;
-    border-color: rgb(72, 72, 72);
-    border-radius: 4dp;
+
     background-color: rgb(36, 36, 36);
     padding: 4dp;
 }
@@ -413,13 +404,11 @@ button.disabled {
     cursor: ns-resize;
     background-color: rgb(40, 40, 40);
     border-top-width: 1dp;
-    border-top-color: rgb(54, 54, 54);
+
     border-bottom-width: 1dp;
-    border-bottom-color: rgb(54, 54, 54);
 }
 
 #python-splitter:hover {
-    border-top-color: rgb(84, 126, 170);
 }
 
 #bottom-panel {
@@ -437,7 +426,7 @@ button.disabled {
     padding: 0 4dp;
     gap: 2dp;
     border-bottom-width: 1dp;
-    border-bottom-color: rgb(54, 54, 54);
+
     background-color: rgb(31, 31, 31);
     flex-shrink: 0;
 }
@@ -447,9 +436,9 @@ button.disabled {
     min-width: 88dp;
     margin: 0;
     padding: 0 10dp;
-    border-radius: 4dp;
+
     border-width: 1dp;
-    border-color: rgb(54, 54, 54);
+
     background-color: rgb(36, 36, 36);
     color: rgb(170, 170, 170);
     line-height: 24dp;
@@ -546,11 +535,10 @@ button.disabled {
     min-height: 24dp;
     min-width: 0;
     border-bottom-width: 1dp;
-    border-bottom-color: rgb(45, 45, 45);
 }
 
 .pkg-header {
-    font-weight: bold;
+    font-weight: 600;
     color: rgb(170, 170, 170);
 }
 

@@ -33,7 +33,7 @@
     height: 0;
     padding-top: 56.25%;
     border-width: 1dp;
-    border-radius: 6dp;
+
     transition: background-color border-color 0.12s quadratic-out;
 }
 

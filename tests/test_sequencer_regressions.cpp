@@ -3,6 +3,7 @@
 
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/services.hpp"
 #include "gui/film_strip_renderer.hpp"
@@ -320,12 +321,22 @@ namespace {
         controller.addKeyframe(makeKeyframe(0.0f));
         const auto second = controller.addKeyframe(makeKeyframe(1.0f));
         const auto third = controller.addKeyframe(makeKeyframe(2.0f));
-        {
-            lfs::vis::op::TransactionGuard transaction("Delete Keyframes");
-            ASSERT_TRUE(controller.removeKeyframeById(second));
-            ASSERT_TRUE(controller.removeKeyframeById(third));
-            transaction.commit();
-        }
+        size_t notifications = 0;
+        lfs::event::ScopedHandler handlers;
+        handlers.subscribe<lfs::core::events::state::KeyframeListChanged>([&](const auto& event) {
+            ++notifications;
+            EXPECT_EQ(event.count, controller.timeline().realKeyframeCount());
+        });
+        EXPECT_FALSE(controller.removeKeyframesById({}));
+        const std::array missing{lfs::sequencer::INVALID_KEYFRAME_ID};
+        EXPECT_FALSE(controller.removeKeyframesById(missing));
+        EXPECT_EQ(notifications, 0u);
+        EXPECT_EQ(history.undoCount(), 0u);
+        const std::array to_delete{third, second, third};
+        ASSERT_TRUE(controller.removeKeyframesById(to_delete));
+        EXPECT_EQ(notifications, 1u);
+        EXPECT_EQ(controller.timeline().getKeyframeById(second), nullptr);
+        EXPECT_EQ(controller.timeline().getKeyframeById(third), nullptr);
         ASSERT_EQ(history.undoCount(), 1u);
         ASSERT_TRUE(history.undo().success);
         EXPECT_NE(controller.timeline().getKeyframeById(second), nullptr);

@@ -96,6 +96,16 @@ class CoreAbiStampTests(unittest.TestCase):
         self.initialize()
         self.assertNotEqual(before, header.read_bytes())
 
+    def test_public_core_header_edit_changes_stamp(self):
+        public_header = self.source / "src/core/include/core/device_identity.hpp"
+        public_header.parent.mkdir(parents=True)
+        public_header.write_text("void verify_device();\n", encoding="utf-8")
+        self.initialize()
+        before = self.header("Release").read_bytes()
+        public_header.write_text("bool verify_device();\n", encoding="utf-8")
+        self.initialize()
+        self.assertNotEqual(before, self.header("Release").read_bytes())
+
     def test_build_refresh_matches_configure_seed(self):
         self.initialize()
         header = self.header("Release")

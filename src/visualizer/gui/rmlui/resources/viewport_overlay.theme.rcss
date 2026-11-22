@@ -1,3 +1,168 @@
+/* Shared border roles and shape scale. */
+
+.project-drop-overlay {
+    border-radius: 8dp;
+}
+
+.project-drop-card {
+    border-radius: 8dp;
+}
+
+.toolbar-vertical .icon-btn {
+    border-color: transparent;
+    border-radius: 6dp;
+}
+
+.viewport-gizmo-controls .icon-btn {
+    border-radius: 5dp;
+}
+
+.toolbar-hcenter .icon-btn {
+    border-color: transparent;
+    border-radius: 6dp;
+}
+
+.crop-roi-popover {
+    border-radius: 6dp;
+}
+
+#depth-view-block .viewport-depth-axis > .viewport-depth-step-btn {
+    border-radius: 4dp;
+}
+
+.viewport-transform-panel {
+    border-radius: 8dp;
+}
+
+#selection-block .viewport-selection-panel {
+    border-radius: 6dp;
+}
+
+#depth-view-block .viewport-depth-panel {
+    border-radius: 6dp;
+}
+
+#gt-compare-mode-block .viewport-gt-compare-panel {
+    border-radius: 6dp;
+}
+
+.viewport-transform-panel.viewport-export-panel {
+    border-radius: 6dp;
+}
+
+#transform-block .viewport-transform-panel {
+    border-radius: 6dp;
+}
+
+.viewport-transform-tool-group,
+.viewport-selection-tool-group {
+    border-radius: 5dp;
+}
+
+.viewport-transform-option-group {
+    border-radius: 5dp;
+}
+
+.viewport-transform-option {
+    border-radius: 4dp;
+}
+
+.viewport-export-status {
+    border-radius: 6dp;
+}
+
+.viewport-transform-action {
+    border-radius: 5dp;
+}
+
+.viewport-transfer-queue {
+    border-radius: 8dp;
+}
+
+.viewport-transfer-progress {
+    border-radius: 2dp;
+}
+
+.viewport-lod-stats-card {
+    border-radius: 8dp;
+}
+
+.viewport-metrics-card {
+    border-radius: 8dp;
+}
+
+.vram-hud-card {
+    border-radius: 8dp;
+}
+
+.vram-hud-tab {
+    border-radius: 0dp;
+}
+
+.perf-hud-tracking-off {
+    border-radius: 5dp;
+}
+
+.perf-hud-enable-tracking {
+    border-radius: 4dp;
+}
+
+.perf-hud-ledger-header {
+    border-radius: 5dp;
+}
+
+.perf-hud-ledger-closure {
+    border-radius: 8dp;
+}
+
+.perf-hud-ledger-over-banner {
+    border-radius: 4dp;
+}
+
+.perf-hud-ledger-row {
+    border-radius: 3dp;
+}
+
+.perf-hud-ledger-share {
+    border-radius: 3dp;
+}
+
+.perf-hud-ledger-share-fill {
+    border-radius: 3dp;
+}
+
+.perf-hud-ledger-badge {
+    border-radius: 7dp;
+}
+
+#vram-hud-filter {
+    border-radius: 4dp;
+}
+
+.vram-hud-filter-clear {
+    border-radius: 4dp;
+}
+
+.perf-hud-strip {
+    border-radius: 7dp;
+}
+
+.perf-hud-meter-track {
+    border-radius: 3dp;
+}
+
+.vram-hud-legend-swatch {
+    border-radius: 2dp;
+}
+
+.comparison-name {
+    border-radius: 4dp;
+}
+
+.gamepad-indicator-dot {
+    border-radius: 3dp;
+}
+
 /* Theme-dependent viewport overlay controls. */
 
 .toolbar-container {
@@ -8,7 +173,7 @@
 .crop-roi-popover {
     color: @{text};
     background-color: @{toolbar.background};
-    border-color: @{overlay.border};
+    border-color: @{border};
 }
 
 .crop-roi-popover-title {
@@ -55,7 +220,7 @@
 .project-drop-card {
     color: @{text};
     background-color: @{toolbar.background};
-    border-color: @{alpha(primary,0.70)};
+    border-color: @{primary};
 }
 
 .project-drop-label {
@@ -65,7 +230,7 @@
 .toolbar-vertical {
     @{viewport.toolbar_glass_decor};
     border-width: 1dp;
-    border-color: @{viewport.toolbar_border};
+    border-color: @{border};
     border-radius: 9dp;
     box-shadow: @{viewport.toolbar_shadow};
 }
@@ -82,14 +247,14 @@
 .toolbar-hcenter .toolbar-container {
     @{viewport.toolbar_glass_decor};
     border-width: 1dp;
-    border-color: @{viewport.toolbar_border};
+    border-color: @{border};
     border-radius: 8dp;
     box-shadow: @{viewport.toolbar_shadow};
 }
 
 .viewport-gizmo-controls .icon-btn {
     @{viewport.gizmo_decor};
-    border-color: @{overlay.border};
+    border-color: @{border};
     opacity: 1;
 }
 
@@ -104,13 +269,13 @@
 .viewport-transform-panel {
     @{viewport.toolbar_glass_decor};
     color: @{viewport.toolbar_text};
-    border-color: @{viewport.toolbar_border};
+    border-color: @{border};
     box-shadow: @{viewport.toolbar_shadow};
 }
 
 .viewport-export-status {
     background-color: @{toolbar.background};
-    border-color: @{overlay.border};
+    border-color: @{border};
     color: @{text};
 }
 
@@ -120,14 +285,14 @@
 }
 
 .viewport-transform-axis--split {
-    border-color: @{alpha(border,0.30)};
+    border-color: @{border};
 }
 
 .viewport-transform-option-group,
 .viewport-transform-tool-group,
 .viewport-selection-tool-group {
     background-color: @{alpha(surface,0.42)};
-    border-color: @{alpha(border,0.39)};
+    border-color: @{border};
 }
 
 .icon-btn img {
@@ -141,7 +306,7 @@
 .toolbar-vertical .icon-btn:hover,
 .toolbar-hcenter .icon-btn:hover {
     background-color: @{alpha(primary,0.16)};
-    border-color: @{alpha(primary,0.42)};
+    border-color: @{primary};
 }
 
 .viewport-gizmo-controls .icon-btn:hover {
@@ -159,7 +324,7 @@
 
 .toolbar-hcenter .icon-btn.selected {
     @{viewport.toolbar_selected_decor};
-    border-color: @{alpha(text,0.25)};
+    border-color: @{border};
 }
 
 .toolbar-hcenter .icon-btn.selected img {
@@ -168,7 +333,7 @@
 
 .toolbar-vertical .icon-btn.selected {
     @{viewport.toolbar_selected_decor};
-    border-color: @{alpha(text,0.32)};
+    border-color: @{border};
 }
 
 .toolbar-vertical .icon-btn.selected img {
@@ -190,12 +355,12 @@
 
 .toolbar-hcenter .icon-btn.selected:hover {
     @{viewport.toolbar_selected_decor};
-    border-color: @{alpha(text,0.35)};
+    border-color: @{border};
 }
 
 .viewport-transform-panel .icon-btn.selected {
     @{viewport.toolbar_selected_decor};
-    border-color: @{viewport.toolbar_border};
+    border-color: @{border};
 }
 
 .viewport-transform-panel .icon-btn.selected img {
@@ -204,7 +369,7 @@
 
 .toolbar-vertical .icon-btn.selected:hover {
     @{viewport.toolbar_selected_decor};
-    border-color: @{alpha(text,0.42)};
+    border-color: @{border};
 }
 
 .viewport-gizmo-controls .icon-btn.selected:hover {
@@ -235,7 +400,7 @@
 .viewport-gizmo-controls .icon-btn.disabled:hover,
 .viewport-gizmo-controls .icon-btn.disabled:active {
     @{viewport.gizmo_decor};
-    border-color: @{overlay.border};
+    border-color: @{border};
     opacity: 1;
 }
 
@@ -245,12 +410,12 @@
 
 .viewport-metrics-card {
     background-color: @{viewport.metrics_bg};
-    border-color: @{viewport.metrics_border};
+    border-color: @{primary};
 }
 
 .viewport-lod-stats-card {
     background-color: @{viewport.metrics_bg};
-    border-color: @{viewport.metrics_border};
+    border-color: @{primary};
 }
 
 .viewport-lod-stats-title,
@@ -276,7 +441,7 @@
 
 .vram-hud-card {
     background-color: @{surface};
-    border-color: @{viewport.metrics_border};
+    border-color: @{primary};
     color: @{text};
 }
 
@@ -327,7 +492,7 @@
 }
 
 .vram-hud-tabs {
-    border-bottom-color: @{alpha(border,0.39)};
+    border-bottom-color: @{border};
 }
 
 .vram-hud-tab {
@@ -356,19 +521,19 @@
 .perf-hud-tracking-off,
 .perf-hud-ledger-header {
     background-color: @{viewport.metrics_bg};
-    border-color: @{alpha(border,0.39)};
+    border-color: @{border};
     color: @{text};
 }
 
 .perf-hud-enable-tracking {
     background-color: @{blend(surface,primary,button.tint_normal)};
-    border-color: @{blend(surface,primary,button.tint_normal)};
+    border-color: @{primary};
     color: @{text};
 }
 
 .perf-hud-enable-tracking:hover {
     background-color: @{blend(surface,primary,button.tint_hover)};
-    border-color: @{blend(surface,primary,button.tint_hover)};
+    border-color: @{primary};
 }
 
 .perf-hud-ledger-header-detail,
@@ -385,7 +550,7 @@
 }
 
 .perf-hud-ledger-row.root {
-    border-top-color: @{alpha(border,0.39)};
+    border-top-color: @{border};
 }
 
 .perf-hud-ledger-row.has-children:hover {
@@ -486,12 +651,12 @@
 
 .vram-hud-summary {
     border-bottom-width: 1dp;
-    border-bottom-color: @{alpha(border,0.39)};
+    border-bottom-color: @{border};
 }
 
 .vram-hud-filter-input {
     background-color: @{viewport.metrics_bg};
-    border-color: @{alpha(border,0.39)};
+    border-color: @{border};
     color: @{text};
 }
 
@@ -501,7 +666,7 @@
 
 .vram-hud-filter-clear {
     background-color: @{viewport.metrics_bg};
-    border-color: @{alpha(border,0.39)};
+    border-color: @{border};
     color: @{text_dim};
 }
 
@@ -534,7 +699,7 @@
 
 .viewport-status-panel {
     background-color: @{viewport.panel_bg};
-    border-color: @{viewport.panel_border};
+    border-color: @{border};
     border-radius: @{num(size.window_rounding)}dp;
 }
 
@@ -549,7 +714,7 @@
 
 .perf-hud-strip {
     background-color: @{viewport.panel_bg};
-    border-color: @{viewport.panel_border};
+    border-color: @{border};
     color: @{text};
 }
 .perf-hud-strip-rate, .perf-hud-strip-value { color: @{text_dim}; }
@@ -612,15 +777,17 @@
 .gamepad-navigation-indicator.needs-action .gamepad-indicator-dot { background-color: @{warning}; }
 
 .viewport-gt-color-scale {
-    border-color: @{overlay.border};
+    border-color: @{border};
+    border-radius: 3dp;
 }
 
 .side-dock-toggle {
+    border-radius: 3dp;
     color: @{overlay.icon};
     background-color: transparent;
     border-color: transparent;
 }
-.side-dock-grip { background-color: @{alpha(overlay.icon,0.55)}; }
+.side-dock-grip { background-color: @{alpha(overlay.icon,0.55)}; border-radius: 1dp; }
 .side-dock-toggle:hover,
 .side-dock-toggle:focus-visible { background-color: @{alpha(overlay.icon,0.12)}; }
 .side-dock-toggle:active { background-color: @{alpha(overlay.icon,0.20)}; }
