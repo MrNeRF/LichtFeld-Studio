@@ -4,6 +4,7 @@
 # Run after all runtime installs, including Python and the vcpkg DLL bundle.
 # The private assembly is found at <root>/bin/bin.manifest by the Windows loader.
 set(_root "${CMAKE_INSTALL_PREFIX}")
+cmake_path(ABSOLUTE_PATH _root NORMALIZE)
 set(_runtime "${_root}/bin")
 set(_exe "${_root}/@PROJECT_NAME@@CMAKE_EXECUTABLE_SUFFIX@")
 set(_mt "@CMAKE_MT@")
