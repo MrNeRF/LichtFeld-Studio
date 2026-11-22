@@ -124,6 +124,9 @@ def executable_candidates() -> list[Path]:
 def pick_launch_command() -> list[str]:
     for candidate in executable_candidates():
         if candidate.is_file():
+            if os.name == "nt" and (candidate.parent / "bin" / "bin.manifest").is_file():
+                # The Windows portable CLI intentionally excludes --no-splash.
+                return [str(candidate)]
             return [str(candidate), "--no-splash"]
     raise RuntimeError(
         "Could not find a LichtFeld Studio executable. "
