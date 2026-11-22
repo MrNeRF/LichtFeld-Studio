@@ -761,11 +761,17 @@ namespace lfs::vis::op {
         ASSERT_TRUE(sample(left, SplitViewPanelId::Left));
         ASSERT_TRUE(sample(left, SplitViewPanelId::Left));
         EXPECT_FALSE(state.pendingPairOnRight());
+        ASSERT_EQ(state.pairColorSlots().size(), 2u);
+        const auto colors = state.pairColorSlots();
+        EXPECT_NE(colors[0], colors[1]);
+        selectPoint(0);
         state.requestUiAction(PointPickState::UiAction::DeleteSelected);
         EXPECT_EQ(send({}), OperatorResult::RUNNING_MODAL);
-        EXPECT_EQ(state.getPickedPoints(), (std::vector<glm::vec3>{left, right}));
+        EXPECT_EQ(state.getPickedPoints(), (std::vector<glm::vec3>{left}));
+        EXPECT_EQ(state.pairColorSlots(), (std::vector<size_t>{colors[1]}));
         EXPECT_EQ(bound(input::Action::UNDO), OperatorResult::RUNNING_MODAL);
         EXPECT_EQ(state.getPickedPoints(), (std::vector<glm::vec3>{left, right, left}));
+        EXPECT_EQ(state.pairColorSlots(), colors);
         EXPECT_EQ(undoHistory().undoCount(), 0u);
         pair_rendering_->endModelAlignment(primary);
     }

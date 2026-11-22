@@ -78,6 +78,7 @@ namespace lfs::vis::op {
             std::optional<int> selected;
             std::optional<SplitViewPanelId> panel;
             bool pending_right;
+            std::vector<size_t> pair_color_slots;
         };
         void rememberPointEdit();
         std::vector<PointEdit> edits_;

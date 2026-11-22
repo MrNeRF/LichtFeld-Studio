@@ -8,6 +8,7 @@
 #include "rendering/screen_overlay_renderer.hpp"
 #include "tools/tool_base.hpp"
 #include <optional>
+#include <span>
 #include <vector>
 
 namespace lfs::vis::tools {
@@ -58,7 +59,8 @@ namespace lfs::vis::tools {
                           const lfs::rendering::OverlayColor& color, float label_size,
                           std::optional<float> pair_divider_x = std::nullopt,
                           std::optional<SplitViewPanelId> pair_panel = std::nullopt,
-                          bool pending_pair_on_right = false);
+                          bool pending_pair_on_right = false,
+                          std::span<const size_t> pair_color_slots = {});
     void drawPointPickHud(lfs::rendering::ScreenOverlayRenderer& overlay, const PanelProjection& panel_proj,
                           std::string_view hint, const std::string& count_text, const std::string* status,
                           std::string_view option_text = {});

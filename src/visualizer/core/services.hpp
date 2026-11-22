@@ -56,7 +56,12 @@ namespace lfs::vis {
         [[nodiscard]] const std::vector<glm::vec3>& getPickedPoints() const { return picked_points_; }
         [[nodiscard]] bool pendingPairOnRight() const { return pending_pair_on_right_; }
         void setPendingPairOnRight(bool right) { pending_pair_on_right_ = right; }
+        [[nodiscard]] const std::vector<size_t>& pairColorSlots() const { return pair_color_slots_; }
+        void restorePairColorSlots(std::vector<size_t> slots) { pair_color_slots_ = std::move(slots); }
+        void addPairColorSlot();
+        void removePairColorSlot(size_t pair);
         void clearPickedPoints() {
+            pair_color_slots_.clear();
             pending_pair_on_right_ = false;
             const bool changed = !picked_points_.empty() || !status_message_.empty();
             picked_points_.clear();
@@ -136,6 +141,7 @@ namespace lfs::vis {
         void (*notify_)();
         bool notify_status_;
         bool pending_pair_on_right_ = false;
+        std::vector<size_t> pair_color_slots_;
         std::vector<glm::vec3> picked_points_;
         std::optional<int> selected_point_;
         UiAction ui_action_ = UiAction::None;

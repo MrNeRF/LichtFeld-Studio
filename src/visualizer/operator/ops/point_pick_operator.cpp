@@ -379,7 +379,7 @@ namespace lfs::vis::op {
 
     void PointPickOperator::rememberPointEdit() {
         if (editablePairs())
-            edits_.push_back({picked_points_, selected_point_, pick_panel_, pendingPairOnRight()});
+            edits_.push_back({picked_points_, selected_point_, pick_panel_, pendingPairOnRight(), state_.pairColorSlots()});
     }
 
     void PointPickOperator::undoPointEdit() {
@@ -396,6 +396,7 @@ namespace lfs::vis::op {
         selected_point_ = edit.selected;
         pick_panel_ = edit.panel;
         state_.setPendingPairOnRight(edit.pending_right);
+        state_.restorePairColorSlots(std::move(edit.pair_color_slots));
         syncPickedPointsToServices();
     }
 
@@ -424,6 +425,8 @@ namespace lfs::vis::op {
         rememberPointEdit();
         const int last = static_cast<int>(picked_points_.size()) - 1;
         state_.setPendingPairOnRight(false);
+        if (editablePairs() && last % 2 == 0)
+            state_.removePairColorSlot(last / 2);
         if (selected_point_ && *selected_point_ >= last) {
             selected_point_.reset();
         }
@@ -451,6 +454,8 @@ namespace lfs::vis::op {
         }
         rememberPointEdit();
         const int first = sequentialPoints() ? idx - idx % 2 : idx;
+        if (editablePairs())
+            state_.removePairColorSlot(first / 2);
         if (static_cast<size_t>(first) + 1 == picked_points_.size())
             state_.setPendingPairOnRight(false);
         const auto last = std::min(picked_points_.size(), static_cast<size_t>(first) + (sequentialPoints() ? 2u : 1u));
@@ -505,6 +510,8 @@ namespace lfs::vis::op {
                 return false;
             rememberPointEdit();
             const bool completes_right_first = editablePairs() && pendingPairOnRight();
+            if (editablePairs() && picked_points_.size() % 2 == 0)
+                state_.addPairColorSlot();
             picked_points_.push_back(sample.world);
             selected_point_ = static_cast<int>(picked_points_.size()) - 1;
             if (completes_right_first) {
