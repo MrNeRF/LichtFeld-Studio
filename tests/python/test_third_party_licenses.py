@@ -2,12 +2,18 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """License URLs must not be opened as local or UNC filesystem locations."""
 
+import importlib.util
 import json
 from pathlib import Path
 
 import pytest
 
-from tools import generate_third_party_licenses as notices
+spec = importlib.util.spec_from_file_location(
+    "generate_third_party_licenses",
+    Path(__file__).resolve().parents[2] / "tools/generate_third_party_licenses.py",
+)
+notices = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(notices)
 
 
 @pytest.mark.parametrize(
