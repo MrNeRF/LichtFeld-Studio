@@ -103,8 +103,11 @@ def installed_ports(triplet_dir: Path, vcpkg_root: Path | None = None) -> list[d
             references = re.findall(r"(?i)([A-Za-z0-9_./+-]*(?:LICENSE|COPYING|NOTICE|PATENTS)[A-Za-z0-9_.+-]*)", text)
             source_root = vcpkg_root / "buildtrees" / name / "src"
             for reference in references:
-                basename = Path(reference).name
-                candidates = [metadata.parent / reference]
+                reference_path = Path(reference)
+                basename = reference_path.name
+                # URL tails can look like UNC paths on Windows. Only open
+                # relative references here; keep the local source lookup below.
+                candidates = [] if reference_path.anchor else [metadata.parent / reference_path]
                 if source_root.exists():
                     candidates.extend(source_root.glob(f"**/{basename}"))
                 for candidate in candidates:
