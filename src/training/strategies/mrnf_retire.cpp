@@ -4,7 +4,8 @@
 
 // MRNF retire quota and keep covered, both read from the peak rows: the largest blend weight each splat
 // reached in a recent view and its renders since birth. At the cap, each refine frees the splats that
-// never reach a photo, and large splats hidden behind others are spared the decay they cannot undo.
+// never reach a photo or show the least of their opacity, and large splats hidden behind others are
+// spared the decay they cannot undo.
 
 #include "kernels/mrnf_kernels.hpp"
 #include "mrnf.hpp"
@@ -30,6 +31,8 @@ namespace lfs::training {
         constexpr float MRNF_COVERED_REACH = 0.5f;
         // Keep covered applies to splats whose largest axis is at least this many times the live median.
         constexpr float MRNF_KEEP_COVERED_SIZE_FACTOR = 6.0f;
+        // Peak blend weight below which a splat is dead: the retire quota takes dead splats first.
+        constexpr float MRNF_RETIRE_DEAD_PEAK = 0.01f;
 
     } // namespace
 
@@ -72,10 +75,11 @@ namespace lfs::training {
                                                 std::pow(0.5f, 1.0f / MRNF_PEAK_HALF_LIFE_STEPS), n);
     }
 
-    // Retire quota: at the cap, each refine also frees the splats with the lowest peak blend weight.
-    // Their slots go to growth where the error is, and a splat that never reaches a photo cannot
-    // earn its place back. Adds them to prune_mask.
-    void MRNF::retire_lowest_peaks(const int iter, lfs::core::Tensor& prune_mask) {
+    // Retire quota: at the cap, each refine also frees the dead splats (peak blend weight below
+    // MRNF_RETIRE_DEAD_PEAK) and then those with the lowest reach. A faint splat that shows all of its
+    // opacity stays; one that never reaches a photo, or only a small share of its opacity, goes. Their
+    // slots go to growth where the error is. Adds them to prune_mask.
+    void MRNF::retire_lowest_reach(const int iter, lfs::core::Tensor& prune_mask) {
         _last_retired = 0;
         if (!peak_rows_on()) {
             return;
@@ -122,8 +126,11 @@ namespace lfs::training {
         if (marked == 0) {
             return 0;
         }
+        Tensor key = Tensor::empty({n}, Device::CUDA, DataType::Float32);
+        mrnf_strategy::launch_mrnf_retire_key(_blend_peak.ptr<float>(), _splat_data->opacity_raw().ptr<float>(),
+                                              MRNF_RETIRE_DEAD_PEAK, n, key.ptr<float>());
         Tensor rows = Tensor::empty({marked}, Device::CUDA, DataType::Int64);
-        mrnf_strategy::launch_lowest_eligible_rows(_blend_peak.ptr<float>(), eligible.ptr<bool>(), n, marked,
+        mrnf_strategy::launch_lowest_eligible_rows(key.ptr<float>(), eligible.ptr<bool>(), n, marked,
                                                    rows.ptr<int64_t>());
         Tensor retired = Tensor::zeros_bool({n}, Device::CUDA);
         mrnf_strategy::launch_fill_index_mask(rows.ptr<int64_t>(), marked, retired.ptr<bool>());

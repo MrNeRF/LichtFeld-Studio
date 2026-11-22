@@ -80,7 +80,7 @@
   "normal_start_fraction": 0.07999999821186066,
   "opacity_decay": 0.004000000189989805,
   "opacity_decay_rendered_only": true,
-  "opacity_lr": 0.012000000104308128,
+  "opacity_lr": 0.02500000037252903,
   "opacity_reg": 0.0,
   "popspa_erank_epsilon": 1.0000000116860974e-07,
   "popspa_erank_weight": 0.009999999776482582,

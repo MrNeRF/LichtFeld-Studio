@@ -4,10 +4,10 @@
 
 // MRNF growth at the splat cap. Growth draws by NEED, the per-view refine error relative to its mean.
 // Once the model is full, each refine also frees the splats that contribute least per view (growth exchange) so
-// growth keeps working until grow_until_iter, and every split keeps its width and opacity.
+// growth keeps working until grow_until_iter, and every split keeps the parent's opacity where its two halves
+// overlap.
 
 #include "core/assert.hpp"
-#include "kernels/densification_kernels.hpp"
 #include "kernels/mrnf_kernels.hpp"
 #include "mrnf.hpp"
 #include "strategy_utils.hpp"
@@ -31,9 +31,10 @@ namespace lfs::training {
         constexpr float MRNF_NEED_ERROR_MAX = 20.0f;
         // Floor of a victim candidate's view count as a share of the training views (at least one view).
         constexpr double MRNF_EXCHANGE_VIEW_FLOOR_SHARE = 0.05;
-        // Split at the cap: scale of the cross axes and of each half's opacity; 1 keeps the parent's.
-        constexpr float MRNF_CAP_SPLIT_CROSS_SCALE = 1.0f;
-        constexpr float MRNF_CAP_SPLIT_OPACITY_SCALE = 1.0f;
+        // Share of the rows a refine already freed (pruned and retired) that it takes off its exchange quota.
+        constexpr double MRNF_EXCHANGE_FREED_CREDIT = 0.5;
+        // Split at the cap: factor on the longest and the smallest axis of both halves (the middle axis is kept).
+        constexpr float MRNF_CAP_SPLIT_AXIS_SCALE = 0.7f;
 
     } // namespace
 
@@ -108,14 +109,17 @@ namespace lfs::training {
     }
 
     // Exchange victims per refine: MRNF_EXCHANGE_SHARE of the active splats, tapering on a cosine to 0 at
-    // grow_until_iter so the last children can settle. Derived from the iteration alone, so a resume
-    // keeps the schedule.
-    size_t MRNF::exchange_quota(const int iter, const size_t active) const {
+    // grow_until_iter so the last children can settle, less MRNF_EXCHANGE_FREED_CREDIT of the rows this
+    // refine freed already (pruned and retired), never below 0. Derived from the iteration and this
+    // refine alone, so a resume keeps the schedule.
+    size_t MRNF::exchange_quota(const int iter, const size_t active, const size_t freed) const {
         constexpr double pi = 3.14159265358979323846;
         const double end = static_cast<double>(_params->grow_until_iter);
         const double u = end > 0.0 ? std::clamp(static_cast<double>(iter) / end, 0.0, 1.0) : 1.0;
-        return static_cast<size_t>(std::floor(MRNF_EXCHANGE_SHARE * 0.5 * (1.0 + std::cos(pi * u)) *
-                                              static_cast<double>(active)));
+        const auto quota = static_cast<size_t>(std::floor(MRNF_EXCHANGE_SHARE * 0.5 * (1.0 + std::cos(pi * u)) *
+                                                          static_cast<double>(active)));
+        const auto credit = static_cast<size_t>(std::floor(MRNF_EXCHANGE_FREED_CREDIT * static_cast<double>(freed)));
+        return quota > credit ? quota - credit : 0;
     }
 
     // A splat's contribution: its summed blend weight over about one pass over the training views,
@@ -201,14 +205,13 @@ namespace lfs::training {
         return victims;
     }
 
-    // Split at the cap: a split must not thin the surface it refines, so the cross axes keep
-    // their size while the long axis halves, and both halves keep the parent's opacity.
-    // Returns {cross-axis scale, opacity scale}.
-    std::pair<float, float> MRNF::split_scales(const bool at_cap) {
-        if (at_cap) {
-            return {MRNF_CAP_SPLIT_CROSS_SCALE, MRNF_CAP_SPLIT_OPACITY_SCALE};
-        }
-        return {kernels::LONG_AXIS_SPLIT_CROSS_AXIS_SCALE, kernels::LONG_AXIS_SPLIT_OPACITY_SCALE};
+    // Split at the cap: both halves keep the middle axis, so the split does not narrow the surface it
+    // refines, shrink the longest and the smallest axis by MRNF_CAP_SPLIT_AXIS_SCALE, and take opacity
+    // 1 - sqrt(1 - o) each: where they overlap they composite back to the parent's opacity o, so a faint
+    // parent leaves faint halves. Returns the split kernel's conserve_axis_scale: that factor at the cap,
+    // 0 (the ordinary split) below it.
+    float MRNF::cap_split_axis_scale(const bool at_cap) {
+        return at_cap ? MRNF_CAP_SPLIT_AXIS_SCALE : 0.0f;
     }
 
     void MRNF::record_exchange_births(const lfs::core::Tensor& split_parents) {

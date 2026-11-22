@@ -256,4 +256,9 @@ namespace lfs::training::mrnf_strategy {
         size_t N,
         float* factor,
         void* stream = nullptr);
+
+    // Retire rank key, ascending: peak - 1 for a dead row (peak < dead_peak), so dead rows come first, by peak;
+    // the reach of every other row, as in launch_mrnf_covered_factor.
+    void launch_mrnf_retire_key(const float* peak, const float* raw_opacities, float dead_peak, size_t N, float* key,
+                                void* stream = nullptr);
 } // namespace lfs::training::mrnf_strategy

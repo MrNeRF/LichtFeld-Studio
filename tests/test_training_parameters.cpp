@@ -118,7 +118,7 @@ namespace {
     TEST_F(TrainingParametersTest, ResolvesMrnfFactorySentinels) {
         const auto defaults = OptimizationParameters::defaults_for_strategy("mrnf");
 
-        EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_lr"), 0.012f);
+        EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_lr"), 0.025f);
         EXPECT_EQ(resolved<int>(defaults, "max_cap"), 5'000'000);
         EXPECT_FLOAT_EQ(resolved<float>(defaults, "min_opacity"), 1.0f / 255.0f);
         EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_reg"), 0.0f);
@@ -238,10 +238,11 @@ namespace {
     }
 
     TEST_F(TrainingParametersTest, DefaultsForStrategyCanonicalizesAliasesAndFallbacks) {
-        EXPECT_FLOAT_EQ(OptimizationParameters::defaults_for_strategy("mnrf").opacity_lr, 0.012f);
-        EXPECT_FLOAT_EQ(OptimizationParameters::defaults_for_strategy("lfs").opacity_lr, 0.012f);
-        EXPECT_FLOAT_EQ(OptimizationParameters::defaults_for_strategy("").opacity_lr, 0.012f);
-        EXPECT_FLOAT_EQ(OptimizationParameters::defaults_for_strategy("garbage").opacity_lr, 0.012f);
+        // refine_every 163 is MRNF's alone (MCMC 100, IGS+ 500).
+        EXPECT_EQ(OptimizationParameters::defaults_for_strategy("mnrf").refine_every, 163u);
+        EXPECT_EQ(OptimizationParameters::defaults_for_strategy("lfs").refine_every, 163u);
+        EXPECT_EQ(OptimizationParameters::defaults_for_strategy("").refine_every, 163u);
+        EXPECT_EQ(OptimizationParameters::defaults_for_strategy("garbage").refine_every, 163u);
     }
 
     // This checks the serialized surface, not C++ struct completeness: a member absent from both
@@ -805,6 +806,7 @@ namespace {
         EXPECT_FLOAT_EQ(params.scaling_lr, 0.00828016f);
         EXPECT_EQ(params.grow_until_iter, 27'500u);
         EXPECT_FLOAT_EQ(params.rotation_lr, 0.0015f);
+        EXPECT_FLOAT_EQ(params.opacity_lr, 0.025f);
         EXPECT_NEAR(params.scale_reg_at(0), 0.014f, 1.0e-7f);
         EXPECT_FLOAT_EQ(params.scale_reg_at(static_cast<int>(params.iterations)), 0.0f);
         EXPECT_TRUE(params.validate().empty()) << params.validate();

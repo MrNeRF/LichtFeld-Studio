@@ -113,8 +113,7 @@ namespace lfs::training::kernels {
         const int64_t* __restrict__ split_indices,
         int num_split,
         int shN_dim,
-        float cross_axis_scale,
-        float opacity_scale) {
+        float conserve_axis_scale) {
         int split_idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (split_idx >= num_split)
             return;
@@ -147,14 +146,30 @@ namespace lfs::training::kernels {
         unsigned int longest_idx = scale_idxs.x;
         float offset_magnitude = expf(scale[longest_idx]) * 0.5f;
 
-        // New scale,
+        // New scale and opacity of both children.
         float new_scale[3];
-        new_scale[longest_idx] = scale[longest_idx] + logf(0.5f);
-        new_scale[scale_idxs.y] = scale[scale_idxs.y] + logf(cross_axis_scale);
-        new_scale[scale_idxs.z] = scale[scale_idxs.z] + logf(cross_axis_scale);
-
-        // Both children get opacity_scale x the parent's opacity; 1 keeps the raw value exactly.
-        float new_opacity = opacity_scale == 1.0f ? opacity : inverse_sigmoid(sigmoid(opacity) * opacity_scale);
+        float new_opacity;
+        if (conserve_axis_scale > 0.0f) {
+            // Longest and smallest axis x f, the middle one kept. Each child 1 - sqrt(1 - o), so the two composite
+            // back to the parent's opacity o. In logits, with s = sqrt(1 - o): child = o / (1 + s) and
+            // 1 - child = s, so logit(child) = log o - log1p(s) - log s, where log o = -softplus(-x) and
+            // log s = -softplus(x) / 2 (stable at both ends).
+            const unsigned int smallest_idx = scale[scale_idxs.y] <= scale[scale_idxs.z] ? scale_idxs.y : scale_idxs.z;
+            const unsigned int middle_idx = smallest_idx == scale_idxs.y ? scale_idxs.z : scale_idxs.y;
+            const float log_f = logf(conserve_axis_scale);
+            new_scale[longest_idx] = scale[longest_idx] + log_f;
+            new_scale[middle_idx] = scale[middle_idx];
+            new_scale[smallest_idx] = scale[smallest_idx] + log_f;
+            const float softplus_x = fmaxf(opacity, 0.0f) + log1pf(expf(-fabsf(opacity)));
+            const float softplus_neg_x = fmaxf(-opacity, 0.0f) + log1pf(expf(-fabsf(opacity)));
+            const float log_s = -0.5f * softplus_x;
+            new_opacity = -softplus_neg_x - log1pf(expf(log_s)) - log_s;
+        } else {
+            new_scale[longest_idx] = scale[longest_idx] + logf(0.5f);
+            new_scale[scale_idxs.y] = scale[scale_idxs.y] + logf(LONG_AXIS_SPLIT_CROSS_AXIS_SCALE);
+            new_scale[scale_idxs.z] = scale[scale_idxs.z] + logf(LONG_AXIS_SPLIT_CROSS_AXIS_SCALE);
+            new_opacity = inverse_sigmoid(sigmoid(opacity) * LONG_AXIS_SPLIT_OPACITY_SCALE);
+        }
 
         // Compute offset for first split (copy 0)
         // Directly in global coordinates
@@ -217,8 +232,7 @@ namespace lfs::training::kernels {
         int num_split,
         int shN_dim,
         cudaStream_t stream,
-        float cross_axis_scale,
-        float opacity_scale) {
+        float conserve_axis_scale) {
         stream = resolve_stream(stream);
         if (num_split == 0)
             return;
@@ -230,7 +244,7 @@ namespace lfs::training::kernels {
             positions, rotations, scales, sh0, shN, opacities,
             second_positions, second_rotations, second_scales,
             second_sh0, second_shN, second_opacities,
-            split_indices, num_split, shN_dim, cross_axis_scale, opacity_scale);
+            split_indices, num_split, shN_dim, conserve_axis_scale);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.long_axis_split_inplace");
     }
 

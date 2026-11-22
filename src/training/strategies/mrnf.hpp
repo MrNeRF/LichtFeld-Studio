@@ -33,8 +33,8 @@ class MRNFStrategyTest_GrowthExchangeCosineQuotaAtStartMiddleAndEnd_Test;
 class MRNFStrategyTest_NeedGuidedGrowthAtTheCap_Test;
 class MRNFStrategyTest_RefineErrorIsTheCompressedViewMean_Test;
 class MRNFStrategyTest_GrowthExchangeRanksByContributionPerView_Test;
-class MRNFStrategyTest_SplitAtTheCapKeepsTheWidthAndTheOpacity_Test;
-class MRNFStrategyTest_RetireQuotaTakesTheLowestPeaksAndKeepsLargeCoveredSplats_Test;
+class MRNFStrategyTest_SplitAtTheCapConservesTheOpacity_Test;
+class MRNFStrategyTest_RetireQuotaTakesDeadThenLowestReachAndKeepsLargeCoveredSplats_Test;
 class MRNFStrategyTest_LateLrAnnealDecaysOpacityAndColorAfterGrowth_Test;
 class MRNFStrategyTest_EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores_Test;
 class MRNFStrategyTest_GrowAndSplitResetsOptimizerStateForParents_Test;
@@ -167,8 +167,8 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_NeedGuidedGrowthAtTheCap_Test;
         friend class ::MRNFStrategyTest_RefineErrorIsTheCompressedViewMean_Test;
         friend class ::MRNFStrategyTest_GrowthExchangeRanksByContributionPerView_Test;
-        friend class ::MRNFStrategyTest_SplitAtTheCapKeepsTheWidthAndTheOpacity_Test;
-        friend class ::MRNFStrategyTest_RetireQuotaTakesTheLowestPeaksAndKeepsLargeCoveredSplats_Test;
+        friend class ::MRNFStrategyTest_SplitAtTheCapConservesTheOpacity_Test;
+        friend class ::MRNFStrategyTest_RetireQuotaTakesDeadThenLowestReachAndKeepsLargeCoveredSplats_Test;
 
         void clear_rendered_support(const lfs::core::Tensor& indices);
         // Frees rows the way refine() prunes them: free mask, deleted mask, zero
@@ -182,13 +182,13 @@ namespace lfs::training {
         [[nodiscard]] bool at_cap(size_t active) const;
         void fold_need_into_refine_weights();
         [[nodiscard]] int exchange_warmup_windows() const;
-        [[nodiscard]] size_t exchange_quota(int iter, size_t active) const;
+        [[nodiscard]] size_t exchange_quota(int iter, size_t active, size_t freed) const;
         void update_exchange_importance();
         [[nodiscard]] float exchange_view_floor() const;
         [[nodiscard]] lfs::core::Tensor select_exchange_victims(
             size_t count,
             const lfs::core::Tensor& excluded = {});
-        [[nodiscard]] static std::pair<float, float> split_scales(bool at_cap);
+        [[nodiscard]] static float cap_split_axis_scale(bool at_cap);
         // Marks rows filled by growth as newborn: no importance yet and not ranked until a
         // full pass over the training views has scored them.
         void record_exchange_births(const lfs::core::Tensor& split_parents = {});
@@ -200,7 +200,7 @@ namespace lfs::training {
         // Sizes the peak rows to the model (new rows zero), or drops them without peak rows.
         void ensure_peak_rows();
         void fold_blend_peak();
-        void retire_lowest_peaks(int iter, lfs::core::Tensor& prune_mask);
+        void retire_lowest_reach(int iter, lfs::core::Tensor& prune_mask);
         // MRNF_RETIRE_SHARE x live at iter, tapering linearly from first_iter (the first refine at the
         // cap) to 0 at stop; 0 before the cap.
         [[nodiscard]] static size_t retire_count(int iter, int first_iter, int stop, size_t live);
@@ -226,7 +226,7 @@ namespace lfs::training {
         // Splits the given parents and places their children (free slots first,
         // then appended rows) in chunks of at most chunk_rows children.
         // Returns {children placed in free slots, children appended}. split_at_cap selects the split at
-        // the cap (split_scales).
+        // the cap (cap_split_axis_scale).
         std::pair<size_t, size_t> split_parents_into_children(const lfs::core::Tensor& split_indices,
                                                               size_t chunk_rows, bool split_at_cap = false);
         [[nodiscard]] bool screen_share_shrink_active(int iter) const;

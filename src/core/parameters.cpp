@@ -1379,7 +1379,7 @@ namespace lfs::core {
             p.densify_structure_weight = 1.0f;
             p.min_opacity = 1.0f / 255.0f;
             p.means_lr_end = 2e-7f;
-            p.opacity_lr = 0.012f;
+            p.opacity_lr = 0.025f;
             p.scaling_lr_end = 5e-3f;
             p.late_lr_anneal = 0.3f;
             p.lambda_dssim = 0.22f;

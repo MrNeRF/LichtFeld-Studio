@@ -971,7 +971,7 @@ namespace lfs::training {
         }
         prune_mask = exclude_frozen_from_mask(*_splat_data, prune_mask);
         // Retirees join the pruned rows: freed now, refilled by this refine.
-        retire_lowest_peaks(iter, prune_mask);
+        retire_lowest_reach(iter, prune_mask);
 
         if (!_refine_counts_dev.is_valid() || _refine_counts_dev.numel() < 4) {
             _refine_counts_dev = Tensor::zeros({4}, Device::CUDA, DataType::Int64);
@@ -1009,7 +1009,8 @@ namespace lfs::training {
             // Retirees count as present: their slots are refilled by this refine.
             exchange_ready = _exchange_windows > exchange_warmup_windows() && at_cap(active + _last_retired);
             if (exchange_ready) {
-                quota = exchange_quota(iter, active);
+                // The rows this refine freed already (pruned and retired) count against the quota.
+                quota = exchange_quota(iter, active, static_cast<size_t>(pruned_count));
             }
         } else if (_exchange_importance_sum.is_valid() ||
                    _exchange_birth.is_valid() || _exchange_view_count.is_valid() ||
@@ -1528,7 +1529,7 @@ namespace lfs::training {
         const bool use_shN = sh_rest > 0 &&
                              _splat_data->shN().is_valid() &&
                              _splat_data->shN().numel() > 0;
-        const auto [cross_scale, opacity_scale] = split_scales(split_at_cap);
+        const float conserve_axis_scale = cap_split_axis_scale(split_at_cap);
 
         // Parents and child destinations are disjoint rows, so each chunk splits
         // its own parents and places its own children.
@@ -1574,8 +1575,7 @@ namespace lfs::training {
                 static_cast<int>(count),
                 0,
                 nullptr,
-                cross_scale,
-                opacity_scale);
+                conserve_axis_scale);
 
             if (use_shN) {
                 lfs::training::sh_value::gather_shN_to_canonical(
