@@ -728,7 +728,7 @@ class MediaDescription:
 
     def to_json(self) -> str:
         """
-        Return the shared probe JSON, including explicitly collected timed packet bytes and clocks when present.
+        Return the shared probe JSON, including explicitly collected timed packets or Insta360 IMU samples when present.
         """
 
     def dji_metadata_json(self) -> str:

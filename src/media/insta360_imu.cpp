@@ -17,6 +17,9 @@ namespace lfs::media::detail {
         constexpr int footer_size = 72;
         constexpr int header_size = 6;
         constexpr int compact_size = 20;
+        constexpr std::size_t trailer_record_limit = 4096;
+        constexpr std::size_t layout_metadata_limit = 1024 * 1024;
+        constexpr std::size_t sample_storage_limit = 32 * 1024 * 1024;
 
         Error trailerError(ErrorCode code, const char* message) {
             return make_error({.code = code, .domain = ErrorDomain::IO, .detail = message, .detection = LFS_SOURCE_SITE_CURRENT()});
@@ -27,8 +30,11 @@ namespace lfs::media::detail {
             if (position != offset)
                 return position < 0 ? static_cast<int>(position) : AVERROR(EIO);
             const int count = avio_read(input, data, size);
-            return count == size ? 0 : count < 0 ? count
-                                                 : AVERROR_INVALIDDATA;
+            if (count == size)
+                return 0;
+            if (count < 0 && count != AVERROR_EOF)
+                return count;
+            return input->error < 0 ? input->error : AVERROR_INVALIDDATA;
         }
     } // namespace
 
@@ -68,7 +74,7 @@ namespace lfs::media::detail {
         while (end != start) {
             if (interrupted())
                 return probeFailure(AVERROR_EXIT, "Scan Insta360 trailer", true);
-            if (++records > timed_metadata_maxima.records)
+            if (++records > trailer_record_limit)
                 return trailerError(ErrorCode::ResourceExhausted, "Insta360 trailer record budget exceeded");
             if (end - start < header_size)
                 return trailerError(ErrorCode::DataLoss, "Incomplete Insta360 record header");
@@ -103,7 +109,7 @@ namespace lfs::media::detail {
             return trailerError(ErrorCode::Unsupported, "Insta360 trailer has no IMU record");
         if (metadata_offset < 0 || metadata_length == 0)
             return trailerError(ErrorCode::Unsupported, "Insta360 compact IMU declaration is absent");
-        if (metadata_length > timed_metadata_maxima.bytes)
+        if (metadata_length > layout_metadata_limit)
             return trailerError(ErrorCode::ResourceExhausted, "Insta360 metadata record budget exceeded");
         {
             std::vector<std::uint8_t> metadata(metadata_length);
@@ -123,7 +129,7 @@ namespace lfs::media::detail {
         if (imu_length % compact_size != 0)
             return trailerError(ErrorCode::DataLoss, "Incomplete Insta360 compact IMU sample");
         const auto count = imu_length / compact_size;
-        if (count > timed_metadata_maxima.bytes / sizeof(Insta360ImuSample))
+        if (count > sample_storage_limit / sizeof(Insta360ImuSample))
             return trailerError(ErrorCode::ResourceExhausted, "Insta360 IMU sample budget exceeded");
 
         std::vector<Insta360ImuSample> samples;

@@ -115,8 +115,8 @@ namespace lfs::python {
         nb::class_<TimedMetadataLimits>(m, "TimedMetadataLimits").def(nb::init<>()).def_rw("bytes", &TimedMetadataLimits::bytes).def_rw("records", &TimedMetadataLimits::records);
         nb::class_<MediaDescription>(m, "MediaDescription").def_ro("container", &MediaDescription::container).def_ro("stream_info_probed", &MediaDescription::stream_info_probed).def_ro("start", &MediaDescription::start).def_ro("duration", &MediaDescription::duration).def_ro("streams", &MediaDescription::streams).def_ro("selected_video_stream", &MediaDescription::selected_video_stream).def("to_json", [](const MediaDescription& value) {
                 nb::gil_scoped_release release;
-                try { return json_detail::dump(json_detail::description(value)); }
-                catch (const std::bad_alloc&) { throw Exception(make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "Probe JSON allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()})); } }, "Return the shared probe JSON, including explicitly collected timed packet bytes and clocks when present.").def("dji_metadata_json", [](const MediaDescription& value) {
+                try { return json_detail::dumpProbeDescription(json_detail::description(value), value); }
+                catch (const std::bad_alloc&) { throw Exception(make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "Probe JSON allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()})); } }, "Return the shared probe JSON, including explicitly collected timed packets or Insta360 IMU samples when present.").def("dji_metadata_json", [](const MediaDescription& value) {
                 if (!value.timed_metadata)
                     throw Exception(make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "DJI interpretation requires collected timed packets", .detection = LFS_SOURCE_SITE_CURRENT()}));
                 nb::gil_scoped_release release;

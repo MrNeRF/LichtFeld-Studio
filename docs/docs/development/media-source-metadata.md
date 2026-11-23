@@ -1270,5 +1270,6 @@ The same open input supplies the container headers and the trailer record.
 This path reads the declared compact 20-byte sample layout in sequential
 v3 trailers, as observed on ONE R and ONE RS. Trailer metadata selects the
 layout before samples are decoded. An indexed trailer reports an unsupported
-format. Reads are bounded by the probe timeout and the retained IMU sample
-storage is capped at 32 MiB.
+format. The probe applies its timeout and caps the walk at 4,096 records,
+layout metadata at 1 MiB and retained IMU samples at 32 MiB. JSON output is
+serialized one sample at a time into the response string.

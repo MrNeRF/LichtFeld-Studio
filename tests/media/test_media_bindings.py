@@ -21,6 +21,8 @@ import threading
 import unicodedata
 import unittest
 
+import insta360_fixture
+
 ROOT = Path(__file__).resolve().parents[2]
 _srt_spec = importlib.util.spec_from_file_location("srt_metadata_fixture", ROOT / "tests/media/srt_metadata_fixture.py")
 srt_metadata_fixture = importlib.util.module_from_spec(_srt_spec)
@@ -955,6 +957,17 @@ class MediaBindings(unittest.TestCase):
                 else:
                     shutil.rmtree(normalized)
             cls.temp.cleanup()
+
+    def test_insta360_probe_preserves_samples_after_source_removal(self):
+        carrier = srt_metadata_fixture.embedded(self.root, os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg"))
+        path = self.root / "Insta360 é 日本語.insv"
+        path.write_bytes(carrier.read_bytes() + insta360_fixture.imu_trailer())
+        observed = media.MediaIngest.probe(path, insta360_imu=True)
+        self.assertFalse(observed.stream_info_probed)
+        path.unlink()
+        samples = json.loads(observed.to_json())["insta360_imu"]
+        self.assertEqual([sample["device_tick"] for sample in samples], [534773966, 534774966])
+        self.assertEqual(samples[1]["acceleration_counts"], [-32768, 32767, 0])
 
     def test_gpmf_samples_owned_result_and_cli_parity(self):
         fixture = ROOT / "tests/media/fixtures/gopro-gpmf/hero6a-gpmd.mp4"

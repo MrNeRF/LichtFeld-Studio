@@ -908,6 +908,8 @@ int runProbeUnitContracts() {
     ProbeOptions invalidOptions;
     invalidOptions.depth = static_cast<ProbeDepth>(-1);
     require(MediaProbe::inspect("unused", invalidOptions).error().code() == lfs::ErrorCode::InvalidArgument, "invalid depth rejected");
+    const auto imuStreamInfo = MediaProbe::inspect("unused", {.collect_insta360_imu = true});
+    require(!imuStreamInfo && imuStreamInfo.error().code() == lfs::ErrorCode::InvalidArgument, "Insta360 IMU requires headers-only probing");
     auto release = [](AVFormatContext* context) { avformat_free_context(context); };
     std::unique_ptr<AVFormatContext, decltype(release)> context(avformat_alloc_context(), release);
     require(context != nullptr, "allocate test context");

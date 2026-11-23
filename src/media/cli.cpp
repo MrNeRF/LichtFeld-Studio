@@ -410,12 +410,12 @@ namespace {
                         media["dji_metadata"] = std::move(*dji_metadata);
                     if (gpmf_metadata)
                         media["gpmf_metadata"] = std::move(*gpmf_metadata);
-                    auto response = json{{"schema_version", 1}, {"success", true}, {"media", std::move(media)}};
-                    std::cout << json_detail::dump(response) << '\n';
+                    const auto payload = json_detail::dumpProbeDescription(media, *result);
+                    std::cout << R"({"media":)" << payload << R"(,"schema_version":1,"success":true})" << '\n';
                 } catch (const std::bad_alloc&) {
-                    if (!gpmf_metadata_requested)
+                    if (!gpmf_metadata_requested && !probe.collect_insta360_imu)
                         throw;
-                    return failed(lfs::make_error({.code = lfs::ErrorCode::ResourceExhausted, .domain = lfs::ErrorDomain::IO, .detail = "GPMF JSON allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()}));
+                    return failed(lfs::make_error({.code = lfs::ErrorCode::ResourceExhausted, .domain = lfs::ErrorDomain::IO, .detail = probe.collect_insta360_imu ? "Probe JSON allocation failed" : "GPMF JSON allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()}));
                 }
                 return 0;
             }
