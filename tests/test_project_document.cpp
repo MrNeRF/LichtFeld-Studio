@@ -5593,6 +5593,89 @@ namespace {
         }
     }
 
+    // A save reads only the bound checkpoint's header, so the retention rules
+    // can be tested without a GPU-made model: a valid header, then noise.
+    void install_header_only_checkpoint(ProjectDocument& document, const Uuid& model, const Uuid& checkpoint,
+                                        const std::size_t bytes, std::uint32_t seed) {
+        std::vector<std::byte> payload(bytes);
+        for (auto& value : payload) {
+            seed = seed * 1664525u + 1013904223u;
+            value = static_cast<std::byte>(seed >> 24);
+        }
+        const lfs::core::CheckpointHeader header{.iteration = 11, .num_gaussians = 1};
+        std::memcpy(payload.data(), &header, sizeof(header));
+        require_status(document.edit_scene_graph().upsert_node(SceneNodeRecord{
+            .uuid = model,
+            .type = "splat",
+            .name = "Training",
+            .parent_uuid = fixed_uuid(951),
+            .child_order = 0,
+            .payload = PayloadBinding{.fourcc = "CKPT", .instance_uuid = checkpoint, .source_kind = "training"}}));
+        require_status(document.edit_scene_graph().set_training_model_uuid(model));
+        require_status(document.set_checkpoint(
+            checkpoint, require_result(LazyChunkValue::from_owned(std::move(payload), checkpoint))));
+    }
+
+    // Save As stages the source under the copy's project UUID while the copied
+    // rows keep their keys, as a headless training run saving to another file
+    // does. A checkpoint captured since must still replace the one it supersedes.
+    TEST(ProjectDocumentTest, SaveAsReplacesSupersededCheckpointUnderNewProjectUuid) {
+        const auto source_uuid = fixed_uuid(23100), copy_uuid = fixed_uuid(23101), model = fixed_uuid(23102);
+        const auto first = fixed_uuid(23103), next = fixed_uuid(23104);
+        for (const bool new_identity : {false, true}) {
+            for (const bool dominant : {false, true}) {
+                for (const bool keep_all : {false, true}) {
+                    SCOPED_TRACE(std::format("new identity {}, dominant {}, keep all {}", new_identity, dominant,
+                                             keep_all));
+                    TemporaryDirectory temporary;
+                    const auto source = temporary.path / "source.licht";
+                    const auto copy = temporary.path / "copy.licht";
+                    {
+                        // A superseded checkpoint of at least half the result makes the save rewrite.
+                        auto document = make_retention_document(source_uuid, 100);
+                        install_header_only_checkpoint(*document, model, first, dominant ? 256 * 1024 : 4 * 1024, 1);
+                        auto options = save_options(23110, 200);
+                        options.commit.snapshot_uuid = first;
+                        (void)require_result(document->save(source, options));
+                    }
+                    auto document = require_result_ptr(ProjectDocument::open(source));
+                    install_header_only_checkpoint(*document, model, next, 256 * 1024, 2);
+                    auto options = save_options(23111, 300);
+                    options.commit.snapshot_uuid = next;
+                    options.keep_all_checkpoints = keep_all;
+                    if (new_identity)
+                        options.save_as_project_uuid = copy_uuid;
+                    const auto saved = require_result(document->save_as(copy, options));
+                    EXPECT_EQ(saved.rewrote_container, dominant && !keep_all);
+
+                    auto reopened = require_result(ProjectDocument::open(copy));
+                    const auto project_uuid = new_identity ? copy_uuid : source_uuid;
+                    EXPECT_EQ(reopened.project_uuid(), project_uuid);
+                    EXPECT_EQ(require_result(reopened.bound_checkpoint_uuid()), std::optional(next));
+                    EXPECT_NE(reopened.find_checkpoint(next), nullptr);
+                    EXPECT_EQ(reopened.find_checkpoint(first) != nullptr, keep_all);
+                    EXPECT_EQ(reopened.checkpoint_uuids().size(), keep_all ? 2u : 1u);
+                    // The copy's chapters are live once each, under its project UUID.
+                    ProjectReader reader = require_result(ProjectReader::open(copy));
+                    require_status(reader.verify_all());
+                    std::map<std::string, int> chapters;
+                    for (const auto& row : reader.chunks()) {
+                        if (!row.is_live() || row.key.fourcc == FOURCC_CKPT || row.key.fourcc == FOURCC_THMB)
+                            continue;
+                        ++chapters[row.key.fourcc.to_string()];
+                        EXPECT_EQ(row.key.instance_uuid, project_uuid) << row.key_string();
+                    }
+                    EXPECT_FALSE(chapters.empty());
+                    for (const auto& [fourcc, count] : chapters)
+                        EXPECT_EQ(count, 1) << fourcc;
+                    // The source keeps everything it had.
+                    auto source_document = require_result(ProjectDocument::open(source));
+                    EXPECT_EQ(source_document.checkpoint_uuids(), std::vector<Uuid>{first});
+                }
+            }
+        }
+    }
+
 #if defined(__linux__)
     TEST_F(ProjectDocumentCudaTest, CheckpointRetentionSigkillAtEveryPublicationBoundary) {
         // Prepare the GPU-produced CKPT before forking. Children only perform I/O.

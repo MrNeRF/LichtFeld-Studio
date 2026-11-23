@@ -4748,6 +4748,13 @@ namespace lfs::io::project {
         if (!is_autosave && !keep_all && impl_->source_reader && *bound_checkpoint &&
             !impl_->source_reader->find(FOURCC_CKPT, **bound_checkpoint)) {
             const auto* old_scene = impl_->source_reader->find(scene_key);
+            // Save As stages the source under the copy's project UUID, and the
+            // copied rows keep their keys: the scene is then its one SCNG row.
+            const auto is_scene = [](const ChunkInfo& row) {
+                return row.is_live() && row.key.fourcc == FOURCC_SCNG;
+            };
+            if (!old_scene && std::ranges::count_if(impl_->source_reader->chunks(), is_scene) == 1)
+                old_scene = &*std::ranges::find_if(impl_->source_reader->chunks(), is_scene);
             if (old_scene) {
                 auto bytes = impl_->source_reader->read_chunk(*old_scene);
                 if (!bytes)
