@@ -834,19 +834,19 @@ class _GizmoToolbarController:
             if preview:
                 exit_preview = _ui_label("align.edit_points", "Exit preview")
                 records[0].update(
-                    tooltip_key="align.edit_points", tooltip_text=exit_preview, label=exit_preview,
+                    tooltip_key="align.edit_points", tooltip_text=exit_preview, label="",
                     selected=True, enabled=True, opacity="1", icon_src=_icon_src("scene/hidden"),
                 )
                 records = records[:2]
                 link_tooltip = "align.unlink_cameras" if linked else "align.link_cameras_help"
                 controls = (
-                    ("separate", "align.separate", "Separate", "", _ui_label("align.separate", "Separate"),
+                    ("separate", "align.separate", "Separate", "layout-columns", "",
                      composite == -1, True),
-                    ("left", "align.composite_left", "Overlay left", "", _ui_label("align.composite_left", "Overlay left"),
+                    ("left", "align.composite_left", "Overlay left", "alignment-overlay-left", "",
                      composite == 0, True),
-                    ("right", "align.composite_right", "Overlay right", "", _ui_label("align.composite_right", "Overlay right"),
+                    ("right", "align.composite_right", "Overlay right", "alignment-overlay-right", "",
                      composite == 1, True),
-                    ("link", link_tooltip, "Link cameras", "", _ui_label("align.link_cameras", "Link cameras"),
+                    ("link", link_tooltip, "Link cameras", "link", "",
                      linked, True),
                     cancel,
                 )

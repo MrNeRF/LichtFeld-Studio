@@ -2815,6 +2815,9 @@ def test_model_alignment_replaces_active_tool_controls_and_refreshes_on_preview(
     assert preview["align-preview"]["tooltip_key"] == "align.edit_points"
     assert preview["align-apply"]["enabled"]
     assert "align-clear" not in preview
+    assert all(not record["label"] and record["icon_src"] for record in records)
+    assert by_value["left"]["icon_src"] != by_value["right"]["icon_src"]
+    assert by_value["link"]["tooltip_key"] == "align.unlink_cameras"
     lf.ui.model_alignment_controls = lambda action="": (False, -1, False) if not action else controls(action)
     separate = controller._gizmo.snapshot()["align_action_buttons"]
     assert [record["value"] for record in separate
