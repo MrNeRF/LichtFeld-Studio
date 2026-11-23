@@ -1260,7 +1260,7 @@
     "viewport": "Viewport",
     "apply_viewport_defaults": "Apply Defaults to This Project…",
     "viewport_defaults": "New Project Defaults",
-    "viewport_defaults_hint": "These defaults initialize new projects. Existing projects keep their saved values. To update the open project, use Apply Defaults to This Project below.",
+    "viewport_defaults_hint": "New projects start with these viewport defaults. To update the project already open, even if it hasn’t been saved, use Apply Defaults to This Project.",
     "viewport_style_defaults": "Overlay & Selection Style",
     "viewport_performance_defaults": "LOD Cache Limits",
     "viewport_defaults_invalid": "Enter a valid value within the supported range.",
@@ -2605,7 +2605,7 @@
     "apply_defaults": "Apply Defaults…",
     "save_defaults_hint": "Save current overlay style and LOD cache limits for new projects.",
     "apply_defaults_hint": "Apply user defaults to this project only. Other rendering settings stay unchanged.",
-    "apply_defaults_confirm": "Replace this project’s overlay style and LOD cache limits with your defaults?"
+    "apply_defaults_confirm": "This replaces the open project’s overlay and selection style and its LOD cache limits with your saved defaults."
   },
   "scripts_panel": {
     "title": "Python Scripts",

@@ -1264,7 +1264,7 @@
     "viewport": "Vista",
     "apply_viewport_defaults": "Applica i valori predefiniti a questo progetto…",
     "viewport_defaults": "Default nuovi progetti",
-    "viewport_defaults_hint": "Questi valori inizializzano i nuovi progetti. I progetti esistenti conservano i valori salvati. Per aggiornare il progetto aperto, usa Applica i valori predefiniti a questo progetto qui sotto.",
+    "viewport_defaults_hint": "I nuovi progetti usano questi valori predefiniti della vista. Per aggiornare il progetto aperto, anche se non è stato salvato, usa «Applica i valori predefiniti a questo progetto».",
     "viewport_style_defaults": "Stile guide e selezione",
     "viewport_performance_defaults": "Limiti cache LOD",
     "viewport_defaults_invalid": "Inserisci un valore valido nell’intervallo supportato.",
@@ -2607,7 +2607,7 @@
     "apply_defaults": "Applica default…",
     "save_defaults_hint": "Salva lo stile delle guide e i limiti cache LOD per i nuovi progetti.",
     "apply_defaults_hint": "Applica i default solo a questo progetto. Le altre impostazioni di rendering restano invariate.",
-    "apply_defaults_confirm": "Sostituire lo stile delle guide e i limiti cache LOD del progetto con i tuoi default?"
+    "apply_defaults_confirm": "Lo stile delle guide e della selezione e i limiti della cache LOD del progetto aperto verranno sostituiti con i valori predefiniti salvati."
   },
   "scripts_panel": {
     "title": "Script Python",

@@ -1251,7 +1251,7 @@
     "viewport": "Vista",
     "apply_viewport_defaults": "Aplicar valores predeterminados a este proyecto…",
     "viewport_defaults": "Valores para nuevos proyectos",
-    "viewport_defaults_hint": "Estos valores se aplican a nuevos proyectos. Los existentes conservan sus valores guardados. Para actualizar el proyecto abierto, usa Aplicar valores predeterminados a este proyecto abajo.",
+    "viewport_defaults_hint": "Los proyectos nuevos usan estos valores predeterminados de la vista. Para actualizar el proyecto abierto, aunque no esté guardado, usa «Aplicar valores predeterminados a este proyecto».",
     "viewport_style_defaults": "Estilo de guías y selección",
     "viewport_performance_defaults": "Límites de caché LOD",
     "viewport_defaults_invalid": "Introduce un valor válido dentro del rango admitido.",
@@ -2594,7 +2594,7 @@
     "apply_defaults": "Aplicar valores…",
     "save_defaults_hint": "Guardar el estilo de guías y los límites de caché LOD para nuevos proyectos.",
     "apply_defaults_hint": "Aplicar valores solo a este proyecto. Los demás ajustes de renderizado no cambian.",
-    "apply_defaults_confirm": "¿Reemplazar el estilo de guías y los límites de caché LOD del proyecto por tus valores?"
+    "apply_defaults_confirm": "Se reemplazarán el estilo de las guías y la selección y los límites de la caché LOD del proyecto abierto por tus valores guardados."
   },
   "scripts_panel": {
     "title": "Scripts de Python",

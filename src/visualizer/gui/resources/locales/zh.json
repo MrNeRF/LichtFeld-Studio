@@ -1251,7 +1251,7 @@
     "viewport": "视图",
     "apply_viewport_defaults": "将默认值应用到此项目…",
     "viewport_defaults": "新项目默认值",
-    "viewport_defaults_hint": "这些默认值用于新项目。现有项目保留已保存的值。 要更新当前打开的项目，请使用下方的“将默认值应用到此项目”。",
+    "viewport_defaults_hint": "新建项目使用这些视图默认值。若要更新已打开的项目，即使项目尚未保存，也请使用“将默认值应用到此项目”。",
     "viewport_style_defaults": "辅助线与选择样式",
     "viewport_performance_defaults": "LOD缓存限制",
     "viewport_defaults_invalid": "请输入支持范围内的有效值。",
@@ -2594,7 +2594,7 @@
     "apply_defaults": "应用默认值…",
     "save_defaults_hint": "将当前辅助线样式和LOD缓存限制保存为新项目默认值。",
     "apply_defaults_hint": "仅应用到当前项目。其他渲染设置保持不变。",
-    "apply_defaults_confirm": "是否将此项目的辅助线样式和LOD缓存限制替换为默认值？"
+    "apply_defaults_confirm": "已保存的默认值将替换当前项目的辅助线与选择样式以及 LOD 缓存限制。"
   },
   "scripts_panel": {
     "title": "Python 脚本",

@@ -1251,7 +1251,7 @@
     "viewport": "Vue",
     "apply_viewport_defaults": "Appliquer les valeurs par défaut à ce projet…",
     "viewport_defaults": "Valeurs des nouveaux projets",
-    "viewport_defaults_hint": "Ces valeurs initialisent les nouveaux projets. Les projets existants conservent leurs valeurs enregistrées. Pour mettre à jour le projet ouvert, utilisez Appliquer les valeurs par défaut à ce projet ci-dessous.",
+    "viewport_defaults_hint": "Les nouveaux projets utilisent ces réglages de vue par défaut. Pour mettre à jour le projet ouvert, même s’il n’a pas été enregistré, appliquez-lui les valeurs par défaut.",
     "viewport_style_defaults": "Style des guides et de sélection",
     "viewport_performance_defaults": "Limites du cache LOD",
     "viewport_defaults_invalid": "Saisissez une valeur valide dans la plage autorisée.",
@@ -2594,7 +2594,7 @@
     "apply_defaults": "Appliquer les valeurs…",
     "save_defaults_hint": "Enregistrer le style des guides et les limites du cache LOD pour les nouveaux projets.",
     "apply_defaults_hint": "Appliquer les valeurs à ce projet uniquement. Les autres réglages de rendu restent inchangés.",
-    "apply_defaults_confirm": "Remplacer le style des guides et les limites du cache LOD de ce projet par vos valeurs ?"
+    "apply_defaults_confirm": "Le style des guides et de la sélection ainsi que les limites du cache LOD du projet ouvert seront remplacés par vos valeurs enregistrées."
   },
   "scripts_panel": {
     "title": "Scripts Python",

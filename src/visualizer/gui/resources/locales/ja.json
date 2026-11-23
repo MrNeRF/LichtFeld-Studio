@@ -1251,7 +1251,7 @@
     "viewport": "ビュー",
     "apply_viewport_defaults": "このプロジェクトに既定値を適用…",
     "viewport_defaults": "新規プロジェクトの既定値",
-    "viewport_defaults_hint": "新規プロジェクトに適用されます。既存のプロジェクトでは保存済みの値が維持されます。 開いているプロジェクトを更新するには、下の「このプロジェクトに既定値を適用」を使用してください。",
+    "viewport_defaults_hint": "新しいプロジェクトには、このビューの既定値が使われます。開いているプロジェクトを更新するには、未保存の場合も「このプロジェクトに既定値を適用」を使ってください。",
     "viewport_style_defaults": "ガイドと選択のスタイル",
     "viewport_performance_defaults": "LODキャッシュ上限",
     "viewport_defaults_invalid": "対応範囲内の有効な値を入力してください。",
@@ -2594,7 +2594,7 @@
     "apply_defaults": "既定値を適用…",
     "save_defaults_hint": "現在のガイドスタイルとLODキャッシュ上限を新規プロジェクトの既定値として保存します。",
     "apply_defaults_hint": "このプロジェクトのみに適用します。他の描画設定は変更されません。",
-    "apply_defaults_confirm": "このプロジェクトのガイドスタイルとLODキャッシュ上限を既定値で置き換えますか？"
+    "apply_defaults_confirm": "開いているプロジェクトのガイドと選択のスタイル、および LOD キャッシュの上限を保存済みの既定値に置き換えます。"
   },
   "scripts_panel": {
     "title": "Python スクリプト",

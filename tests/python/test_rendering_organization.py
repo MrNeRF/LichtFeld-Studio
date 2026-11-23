@@ -128,7 +128,8 @@ def test_apply_defaults_requires_explicit_confirmation(rendering_panel_module):
     module.lf.ui.confirm_dialog = lambda *args: dialogs.append(args)
     panel._confirm_apply_defaults()
     assert applied == []
-    title, text, buttons, callback = dialogs.pop()
+    title, _, buttons, callback = dialogs.pop()
+    assert title == "preferences.apply_viewport_defaults"
     callback(buttons[1])
     assert applied == []
     callback(buttons[0])
@@ -198,8 +199,15 @@ def test_preferences_invalid_pending_default_cannot_apply_old_values(preferences
     module.lf.ui.apply_rendering_defaults = lambda: applied.append(True)
     model.bindings["default_axes_size"][1]("nan")
     section._confirm_apply()
-    assert section._error
+    assert model.func_bindings["rendering_defaults_error"]() == "preferences.viewport_defaults_invalid"
     assert dialogs == [] and applied == []
+
+    root = ET.parse(RESOURCES / "preferences.rml").getroot()
+    viewport = root.find('.//*[@data-if="show_viewport"]')
+    action = viewport.find('.//*[@data-event-click="apply_viewport_defaults"]/..')
+    adjacent_error = list(viewport)[list(viewport).index(action) + 1]
+    assert adjacent_error.get("data-if") == "rendering_defaults_error != ''"
+    assert adjacent_error.text == "{{rendering_defaults_error}}"
 
 
 def test_preferences_exposes_explicit_project_apply_and_translates_it_everywhere():

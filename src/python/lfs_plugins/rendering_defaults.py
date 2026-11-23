@@ -50,7 +50,7 @@ def confirm_apply_defaults(on_applied=None):
             if on_applied:
                 on_applied()
 
-    lf.ui.confirm_dialog(tr("rendering_panel.apply_defaults"),
+    lf.ui.confirm_dialog(tr("preferences.apply_viewport_defaults"),
                          tr("rendering_panel.apply_defaults_confirm"),
                          [apply_label, tr("common.cancel")], apply_if_confirmed)
 

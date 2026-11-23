@@ -1251,7 +1251,7 @@
     "viewport": "Widok",
     "apply_viewport_defaults": "Zastosuj wartości domyślne do tego projektu…",
     "viewport_defaults": "Domyślne wartości nowych projektów",
-    "viewport_defaults_hint": "Te wartości inicjują nowe projekty. Istniejące projekty zachowują zapisane wartości. Aby zaktualizować otwarty projekt, użyj poniżej przycisku Zastosuj wartości domyślne do tego projektu.",
+    "viewport_defaults_hint": "Nowe projekty używają tych domyślnych ustawień widoku. Aby zaktualizować otwarty projekt, także niezapisany, wybierz „Zastosuj wartości domyślne do tego projektu”.",
     "viewport_style_defaults": "Styl prowadnic i zaznaczenia",
     "viewport_performance_defaults": "Limity pamięci podręcznej LOD",
     "viewport_defaults_invalid": "Wprowadź prawidłową wartość z obsługiwanego zakresu.",
@@ -2594,7 +2594,7 @@
     "apply_defaults": "Zastosuj domyślne…",
     "save_defaults_hint": "Zapisz bieżący styl prowadnic i limity pamięci LOD dla nowych projektów.",
     "apply_defaults_hint": "Zastosuj wartości tylko do tego projektu. Pozostałe ustawienia renderowania nie zmienią się.",
-    "apply_defaults_confirm": "Zastąpić styl prowadnic i limity pamięci LOD tego projektu wartościami domyślnymi?"
+    "apply_defaults_confirm": "Styl prowadnic i zaznaczenia oraz limity pamięci podręcznej LOD otwartego projektu zostaną zastąpione zapisanymi wartościami domyślnymi."
   },
   "scripts_panel": {
     "title": "Skrypty Python",
