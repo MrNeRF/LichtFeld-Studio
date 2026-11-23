@@ -743,7 +743,7 @@ class MediaDescription:
 
     def gpmf_metadata_json(self, decoded_byte_limit: int = 134217728) -> str:
         """
-        Interpret collected GPMF ACCL, GYRO and GPS5 samples. SCAL is applied in recorded axis order; packet clocks, sensor counters and calibration descriptors are retained.
+        Interpret collected GPMF ACCL, GYRO, GPS5 and GPS9 samples. SCAL is applied in recorded axis order; packet clocks, sensor counters and calibration descriptors are retained.
         """
 
 class FrameLayout:

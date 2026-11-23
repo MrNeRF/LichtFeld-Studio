@@ -138,8 +138,8 @@ namespace lfs::python {
                     if (!result) throw Exception(result.error());
                     return json_detail::dump(json_detail::gpmfMetadata(*result));
                 } catch (const std::bad_alloc&) {
-                    throw Exception(make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detection = LFS_SOURCE_SITE_CURRENT()}));
-                } }, nb::arg("decoded_byte_limit") = gpmf_default_decoded_bytes, "Interpret collected GPMF ACCL, GYRO and GPS5 samples. SCAL is applied in recorded axis order; packet clocks, sensor counters and calibration descriptors are retained.");
+                    throw Exception(make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "GPMF JSON allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()}));
+                } }, nb::arg("decoded_byte_limit") = gpmf_default_decoded_bytes, "Interpret collected GPMF ACCL, GYRO, GPS5 and GPS9 samples. SCAL is applied in recorded axis order; packet clocks, sensor counters and calibration descriptors are retained.");
         nb::class_<FrameLayout>(m, "FrameLayout").def_ro("width", &FrameLayout::width).def_ro("height", &FrameLayout::height).def_ro("row_stride", &FrameLayout::row_stride).def_ro("format", &FrameLayout::format).def_ro("color", &FrameLayout::color);
         nb::class_<FrameInfo>(m, "FrameInfo").def(nb::init<>()).def_rw("source_timestamp", &FrameInfo::source_timestamp).def_rw("timestamp_origin", &FrameInfo::timestamp_origin).def_rw("decode_index", &FrameInfo::decode_index).def_rw("delivery_index", &FrameInfo::delivery_index).def_rw("relative_seconds", &FrameInfo::relative_seconds).def_rw("legacy_source_frame", &FrameInfo::legacy_source_frame).def_rw("sharpness_score", &FrameInfo::sharpness_score).def_rw("origin", &FrameInfo::origin).def_rw("output_timestamp", &FrameInfo::output_timestamp).def_rw("source_component_depth", &FrameInfo::source_component_depth);
         nb::class_<IngestProgress>(m, "IngestProgress").def_ro("processed", &IngestProgress::processed).def_ro("estimated", &IngestProgress::estimated).def_ro("discarded", &IngestProgress::discarded);

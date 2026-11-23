@@ -394,16 +394,20 @@ namespace {
                         return failed(interpreted.error());
                     dji_metadata = json_detail::djiMetadata(*interpreted);
                 }
-                auto media = json_detail::description(*result);
-                if (dji_metadata)
-                    media["dji_metadata"] = std::move(*dji_metadata);
+                std::optional<json> gpmf_metadata;
                 if (gpmf_metadata_requested) {
                     const auto interpreted = interpretGpmfMetadata(*result->timed_metadata, gpmf_decoded_bytes.value_or(gpmf_default_decoded_bytes));
                     if (!interpreted)
                         return failed(interpreted.error());
-                    media["gpmf_metadata"] = json_detail::gpmfMetadata(*interpreted);
+                    gpmf_metadata = json_detail::gpmfMetadata(*interpreted);
                 }
-                std::cout << json_detail::dump(json{{"schema_version", 1}, {"success", true}, {"media", std::move(media)}}) << '\n';
+                auto media = json_detail::description(*result);
+                if (dji_metadata)
+                    media["dji_metadata"] = std::move(*dji_metadata);
+                if (gpmf_metadata)
+                    media["gpmf_metadata"] = std::move(*gpmf_metadata);
+                auto response = json{{"schema_version", 1}, {"success", true}, {"media", std::move(media)}};
+                std::cout << (gpmf_metadata_requested ? json_detail::dump(response) : response.dump()) << '\n';
                 return 0;
             }
             if (tiff_options && output.files.format != FrameFileFormat::TIFF16)

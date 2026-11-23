@@ -389,7 +389,20 @@ namespace lfs::media::json_detail {
                     std::string_view label = unit;
                     while (!label.empty() && label.back() == '\0')
                         label.remove_suffix(1);
-                    units.push_back(std::string(label));
+                    std::string display;
+                    if (stream.units_latin1) {
+                        for (const unsigned char byte : label) {
+                            if (byte >= 0x80) {
+                                display += static_cast<char>(0xc0 | (byte >> 6));
+                                display += static_cast<char>(0x80 | (byte & 0x3f));
+                            } else {
+                                display += static_cast<char>(byte);
+                            }
+                        }
+                    } else {
+                        display = label;
+                    }
+                    units.push_back(std::move(display));
                     unit_bytes.push_back(hexBytes(unit));
                 }
                 json item{{"key", stream.key}, {"device_id", optional(stream.device_id)}, {"device_name", stream.device_name}, {"device_name_bytes", hexBytes(stream.device_name)}, {"name", stream.name}, {"name_bytes", hexBytes(stream.name)}, {"units", std::move(units)}, {"units_bytes", std::move(unit_bytes)}, {"orientation_in", stream.orientation_in}, {"orientation_in_bytes", hexBytes(stream.orientation_in)}, {"orientation_out", stream.orientation_out}, {"orientation_out_bytes", hexBytes(stream.orientation_out)}, {"total_samples", optional(stream.total_samples)}, {"sensor_timestamp", optional(stream.sensor_timestamp)}, {"samples", std::move(values)}};

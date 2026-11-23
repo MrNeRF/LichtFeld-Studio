@@ -11,6 +11,7 @@ namespace lfs::media {
         std::string name;
         // One fixed-width byte string for all components, or one per component.
         std::vector<std::string> units;
+        bool units_latin1 = false;
         std::string orientation_in;
         std::string orientation_out;
         std::vector<double> calibration_matrix;
@@ -28,7 +29,7 @@ namespace lfs::media {
         std::vector<GpmfStream> streams;
     };
     inline constexpr std::size_t gpmf_default_decoded_bytes = 128u * 1024 * 1024;
-    // Decode ACCL, GYRO and GPS5 streams from collected gpmd packets.
+    // Decode ACCL, GYRO, GPS5 and GPS9 streams from collected gpmd packets.
     // SCAL is applied; sample axes and calibration descriptors remain as recorded.
     // Packet clocks and sensor counters remain distinct from individual sample times.
     [[nodiscard]] LFS_MEDIA_API Result<std::vector<GpmfPacket>> interpretGpmfMetadata(const TimedMetadataObservation&, std::size_t decoded_byte_limit = gpmf_default_decoded_bytes);

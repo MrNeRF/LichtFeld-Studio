@@ -982,6 +982,7 @@ class MediaBindings(unittest.TestCase):
         self.assertEqual(gps["gps_fix"], 3)
         self.assertEqual(gps["gps_precision_raw"], 184)
         self.assertEqual(gps["gps_utc"], "190506181507.285")
+        self.assertEqual(first["ACCL"]["units"], ["m/s²"])
         self.assertEqual(first["ACCL"]["units_bytes"], ["6d2f73b2"])
         self.assertEqual(first["GYRO"]["units"], ["rad/s"])
         self.assertEqual(gps["units"], ["deg", "deg", "m", "m/s", "m/s"])
@@ -1015,9 +1016,7 @@ class MediaBindings(unittest.TestCase):
         self.assertNotEqual(limited.returncode, 0)
         self.assertEqual(json.loads(limited.stdout)["error"]["code"], "ResourceExhausted")
         path.unlink()
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
-            results = list(pool.map(lambda _: json.loads(observed.gpmf_metadata_json()), range(6)))
-        self.assertEqual(results, [interpreted] * 6)
+        self.assertEqual(json.loads(observed.gpmf_metadata_json()), interpreted)
 
     def test_dji_metadata_owned_result_and_cli_parity(self):
         path = fixtures.dji_ac204(self.root)

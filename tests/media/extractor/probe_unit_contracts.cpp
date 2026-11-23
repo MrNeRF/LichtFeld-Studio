@@ -607,7 +607,37 @@ namespace {
         for (unsigned i = 0; i < 16; ++i)
             deep = nest("STRM", deep);
         broken.packets[0].bytes = nest("DEVC", deep);
-        require(interpretGpmfMetadata(broken).has_value(), "unknown nested records remain uninterpreted");
+        const auto nested = interpretGpmfMetadata(broken);
+        require(nested && nested->front().streams.empty(), "unknown nested records remain uninterpreted");
+
+        Bytes gps9_values, gps9_scales;
+        for (const int value : {510000000, -12000000, 1250, 300, 400, 9000, 43210123})
+            append(gps9_values, integer(static_cast<std::uint32_t>(value), 4));
+        append(gps9_values, integer(125, 2));
+        append(gps9_values, integer(3, 2));
+        for (const auto divisor : {10000000, 10000000, 10, 100, 100, 1, 1000, 100, 1})
+            append(gps9_scales, integer(divisor, 4));
+        auto gps9_stream = record("SCAL", 'l', 4, 9, gps9_scales);
+        append(gps9_stream, record("TYPE", 'c', 1, 9, {'l', 'l', 'l', 'l', 'l', 'l', 'l', 'S', 'S'}));
+        append(gps9_stream, record("GPS9", '?', 32, 1, gps9_values));
+        broken.packets[0].bytes = nest("DEVC", nest("STRM", gps9_stream));
+        const auto gps9 = interpretGpmfMetadata(broken);
+        require(gps9 && gps9->front().streams.size() == 1, "GPS9 is read without GPS5");
+        const auto& point = gps9->front().streams.front();
+        require(point.key == "GPS9" && point.components == 9 &&
+                    point.values == std::vector<double>{51, -1.2, 125, 3, 4, 9000, 43210.123, 1.25, 3},
+                "GPS9 retains all nine scaled fields in recorded order");
+        auto unsupported_layout = record("TYPE", 'c', 9, 1, {'L', 'l', 'l', 'l', 'l', 'l', 'l', 'S', 'S'});
+        append(unsupported_layout, record("GPS9", '?', 32, 1, gps9_values));
+        expect_error(nest("DEVC", nest("STRM", unsupported_layout)), ErrorCode::Unsupported);
+
+        Bytes coexist = nest("STRM", gps9_stream);
+        append(coexist, nest("STRM", record("GPS5", 'l', 20, 1, Bytes(20))));
+        broken.packets[0].bytes = nest("DEVC", coexist);
+        const auto both = interpretGpmfMetadata(broken);
+        require(both && both->front().streams.size() == 2 &&
+                    both->front().streams[0].key == "GPS9" && both->front().streams[1].key == "GPS5",
+                "GPS5 and GPS9 remain separate observations");
         Bytes scales;
         for (unsigned i = 0; i < 257; ++i)
             append(scales, integer(1, 4));

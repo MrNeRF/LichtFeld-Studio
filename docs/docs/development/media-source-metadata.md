@@ -1217,7 +1217,7 @@ selected track, packet clocks and raw payloads before continuing an export.
 
 ### GoPro GPMF observations
 
-`probe --timed-stream INDEX --gpmf-metadata` interprets ACCL, GYRO and GPS5
+`probe --timed-stream INDEX --gpmf-metadata` interprets ACCL, GYRO, GPS5 and GPS9
 records from a selected `gpmd` track. In Python, call
 `observed.gpmf_metadata_json()` on the result of
 `media.MediaIngest.probe(path, timed_metadata_stream=INDEX)`; C++ uses
@@ -1226,8 +1226,14 @@ records from a selected `gpmd` track. In Python, call
 Each packet retains its PTS and duration. Streams contain SCAL-scaled samples,
 device identifiers/names, units, TSMP/STMP counters and declared MTRX/ORIN/ORIO
 calibration/axis descriptors. Sample order and axes remain as recorded. GPS5
-also carries GPSF, raw GPSP and GPSU when present. Text byte fields preserve
-labels that are not valid UTF-8. Units are arrays: one entry applies to every
+also carries GPSF, raw GPSP and GPSU when present. Each GPS9 row contains
+latitude, longitude, altitude, ground speed, 3D speed, days since 2000,
+seconds since midnight, DOP and fix status. GPS5 and GPS9 are kept as
+separate observations when both are recorded; they are not joined into
+one trajectory. The retained-data budget excludes JSON serialization. Text byte
+fields preserve original labels. Unit labels of GPMF type `c` are displayed as
+Latin-1 decoded to UTF-8. Other invalid UTF-8 text uses replacement characters.
+Units are arrays: one entry applies to every
 component, or entries correspond to the recorded components. Display labels omit
 trailing NUL padding; the matching `units_bytes` entries preserve it. A FourCC
 device ID is represented by its unsigned big-endian integer value. STMP counters

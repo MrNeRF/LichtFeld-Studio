@@ -114,15 +114,32 @@ namespace lfs::media {
             remaining -= bytes;
         }
         struct Context {
-            std::optional<Record> device_id, device_name, name, si_units, units, scale, matrix;
+            std::optional<Record> device_id, device_name, name, si_units, units, scale, matrix, layout;
             std::optional<Record> orientation_in, orientation_out, total_samples, sensor_timestamp, gps_fix, gps_precision, gps_utc;
         };
         GpmfStream samples(const Record& record, const Context& context, std::size_t& remaining) {
-            const auto width = numericWidth(record.type);
-            const unsigned components = record.key == "GPS5" ? 5 : 3;
-            const auto count = numericCount(record);
-            if (record.width != components * width)
+            const unsigned components = record.key == "GPS9" ? 9 : record.key == "GPS5" ? 5
+                                                                                        : 3;
+            std::array<std::uint8_t, 9> types;
+            types.fill(record.type);
+            if (record.key == "GPS9" && record.type == '?') {
+                const auto layout = text(context.layout);
+                if (layout != "lllllllSS")
+                    throw Failure{ErrorCode::Unsupported, "Unsupported GPMF GPS9 TYPE"};
+                std::copy(layout.begin(), layout.end(), types.begin());
+            }
+            std::array<unsigned, 9> widths;
+            unsigned sample_width = 0;
+            for (unsigned i = 0; i < components; ++i) {
+                widths[i] = numericWidth(types[i]);
+                sample_width += widths[i];
+            }
+            if (record.width != sample_width) {
+                if (record.type != '?')
+                    (void)numericCount(record);
                 throw Failure{ErrorCode::Unsupported, "Unsupported GPMF sample dimensions"};
+            }
+            const auto count = std::size_t(record.count) * components;
             const auto name = text(context.name), device_name = text(context.device_name);
             const auto si_units = text(context.si_units);
             const auto& units_record = si_units.empty() ? context.units : context.si_units;
@@ -141,6 +158,7 @@ namespace lfs::media {
             result.device_name = device_name;
             result.key = record.key;
             result.name = name;
+            result.units_latin1 = units_record && units_record->type == 'c';
             result.units.reserve(unit_count);
             for (unsigned i = 0; i < unit_count; ++i)
                 result.units.emplace_back(units.substr(i * units_record->width, units_record->width));
@@ -154,7 +172,8 @@ namespace lfs::media {
                 result.gps_precision = counter(context.gps_precision);
                 result.gps_utc = gps_utc;
             }
-            std::array<double, 5> scales{1, 1, 1, 1, 1};
+            std::array<double, 9> scales;
+            scales.fill(1);
             if (context.scale) {
                 const auto scale_count = numericCount(*context.scale);
                 if (scale_count != 1 && scale_count != components)
@@ -167,11 +186,15 @@ namespace lfs::media {
                 }
             }
             result.values.reserve(count);
-            for (std::size_t i = 0; i < count; ++i) {
-                const auto value = number(record.type, record.data.subspan(i * width, width)) / scales[i % components];
-                if (!std::isfinite(value))
-                    malformed("Nonfinite GPMF scaled sample");
-                result.values.push_back(value);
+            auto bytes = record.data;
+            for (unsigned row = 0; row < record.count; ++row) {
+                for (unsigned i = 0; i < components; ++i) {
+                    const auto value = number(types[i], bytes.first(widths[i])) / scales[i];
+                    if (!std::isfinite(value))
+                        malformed("Nonfinite GPMF scaled sample");
+                    result.values.push_back(value);
+                    bytes = bytes.subspan(widths[i]);
+                }
             }
             if (context.matrix) {
                 const auto matrix_width = numericWidth(context.matrix->type);
@@ -184,7 +207,7 @@ namespace lfs::media {
         void stream(const Record& parent, Context context, std::vector<GpmfStream>& output, std::size_t& remaining) {
             auto bytes = parent.data;
             while (auto field = next(bytes)) {
-                if (field->key == "ACCL" || field->key == "GYRO" || field->key == "GPS5") {
+                if (field->key == "ACCL" || field->key == "GYRO" || field->key == "GPS5" || field->key == "GPS9") {
                     output.push_back(samples(*field, context, remaining));
                     continue;
                 }
@@ -194,6 +217,8 @@ namespace lfs::media {
                     context.si_units = field;
                 else if (field->key == "UNIT")
                     context.units = field;
+                else if (field->key == "TYPE")
+                    context.layout = field;
                 else if (field->key == "SCAL")
                     context.scale = field;
                 else if (field->key == "MTRX")
