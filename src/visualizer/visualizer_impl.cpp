@@ -336,8 +336,8 @@ namespace lfs::vis {
         rendering_manager_->setShaderService(shader_service_.get());
         gui_manager_->sequencer().setShaderService(shader_service_.get());
 
-        // Set initial antialiasing
-        RenderSettings initial_settings;
+        // Keep user viewport defaults while applying startup options.
+        auto initial_settings = rendering_manager_->getSettings();
         initial_settings.antialiasing = options.antialiasing;
         initial_settings.scene_upscaler = options.safe_mode
                                               ? "native"
