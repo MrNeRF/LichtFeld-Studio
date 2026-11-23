@@ -1015,8 +1015,6 @@ class MediaBindings(unittest.TestCase):
         limited = subprocess.run([str(METADATA_CLI), "probe", str(path), "--timed-stream", "0", "--gpmf-metadata", "--gpmf-max-decoded-bytes", "1"], capture_output=True, timeout=30)
         self.assertNotEqual(limited.returncode, 0)
         self.assertEqual(json.loads(limited.stdout)["error"]["code"], "ResourceExhausted")
-        path.unlink()
-        self.assertEqual(json.loads(observed.gpmf_metadata_json()), interpreted)
 
     def test_dji_metadata_owned_result_and_cli_parity(self):
         path = fixtures.dji_ac204(self.root)

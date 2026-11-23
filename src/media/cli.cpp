@@ -394,20 +394,26 @@ namespace {
                         return failed(interpreted.error());
                     dji_metadata = json_detail::djiMetadata(*interpreted);
                 }
-                std::optional<json> gpmf_metadata;
-                if (gpmf_metadata_requested) {
-                    const auto interpreted = interpretGpmfMetadata(*result->timed_metadata, gpmf_decoded_bytes.value_or(gpmf_default_decoded_bytes));
-                    if (!interpreted)
-                        return failed(interpreted.error());
-                    gpmf_metadata = json_detail::gpmfMetadata(*interpreted);
+                try {
+                    std::optional<json> gpmf_metadata;
+                    if (gpmf_metadata_requested) {
+                        const auto interpreted = interpretGpmfMetadata(*result->timed_metadata, gpmf_decoded_bytes.value_or(gpmf_default_decoded_bytes));
+                        if (!interpreted)
+                            return failed(interpreted.error());
+                        gpmf_metadata = json_detail::gpmfMetadata(*interpreted);
+                    }
+                    auto media = json_detail::description(*result);
+                    if (dji_metadata)
+                        media["dji_metadata"] = std::move(*dji_metadata);
+                    if (gpmf_metadata)
+                        media["gpmf_metadata"] = std::move(*gpmf_metadata);
+                    auto response = json{{"schema_version", 1}, {"success", true}, {"media", std::move(media)}};
+                    std::cout << (gpmf_metadata_requested ? json_detail::dump(response) : response.dump()) << '\n';
+                } catch (const std::bad_alloc&) {
+                    if (!gpmf_metadata_requested)
+                        throw;
+                    return failed(lfs::make_error({.code = lfs::ErrorCode::ResourceExhausted, .domain = lfs::ErrorDomain::IO, .detail = "GPMF JSON allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()}));
                 }
-                auto media = json_detail::description(*result);
-                if (dji_metadata)
-                    media["dji_metadata"] = std::move(*dji_metadata);
-                if (gpmf_metadata)
-                    media["gpmf_metadata"] = std::move(*gpmf_metadata);
-                auto response = json{{"schema_version", 1}, {"success", true}, {"media", std::move(media)}};
-                std::cout << (gpmf_metadata_requested ? json_detail::dump(response) : response.dump()) << '\n';
                 return 0;
             }
             if (tiff_options && output.files.format != FrameFileFormat::TIFF16)

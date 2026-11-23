@@ -108,9 +108,10 @@ namespace lfs::media {
                 malformed("GPMF counter requires one complete value");
             return integer(field->data);
         }
-        void retain(std::size_t bytes, std::size_t& remaining) {
+        void retain(std::size_t bytes, std::size_t& remaining, std::string_view record = {}) {
             if (bytes > remaining)
-                throw Failure{ErrorCode::ResourceExhausted, "GPMF decoded metadata exceeds the byte budget"};
+                throw Failure{ErrorCode::ResourceExhausted, "GPMF decoded metadata exceeds the byte budget (remaining=" + std::to_string(remaining) +
+                                                                ", requested=" + std::to_string(bytes) + ", record=" + std::string(record.empty() ? "packet" : record) + ")"};
             remaining -= bytes;
         }
         struct Context {
@@ -152,7 +153,7 @@ namespace lfs::media {
             const auto matrix_count = context.matrix ? numericCount(*context.matrix) : 0;
             if (context.matrix && matrix_count != components * components)
                 malformed("GPMF calibration matrix dimensions do not match samples");
-            retain(sizeof(GpmfStream) + device_name.size() + name.size() + units.size() + unit_count * sizeof(std::string) + orientation_in.size() + orientation_out.size() + gps_utc.size() + (count + matrix_count) * sizeof(double), remaining);
+            retain(sizeof(GpmfStream) + device_name.size() + name.size() + units.size() + unit_count * sizeof(std::string) + orientation_in.size() + orientation_out.size() + gps_utc.size() + (count + matrix_count) * sizeof(double), remaining, record.key);
             GpmfStream result;
             result.device_id = counter(context.device_id, true);
             result.device_name = device_name;
@@ -241,10 +242,11 @@ namespace lfs::media {
         }
     } // namespace
     Result<std::vector<GpmfPacket>> interpretGpmfMetadata(const TimedMetadataObservation& observation, std::size_t decoded_byte_limit) {
+        constexpr auto gpmd = 'g' | std::uint32_t('p') << 8 | std::uint32_t('m') << 16 | std::uint32_t('d') << 24;
+        if (observation.codec_tag != gpmd || observation.packets.empty())
+            return make_error({.code = ErrorCode::Unsupported, .domain = ErrorDomain::IO, .detail = "GPMF interpretation requires a nonempty gpmd observation", .detection = LFS_SOURCE_SITE_CURRENT()});
+        std::size_t packet_index = 0;
         try {
-            constexpr auto gpmd = 'g' | std::uint32_t('p') << 8 | std::uint32_t('m') << 16 | std::uint32_t('d') << 24;
-            if (observation.codec_tag != gpmd || observation.packets.empty())
-                throw Failure{ErrorCode::Unsupported, "GPMF interpretation requires a nonempty gpmd observation"};
             auto remaining = decoded_byte_limit;
             std::vector<GpmfPacket> result;
             result.reserve(std::min(observation.packets.size(), decoded_byte_limit / sizeof(GpmfPacket)));
@@ -278,10 +280,11 @@ namespace lfs::media {
                 if (!device)
                     malformed("GPMF payload requires a DEVC record");
                 result.push_back(std::move(decoded));
+                ++packet_index;
             }
             return result;
         } catch (Failure& error) {
-            return make_error({.code = error.code, .domain = ErrorDomain::IO, .detail = std::move(error.detail), .detection = LFS_SOURCE_SITE_CURRENT()});
+            return make_error({.code = error.code, .domain = ErrorDomain::IO, .detail = "GPMF packet " + std::to_string(packet_index) + ": " + error.detail, .detection = LFS_SOURCE_SITE_CURRENT()});
         } catch (const std::bad_alloc&) {
             return make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detection = LFS_SOURCE_SITE_CURRENT()});
         }
