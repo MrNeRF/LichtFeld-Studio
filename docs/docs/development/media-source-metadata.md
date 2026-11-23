@@ -1251,3 +1251,24 @@ components, invalid scales and nonfinite values fail interpretation. Unknown
 records are retained in the raw observation without interpreting their contents.
 A separate 128 MiB retained-decoded-data budget bounds expansion; adjust it with
 `--gpmf-max-decoded-bytes N`, Python's `decoded_byte_limit`, or the native argument.
+
+### Insta360 compact IMU observations
+
+Read the accelerometer and gyroscope samples from a supported v3 INSV trailer:
+
+    media-ingest probe clip.insv --insta360-imu
+
+In Python, call `media.MediaIngest.probe(path, insta360_imu=True).to_json()`.
+Native callers request `ProbeDepth::Headers` and set
+`ProbeOptions::collect_insta360_imu`. The result contains an `insta360_imu`
+array with `device_tick`, `acceleration_counts` and `angular_velocity_counts`.
+The counts are centered at the wire midpoint, in recorded axis order. The tick
+belongs to the device clock. This API leaves calibration and alignment with
+video presentation timestamps to the caller.
+
+The same open input supplies the container headers and the trailer record.
+This path reads the declared compact 20-byte sample layout in sequential
+v3 trailers, as observed on ONE R and ONE RS. Trailer metadata selects the
+layout before samples are decoded. An indexed trailer reports an unsupported
+format. Reads are bounded by the probe timeout and the retained IMU sample
+storage is capped at 32 MiB.

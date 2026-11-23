@@ -227,17 +227,17 @@ namespace lfs::python {
                 if (!result) throw Exception(result.error());
                 return json_detail::dump(json_detail::sourceExif(*result)); }, nb::arg("path"), "Read JPEG/PNG EXIF envelopes, primary HEIF or JPEG XL provider-decoded EXIF, or TIFF decoded tags and observed source ranges as JSON; binary values are hex, MakerNotes opaque.")
             .def_static("codec_build_info", &MediaIngest::codecBuildInfo)
-            .def_static("probe", [](const std::filesystem::path& path, bool headers_only, std::int64_t timeout_ms, std::optional<int> timed_stream, const TimedMetadataLimits& timed_limits) {
+            .def_static("probe", [](const std::filesystem::path& path, bool headers_only, std::int64_t timeout_ms, std::optional<int> timed_stream, const TimedMetadataLimits& timed_limits, bool insta360_imu) {
                 ProbeOptions options;
-                options.depth = headers_only ? ProbeDepth::Headers : ProbeDepth::StreamInfo;
+                options.depth = (headers_only || timed_stream || insta360_imu) ? ProbeDepth::Headers : ProbeDepth::StreamInfo;
                 options.timeout = std::chrono::milliseconds(timeout_ms);
                 options.timed_metadata_stream = timed_stream;
+                options.collect_insta360_imu = insta360_imu;
                 options.timed_metadata_limits = timed_limits;
-                if (timed_stream) options.depth = ProbeDepth::Headers;
                 std::optional<Result<MediaDescription>> result;
                 { nb::gil_scoped_release release; result.emplace(MediaIngest::probe(path, options)); }
                 if (!*result) throw Exception(result->error());
-                return std::move(**result); }, nb::arg("path"), nb::arg("headers_only") = false, nb::arg("timeout_ms") = 10000, nb::arg("timed_metadata_stream") = nb::none(), nb::arg("timed_metadata_limits") = TimedMetadataLimits{}, "Inspect headers or stream information. Selecting a timed metadata stream performs a bounded raw packet scan in Headers mode without interpreting telemetry or decoding pixels.")
+                return std::move(**result); }, nb::arg("path"), nb::arg("headers_only") = false, nb::arg("timeout_ms") = 10000, nb::arg("timed_metadata_stream") = nb::none(), nb::arg("timed_metadata_limits") = TimedMetadataLimits{}, nb::arg("insta360_imu") = false, "Inspect headers or stream information. Select a timed metadata stream to collect its packets, or enable insta360_imu to read compact IMU samples from the trailer in Headers mode.")
             .def_static("extract_files", [](const IngestRequest& request, const FileExtraction& files, nb::object progress, nb::object cancelled) {
                 const auto callbacks = std::make_shared<Callbacks>(std::move(progress), std::move(cancelled));
                 const auto copy = withCallbacks(request, callbacks);

@@ -127,6 +127,12 @@ namespace lfs::media {
         std::vector<std::uint8_t> extradata;
         std::vector<TimedMetadataPacket> packets;
     };
+    struct Insta360ImuSample {
+        std::uint64_t device_tick = 0;
+        std::array<std::int32_t, 3> acceleration_counts{};
+        std::array<std::int32_t, 3> angular_velocity_counts{};
+    };
+
     struct MediaDescription {
         std::string container;
         // FFmpeg may derive properties during packet probing; this is not a CFR guarantee.
@@ -140,6 +146,7 @@ namespace lfs::media {
         std::optional<ContainerSourceMetadata> source_metadata;
         // Present only after an explicit complete packet scan of one data/subtitle track.
         std::optional<TimedMetadataObservation> timed_metadata;
+        std::optional<std::vector<Insta360ImuSample>> insta360_imu;
     };
     enum class ProbeDepth { Headers,
                             StreamInfo };
@@ -152,6 +159,8 @@ namespace lfs::media {
         // Requires Headers depth; does not probe codecs or decode video frames.
         std::optional<int> timed_metadata_stream;
         TimedMetadataLimits timed_metadata_limits;
+        // Requires Headers depth. Reads the compact v3 IMU record, preserving device ticks and counts.
+        bool collect_insta360_imu = false;
     };
     // Metadata only: no image output, hardware context or application runtime.
     // StreamInfo may read packets and use FFmpeg's software codec probing.

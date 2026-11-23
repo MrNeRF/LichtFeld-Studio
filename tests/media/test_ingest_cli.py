@@ -2090,6 +2090,73 @@ class IngestCLI(unittest.TestCase):
             self.assertEqual(limited["error"]["code"], "ResourceExhausted")
         self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), (original, modified))
 
+    def test_insta360_imu_probe(self):
+        original = srt_metadata_fixture.embedded(self.root, FFMPEG).read_bytes()
+        path = self.root / "Insta360 é 日本語.insv"
+        magic = b"8db42d694ccc418790edff439fe026bf"
+
+        def record(tag, payload):
+            return payload + struct.pack("<HI", tag, len(payload))
+
+        def write(records, *, size_adjustment=0, version=3):
+            footer = struct.pack("<32xII32s", len(records) + 72 + size_adjustment, version, magic)
+            path.write_bytes(original + records + footer)
+
+        first = struct.pack("<Q6H", 534773966, 31743, 32794, 32802, 32775, 32786, 32775)
+        second = struct.pack("<Q6H", 534774966, 0, 65535, 32768, 32769, 32767, 32768)
+        imu = record(0x300, first + second)
+        compact = record(0x101, b"\xf0\x03\x01")  # Protobuf field 62, is_raw_gyro.
+        write(record(0x500, b"unrelated") + imu + record(0x200, b"preview") + compact)
+        before, mtime = path.read_bytes(), path.stat().st_mtime_ns
+        ordinary, _ = self.invoke("probe", path, "--headers-only")
+        decoded, _ = self.invoke("probe", path, "--insta360-imu")
+        samples = decoded["media"].pop("insta360_imu")
+        self.assertEqual(decoded, ordinary)
+        self.assertEqual(samples, [
+            {"device_tick": 534773966, "acceleration_counts": [-1025, 26, 34],
+             "angular_velocity_counts": [7, 18, 7]},
+            {"device_tick": 534774966, "acceleration_counts": [-32768, 32767, 0],
+             "angular_velocity_counts": [1, -1, 0]},
+        ])
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(path.stat().st_mtime_ns, mtime)
+        timed, _ = self.invoke("probe", path, "--timed-stream", "1")
+        combined, _ = self.invoke("probe", path, "--timed-stream", "1", "--insta360-imu")
+        self.assertEqual(combined["media"].pop("insta360_imu"), samples)
+        self.assertEqual(combined, timed)
+
+        # This size is divisible by both sample widths. The declared layout wins.
+        write(record(0x300, first * 14) + compact)
+        result, _ = self.invoke("probe", path, "--insta360-imu")
+        self.assertEqual(result["media"]["insta360_imu"], [samples[0]] * 14)
+
+        for records, adjustments, expected in (
+            (imu + compact, {"size_adjustment": 1}, "DataLoss"),
+            (imu + imu + compact, {}, "DataLoss"),
+            (imu + compact, {"version": 2}, "Unsupported"),
+            (imu + compact + record(0, bytes(10)), {}, "Unsupported"),
+            (imu + compact + record(0, bytes(9)), {}, "DataLoss"),
+            (imu, {}, "Unsupported"),
+            (imu + record(0x101, b"\xf0\x03\x00"), {}, "Unsupported"),
+            (imu + record(0x101, b"\xf0\x03"), {}, "DataLoss"),
+            (record(0x300, first + b"partial") + compact, {}, "DataLoss"),
+            (record(0x200, b"preview"), {}, "Unsupported"),
+        ):
+            with self.subTest(error=expected, adjustments=adjustments, length=len(records)):
+                write(records, **adjustments)
+                result, _ = self.invoke("probe", path, "--insta360-imu", code=3)
+                self.assertEqual(result["error"]["code"], expected)
+
+        # Seek across a valid-sized compact record that exceeds retained storage.
+        payload_size = 20 * (2**20 + 1)
+        with path.open("wb") as file:
+            file.write(original)
+            file.seek(payload_size, os.SEEK_CUR)
+            file.write(struct.pack("<HI", 0x300, payload_size) + compact)
+            file.write(struct.pack("<32xII32s", payload_size + len(compact) + 78, 3, magic))
+        result, _ = self.invoke("probe", path, "--insta360-imu", code=4)
+        self.assertEqual(result["error"]["code"], "ResourceExhausted")
+
     def test_timed_metadata_probe_missing_payload_and_empty_track(self):
         import struct
         path = srt_metadata_fixture.embedded(self.root, FFMPEG)

@@ -443,6 +443,11 @@ namespace lfs::media::json_detail {
         }
         if (media.timed_metadata)
             result["timed_metadata"] = timedMetadata(*media.timed_metadata);
+        if (media.insta360_imu) {
+            auto& samples = result["insta360_imu"] = json::array();
+            for (const auto& sample : *media.insta360_imu)
+                samples.push_back({{"device_tick", sample.device_tick}, {"acceleration_counts", sample.acceleration_counts}, {"angular_velocity_counts", sample.angular_velocity_counts}});
+        }
         return result;
     }
     inline json sourceMetadataResult(const SourceMetadataCatalog& catalog, const MetadataSummary& summary) {
