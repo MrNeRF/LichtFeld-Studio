@@ -204,9 +204,8 @@ def _button_record(button_id, action, value, icon_src, *,
         "selected": selected,
         "enabled": enabled,
         "opacity": "1" if enabled else "0.25",
+        "separator_before": bool(separator_before),
     }
-    if separator_before:
-        record["separator_before"] = True
     return record
 
 class _GizmoToolbarController:
@@ -864,7 +863,8 @@ class _GizmoToolbarController:
             return records + [
                 _button_record(f"model-alignment-{action}", "model_alignment_control", action,
                                _icon_src(icon) if icon else "", tooltip_key=key, tooltip_text=fallback,
-                               label=label, selected=selected, enabled=enabled)
+                               label=label, selected=selected, enabled=enabled,
+                               separator_before=preview and action in ("separate", "link", "cancel"))
                 for action, key, fallback, icon, label, selected, enabled in controls
             ]
         return records + [

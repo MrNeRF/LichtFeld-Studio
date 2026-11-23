@@ -1160,6 +1160,7 @@ def test_crop_enable_toggle_tracks_dataset_stages_and_uses_cropbox_operator(
             "selected": True,
             "enabled": True,
             "opacity": "1",
+            "separator_before": False,
         }
     ]
     assert snapshot["crop_settings_buttons"] == [
@@ -1175,6 +1176,7 @@ def test_crop_enable_toggle_tracks_dataset_stages_and_uses_cropbox_operator(
             "selected": False,
             "enabled": True,
             "opacity": "1",
+            "separator_before": False,
         }
     ]
 
@@ -1758,7 +1760,7 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert 'class="toolbar-flyout-divider hidden"' not in rml
     assert "toolbar-flyout" not in rml
     assert rml.count('data-for="button : selection_group_buttons"') == 2
-    assert rml.count('class="toolbar-separator"') == 10
+    assert rml.count('class="toolbar-separator"') == 12
     assert 'class="toolbar-separator hidden"' in rml
     assert rml.count('class="viewport-gizmo-controls"') == 2
     assert rml.count('class="viewport-gizmo-control-row"') == 2
@@ -2819,6 +2821,7 @@ def test_model_alignment_replaces_active_tool_controls_and_refreshes_on_preview(
     assert all(not record["label"] and record["icon_src"] for record in records)
     assert by_value["left"]["icon_src"] != by_value["right"]["icon_src"]
     assert by_value["link"]["tooltip_key"] == "align.unlink_cameras"
+    assert [record["value"] for record in records if record["separator_before"]] == ["separate", "link", "cancel"]
     lf.ui.model_alignment_controls = lambda action="": (False, -1, False) if not action else controls(action)
     separate = controller._gizmo.snapshot()["align_action_buttons"]
     assert [record["value"] for record in separate

@@ -2299,11 +2299,9 @@ body {
     gap: 5dp;
 }
 
-/* Separate the preview actions, exclusive display modes and camera toggle. */
-#model-alignment-separate,
-#model-alignment-link,
-#model-alignment-cancel {
-    margin-left: 6dp;
+.align-action-item {
+    display: flex;
+    align-items: center;
 }
 
 .align-button-label {
