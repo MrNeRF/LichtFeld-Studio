@@ -916,7 +916,7 @@ namespace lfs::io::project {
              impl_->source->compression ==
                  Compression::ByteShuffleZstdFramed)) {
             const std::uint64_t materialize_max =
-                detail::max_materialized_bytes_for(*impl_->source);
+                detail::preferred_materialized_bytes_for(*impl_->source);
             if (impl_->source->stored_bytes <= materialize_max &&
                 impl_->source->uncompressed_bytes <= materialize_max) {
                 if (!visitor) {
@@ -2354,7 +2354,7 @@ namespace lfs::io::project {
                 row.key.fourcc == FOURCC_MESH ||
                 row.key.fourcc == FOURCC_COLV;
             const auto materialized_max =
-                detail::max_materialized_bytes_for(row);
+                detail::preferred_materialized_bytes_for(row);
             const bool oversized_splat =
                 row.key.fourcc == FOURCC_SPLT &&
                 (row.stored_bytes > materialized_max ||
