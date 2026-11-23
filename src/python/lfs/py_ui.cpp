@@ -172,7 +172,8 @@ namespace lfs::python {
                 vis::op::ModalEvent event{};
                 event.type = vis::op::ModalEvent::Type::NONE;
                 return vis::op::operators().dispatchModalEvent(event);
-            }, std::nullopt);
+            },
+                                    std::nullopt);
         }
 
         std::string get_class_id(nb::object cls) {
@@ -4626,18 +4627,15 @@ namespace lfs::python {
                     const auto* scene = lfs::vis::services().sceneOrNull();
                     const auto* rendering = lfs::vis::services().renderingOrNull();
                     if (scene && rendering) {
-                        const auto settings = rendering->getSettings();
                         if (rendering->modelAlignmentView())
                             return lfs::vis::op::hasEnoughAlignmentPairs(
                                 lfs::vis::services().alignPointPick().getPickedPoints().size());
-                        if (lfs::vis::splitViewUsesPLYComparison(settings.split_view_mode))
-                            return lfs::vis::op::hasEnoughAlignmentPairs(lfs::vis::services().alignPointPick().getPickedPoints().size()) &&
-                                   lfs::vis::op::canAlignComparisonPair(scene->getScene(), settings.split_view_offset);
                     }
                     return scene &&
                            lfs::vis::op::pointsAreNonDegenerate(lfs::vis::services().alignPointPick().getPickedPoints()) &&
                            lfs::vis::op::resolveAlignSnapTargetWorld(*scene).has_value();
-                }, false);
+                },
+                                        false);
             },
             "Whether the align tool has enough picked points to attempt alignment");
 
@@ -4694,7 +4692,8 @@ namespace lfs::python {
                         renderer->setModelAlignmentComposite(std::nullopt);
                     const auto& view = *renderer->modelAlignmentView();
                     return {view.linked, view.composite ? static_cast<int>(vis::splitViewPanelIndex(*view.composite)) : -1, can_swap};
-                }, Controls{false, -1, false});
+                },
+                                        Controls{false, -1, false});
             },
             nb::arg("action") = "", "Query or change the transient model alignment view");
 
@@ -4704,7 +4703,8 @@ namespace lfs::python {
                     const auto* renderer = get_rendering_manager();
                     const auto* view = renderer ? renderer->modelAlignmentView() : nullptr;
                     return view ? view->preview.has_value() : lfs::vis::services().getAlignPreviewEnabled();
-                }, false);
+                },
+                                        false);
             },
             "Whether the alignment result is being previewed");
         m.def("toggle_align_preview", [] { (void)dispatchPointPickUiAction(vis::op::BuiltinOp::AlignPickPoint,
@@ -6990,7 +6990,8 @@ namespace lfs::python {
                     case vis::SplitViewMode::IndependentDual: return "independent_dual";
                     default: return "none";
                     }
-                }, "none");
+                },
+                                        "none");
             },
             "Get split view mode (none, gt_comparison, ply_comparison, independent_dual, model_alignment)");
 

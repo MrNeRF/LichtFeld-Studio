@@ -25,17 +25,6 @@ namespace lfs::vis::op {
         constexpr double kClickDragThresholdPx = 4.0;
         constexpr double kMarkerHitRadiusPx = 8.0;
 
-        [[nodiscard]] SplitViewPanelId pointPickPanel(
-            const RenderingManager::ViewerPanelInfo& panel, const RenderSettings& settings,
-            const int render_x, const bool use_comparison_panels) {
-            if (!use_comparison_panels) {
-                return panel.panel;
-            }
-            return render_x >= splitViewDividerPixel(panel.render_width, settings.split_position)
-                       ? SplitViewPanelId::Right
-                       : SplitViewPanelId::Left;
-        }
-
     } // namespace
 
     [[nodiscard]] core::NodeId resolvePointPickTargetId(const core::Scene& scene,
@@ -57,7 +46,7 @@ namespace lfs::vis::op {
             return core::NULL_NODE;
         }
         const auto* const target = scene.getNodeById(target_id);
-        if (!target || static_cast<bool>(target->locked)) {
+        if (!target || scene.isNodeEffectivelyLocked(target_id)) {
             return core::NULL_NODE;
         }
         return target_id;
@@ -180,8 +169,7 @@ namespace lfs::vis::op {
 
             if (drag_active_ && press_point_index_ &&
                 static_cast<size_t>(*press_point_index_) < picked_points_.size()) {
-                if (!sequentialPoints() || editablePairs())
-                    (void)requestPoint({mm->position, press_point_index_});
+                (void)requestPoint({mm->position, press_point_index_});
                 return OperatorResult::RUNNING_MODAL;
             }
             return OperatorResult::PASS_THROUGH;
@@ -203,7 +191,7 @@ namespace lfs::vis::op {
                 if (event->over_gui) {
                     return OperatorResult::PASS_THROUGH;
                 }
-                if (editablePairs() && !is_pick_button && mb->button == static_cast<int>(input::AppMouseButton::RIGHT)) {
+                if (sequentialPoints() && !is_pick_button && mb->button == static_cast<int>(input::AppMouseButton::RIGHT)) {
                     if (const auto hit = hitTestPoint(mb->position.x, mb->position.y)) {
                         selected_point_ = hit;
                         state_.setSelectedPoint(hit);
@@ -229,7 +217,7 @@ namespace lfs::vis::op {
                         }
                     }
                 }
-                if (editablePairs() && is_pick_button && press_point_index_)
+                if (sequentialPoints() && is_pick_button && press_point_index_)
                     return OperatorResult::RUNNING_MODAL;
                 // Let camera navigation own press so orbit/pan can begin.
                 return OperatorResult::PASS_THROUGH;
@@ -342,7 +330,7 @@ namespace lfs::vis::op {
             clearAllPoints(true);
             break;
         case PointPickState::UiAction::DeleteSelected:
-            if (editablePairs() && !pointEditingBlocked())
+            if (sequentialPoints() && !pointEditingBlocked())
                 removeSelectedPoint();
             break;
         default:
@@ -372,14 +360,28 @@ namespace lfs::vis::op {
     }
 
     void PointPickOperator::syncPickedPointsToServices() {
+        state_.setPendingPairOnRight(pending_pair_on_right_);
+        state_.setPairColorSlots(pair_color_slots_);
         state_.setPickedPoints(picked_points_);
         state_.setSelectedPoint(selected_point_);
         markOverlayDirty();
     }
 
+    void PointPickOperator::addPairColorSlot() {
+        size_t slot = 0;
+        while (std::find(pair_color_slots_.begin(), pair_color_slots_.end(), slot) != pair_color_slots_.end())
+            ++slot;
+        pair_color_slots_.push_back(slot);
+    }
+
+    void PointPickOperator::removePairColorSlot(const size_t pair) {
+        if (pair < pair_color_slots_.size())
+            pair_color_slots_.erase(pair_color_slots_.begin() + pair);
+    }
+
     void PointPickOperator::rememberPointEdit() {
-        if (editablePairs())
-            edits_.push_back({picked_points_, selected_point_, pick_panel_, pendingPairOnRight(), state_.pairColorSlots()});
+        if (sequentialPoints())
+            edits_.push_back({picked_points_, selected_point_, pick_panel_, pendingPairOnRight(), pair_color_slots_});
     }
 
     void PointPickOperator::undoPointEdit() {
@@ -395,8 +397,8 @@ namespace lfs::vis::op {
         picked_points_ = std::move(edit.points);
         selected_point_ = edit.selected;
         pick_panel_ = edit.panel;
-        state_.setPendingPairOnRight(edit.pending_right);
-        state_.restorePairColorSlots(std::move(edit.pair_color_slots));
+        pending_pair_on_right_ = edit.pending_right;
+        pair_color_slots_ = std::move(edit.pair_color_slots);
         syncPickedPointsToServices();
     }
 
@@ -406,6 +408,8 @@ namespace lfs::vis::op {
         pending_pick_.reset();
         press_active_ = false;
         picked_points_.clear();
+        pending_pair_on_right_ = false;
+        pair_color_slots_.clear();
         selected_point_.reset();
         pick_panel_.reset();
         press_point_index_.reset();
@@ -424,9 +428,9 @@ namespace lfs::vis::op {
         }
         rememberPointEdit();
         const int last = static_cast<int>(picked_points_.size()) - 1;
-        state_.setPendingPairOnRight(false);
-        if (editablePairs() && last % 2 == 0)
-            state_.removePairColorSlot(last / 2);
+        pending_pair_on_right_ = false;
+        if (sequentialPoints() && last % 2 == 0)
+            removePairColorSlot(last / 2);
         if (selected_point_ && *selected_point_ >= last) {
             selected_point_.reset();
         }
@@ -454,10 +458,10 @@ namespace lfs::vis::op {
         }
         rememberPointEdit();
         const int first = sequentialPoints() ? idx - idx % 2 : idx;
-        if (editablePairs())
-            state_.removePairColorSlot(first / 2);
+        if (sequentialPoints())
+            removePairColorSlot(first / 2);
         if (static_cast<size_t>(first) + 1 == picked_points_.size())
-            state_.setPendingPairOnRight(false);
+            pending_pair_on_right_ = false;
         const auto last = std::min(picked_points_.size(), static_cast<size_t>(first) + (sequentialPoints() ? 2u : 1u));
         picked_points_.erase(picked_points_.begin() + first, picked_points_.begin() + last);
         selected_point_.reset();
@@ -509,17 +513,17 @@ namespace lfs::vis::op {
             if (picked_points_.size() >= max_points_)
                 return false;
             rememberPointEdit();
-            const bool completes_right_first = editablePairs() && pendingPairOnRight();
-            if (editablePairs() && picked_points_.size() % 2 == 0)
-                state_.addPairColorSlot();
+            const bool completes_right_first = sequentialPoints() && pendingPairOnRight();
+            if (sequentialPoints() && picked_points_.size() % 2 == 0)
+                addPairColorSlot();
             picked_points_.push_back(sample.world);
             selected_point_ = static_cast<int>(picked_points_.size()) - 1;
             if (completes_right_first) {
                 std::iter_swap(picked_points_.end() - 2, picked_points_.end() - 1);
                 --*selected_point_;
             }
-            if (editablePairs())
-                state_.setPendingPairOnRight(picked_points_.size() % 2 != 0 && sample.panel == SplitViewPanelId::Right);
+            if (sequentialPoints())
+                pending_pair_on_right_ = picked_points_.size() % 2 != 0 && sample.panel == SplitViewPanelId::Right;
         }
         if (!pick_panel_)
             pick_panel_ = sample.panel;
@@ -567,11 +571,7 @@ namespace lfs::vis::op {
         std::optional<int> best;
         float best_dist = std::numeric_limits<float>::max();
 
-        const bool use_comparison_panels =
-            sequentialPoints() && splitViewUsesPLYComparison(render_settings.split_view_mode);
-        const float render_scale_x = static_cast<float>(panel_info->render_width) / panel_info->width;
-        const int render_x = static_cast<int>((click_screen.x - panel_info->x) * render_scale_x);
-        const auto panel = pointPickPanel(*panel_info, render_settings, render_x, use_comparison_panels);
+        const auto panel = panel_info->panel;
         for (size_t i = 0; i < picked_points_.size(); ++i) {
             if (sequentialPoints() &&
                 !acceptsPointSample({.panel = panel}, static_cast<int>(i)))
@@ -643,21 +643,10 @@ namespace lfs::vis::op {
         const int depth_y = static_cast<int>(render_y);
 
         // Hover, placement and marker dragging all follow the displayed surface.
-        const bool use_comparison_panels =
-            sequentialPoints() && splitViewUsesPLYComparison(render_settings.split_view_mode);
-        const auto panel = pointPickPanel(*panel_info, render_settings, depth_x, use_comparison_panels);
+        const auto panel = panel_info->panel;
         if (!acceptsPointSample({.panel = panel}, pick.point_index))
             return {.panel = panel};
-        const float depth = use_comparison_panels
-                                ? rm->renderExpectedDepthAtPixel({.scene_manager = gm->getViewer()->getSceneManager(),
-                                                                  .viewport = &projection_viewport,
-                                                                  .render_size = projection_viewport.windowSize,
-                                                                  .pixel = {depth_x, depth_y},
-                                                                  .focal_length_mm = render_settings.focal_length_mm,
-                                                                  .orthographic = render_settings.orthographic,
-                                                                  .ortho_scale = pointPickPanelOrthoScale(projection_viewport, render_settings),
-                                                                  .panel = panel})
-                                : rm->getSurfaceDepthAtPixel(depth_x, depth_y, {panel_info->render_width, panel_info->render_height}, panel);
+        const float depth = rm->getSurfaceDepthAtPixel(depth_x, depth_y, {panel_info->render_width, panel_info->render_height}, panel);
         if (depth == PointCloudVulkanRenderer::kDepthSamplePending)
             return {.panel = panel, .pending = true};
         if (!std::isfinite(depth) || depth <= 0.0f || depth >= 1e9f) {

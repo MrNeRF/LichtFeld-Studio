@@ -2170,13 +2170,10 @@ def test_empty_viewport_rejects_independent_split_activation_and_hides_orphan_ui
         divider_start,
     )
     divider_block = gui_manager[divider_start:divider_end]
-
     assert "rendering && rendering->isSplitViewActive()" in divider_block
-    assert "const bool comparison_divider = !rendering->isIndependentSplitViewActive();" in divider_block
-    assert "if (comparison_divider || model_alignment)" in divider_block
-    assert "split_divider_state.visible = true;" in divider_block
     assert "rendering->getSplitDividerScreenX" in divider_block
     assert "rendering->getContentBounds" in divider_block
+
 
 
 def test_right_panel_tabs_keep_stable_boundaries_without_transparent_shell():
@@ -2861,10 +2858,7 @@ def test_align_toolbar_buttons_follow_native_state(toolbar_module):
     assert buttons[4]["selected"] is True
 
     lf_stub.ui.get_split_view_mode = lambda: "ply_comparison"
-    buttons = controller._build_align_action_records("builtin.align")
-    assert [button["action"] for button in buttons] == [
-        "align_toggle_preview", "align_apply", "align_clear"
-    ]
+    assert controller._build_align_action_records("builtin.align") == buttons
 
 
 @pytest.mark.parametrize("mode,error,handled", [("walk", "No Walk support below the camera", True),

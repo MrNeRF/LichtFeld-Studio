@@ -865,9 +865,6 @@ class _GizmoToolbarController:
                                label=label, selected=selected, enabled=enabled)
                 for action, key, fallback, icon, label, selected, enabled in controls
             ]
-        if split_mode == "ply_comparison":
-            return records
-
         return records + [
             _button_record(
                 "align-snap",

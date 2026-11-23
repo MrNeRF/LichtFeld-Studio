@@ -3179,15 +3179,11 @@ namespace lfs::vis::gui {
             items.push_back(makeAction(tr("export.export") + "...",
                                        prefixedAction(std::format("export_splat:{}", node_id)), !items.empty()));
         }
-        if (selected_ids_.size() == 2 && selected_ids_.contains(node_id) &&
-            std::ranges::all_of(selected_ids_, [&](const auto id) {
-                const auto* candidate = scene->getNodeById(id);
-                return candidate && candidate->type == core::NodeType::SPLAT &&
-                       candidate->model && candidate->model->size() > 0 &&
-                       scene->isNodeEffectivelyVisible(id) &&
-                       (id == node_id || !scene->isNodeEffectivelyLocked(id));
-            })) {
-            items.push_back(makeAction(tr("align.models"), prefixedAction("align_models")));
+        if (selected_ids_.size() == 2 && selected_ids_.contains(node_id)) {
+            const auto other = std::ranges::find_if(selected_ids_, [node_id](const auto id) { return id != node_id; });
+            const auto* mobile = scene->getNodeById(*other);
+            if (mobile && RenderingManager::canBeginModelAlignment(*scene, *node, *mobile))
+                items.push_back(makeAction(tr("align.models"), prefixedAction("align_models")));
         }
         const bool selected_cameras_in_group = selectionContainsOnlyCamerasInGroup(node_id);
         if (selected_ids_.size() > 1 && !selected_cameras_in_group) {
@@ -3491,7 +3487,7 @@ namespace lfs::vis::gui {
             });
             const auto* reference = scene->getNodeById(context_menu_node_id_);
             const auto* mobile = scene->getNodeById(*other);
-            if (!reference || !mobile)
+            if (!reference || !mobile || !RenderingManager::canBeginModelAlignment(*scene, *reference, *mobile))
                 return;
             auto& viewer = *gui->getViewer();
             op::operators().cancelModalOperator();

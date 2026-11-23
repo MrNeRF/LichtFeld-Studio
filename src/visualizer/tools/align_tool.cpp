@@ -44,8 +44,6 @@ namespace lfs::vis::tools {
             return;
         }
         auto settings = rm->getSettings();
-        if (splitViewUsesPLYComparison(settings.split_view_mode))
-            return;
         saved_show_grid_ = settings.show_grid;
         user_changed_grid_ = false;
         if (!settings.show_grid) {
@@ -273,7 +271,6 @@ namespace lfs::vis::tools {
 
         const auto& picked_points = services().alignPointPick().getPickedPoints();
         const auto selected_point = services().alignPointPick().getSelectedPoint();
-        const auto settings = rendering_manager ? rendering_manager->getSettings() : RenderSettings{};
         auto* const sm = tool_context_->getSceneManager();
         if (alignment) {
             const auto& point_state = services().alignPointPick();
@@ -285,7 +282,7 @@ namespace lfs::vis::tools {
                     const lfs::rendering::ScreenOverlayRenderer::ScopedClipRect pane_clip(
                         *overlay, {info.x, info.y}, {info.x + info.width, info.y + info.height});
                     drawPointMarkers(*overlay, projection, picked_points, selected_point,
-                                     SPHERE_COLOR, label_size, std::nullopt, panel, pending_right,
+                                     SPHERE_COLOR, label_size, panel, pending_right,
                                      point_state.pairColorSlots());
                 }
                 const auto count = picked_points.size();
@@ -306,41 +303,6 @@ namespace lfs::vis::tools {
                                  LOCF("align.pair_progress", picked_points.size() / 2),
                                  &services().getAlignPreviewFeedback().summary);
             }
-            return;
-        }
-        if (splitViewUsesPLYComparison(settings.split_view_mode)) {
-            if (!sm || !op::canAlignComparisonPair(sm->getScene(), settings.split_view_offset)) {
-                drawPointPickHud(*overlay, panel_proj, LOC("align.pair_unavailable"), "",
-                                 services().alignPointPick().getStatusMessage(), "");
-                return;
-            }
-            const auto count = picked_points.size();
-            const float divider_x = panel_proj.info.x +
-                                    splitViewDividerPixel(static_cast<int>(panel_proj.info.width), settings.split_position);
-            const bool preview = services().getAlignPreviewEnabled();
-            const auto& feedback = services().getAlignPreviewFeedback();
-            const auto focus = preview ? feedback.focus : selected_point;
-            drawPointMarkers(*overlay, panel_proj, picked_points, focus, SPHERE_COLOR, label_size, divider_x);
-            const auto hint = preview
-                                  ? LOC("align.pair_preview")
-                              : op::hasEnoughAlignmentPairs(count)
-                                  ? LOC("align.pair_apply")
-                              : count % 2 == 0
-                                  ? LOC("align.pair_reference")
-                                  : LOC("align.pair_mobile");
-            const auto remove_key = pointPickShortcut(input::Action::REMOVE_LAST_POINT);
-            auto help = !preview && count && !remove_key.empty()
-                            ? LOCF("align.pair_remove", remove_key)
-                            : std::string{};
-            const auto delete_key = pointPickShortcut(input::Action::DELETE_SELECTED);
-            if (!preview && selected_point && !delete_key.empty() &&
-                static_cast<size_t>(*selected_point) / 2 < count / 2) {
-                if (!help.empty())
-                    help += ' ';
-                help += LOCF("align.pair_delete", delete_key);
-            }
-            drawPointPickHud(*overlay, panel_proj, hint, LOCF("align.pair_progress", count / 2),
-                             preview ? &feedback.summary : services().alignPointPick().getStatusMessage(), help);
             return;
         }
         const bool in_review = picked_points.size() == 3;
@@ -367,11 +329,6 @@ namespace lfs::vis::tools {
         std::string option_help;
         if (in_review) {
             option_help = LOC(services().getAlignEdgeToAxisEnabled() ? "align.edge_on_help" : "align.edge_off_help");
-        } else if (picked_points.empty() && sm && op::operators().activeModalId().empty() &&
-                   op::canAlignComparisonPair(sm->getScene(), settings.split_view_offset)) {
-            const auto compare_key = pointPickShortcut(input::Action::TOGGLE_SPLIT_VIEW);
-            option_help = LOCF("align.pair_entry",
-                               compare_key.empty() ? std::string(LOC("menu.view.compare_models")) : compare_key);
         }
         drawPointPickHud(*overlay, panel_proj, hint,
                          LOCF(lichtfeld::Strings::Align::POINTS_COUNT, lfs::core::format_count(picked_points.size())),

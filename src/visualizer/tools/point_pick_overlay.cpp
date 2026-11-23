@@ -196,7 +196,6 @@ namespace lfs::vis::tools {
     void drawPointMarkers(lfs::rendering::ScreenOverlayRenderer& overlay, const PanelProjection& panel_proj,
                           const std::vector<glm::vec3>& picked_points, std::optional<int> selected_point,
                           const lfs::rendering::OverlayColor& color, float label_size,
-                          std::optional<float> pair_divider_x,
                           std::optional<SplitViewPanelId> pair_panel, bool pending_pair_on_right,
                           std::span<const size_t> pair_color_slots) {
         using lfs::rendering::OverlayColor;
@@ -213,14 +212,12 @@ namespace lfs::vis::tools {
             OverlayColor{0.96f, 0.57f, 0.94f, 1.0f}, // magenta
         };
         const auto& t = theme();
-        const bool paired = pair_divider_x || pair_panel;
+        const bool paired = pair_panel.has_value();
         for (size_t i = 0; i < picked_points.size(); ++i) {
             const bool pending_right = pending_pair_on_right && i + 1 == picked_points.size();
             if (pair_panel && splitViewPanelIndex(*pair_panel) != (pending_right ? 1u : i % 2))
                 continue;
             const glm::vec2 screen_pos = projectToScreen(panel_proj, picked_points[i]);
-            if (pair_divider_x && (screen_pos.x >= *pair_divider_x) != (i % 2 != 0))
-                continue;
             const float screen_radius = markerScreenRadius(picked_points[i], panel_proj);
 
             const bool is_selected = selected_point &&

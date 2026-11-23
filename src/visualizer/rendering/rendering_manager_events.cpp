@@ -197,11 +197,11 @@ namespace lfs::vis {
             invalidateCameraMetricsRequests(true);
     }
 
-    bool RenderingManager::beginModelAlignment(
-        Viewport& primary, const core::Scene& scene,
-        const core::SceneNode& reference, const core::SceneNode& mobile) {
-        if (model_alignment_view_ || reference.type != core::NodeType::SPLAT ||
+    bool RenderingManager::canBeginModelAlignment(
+        const core::Scene& scene, const core::SceneNode& reference, const core::SceneNode& mobile) {
+        if (reference.type != core::NodeType::SPLAT ||
             mobile.type != core::NodeType::SPLAT || !reference.model || !mobile.model ||
+            reference.model->size() == 0 || mobile.model->size() == 0 ||
             !scene.isNodeEffectivelyVisible(reference.id) || !scene.isNodeEffectivelyVisible(mobile.id) ||
             scene.isNodeEffectivelyLocked(mobile.id))
             return false;
@@ -210,6 +210,14 @@ namespace lfs::vis {
                 return false;
         }
 
+        return true;
+    }
+
+    bool RenderingManager::beginModelAlignment(
+        Viewport& primary, const core::Scene& scene,
+        const core::SceneNode& reference, const core::SceneNode& mobile) {
+        if (model_alignment_view_ || !canBeginModelAlignment(scene, reference, mobile))
+            return false;
         const auto settings = getSettings();
         const auto focus = getFocusedSplitPanel();
         const auto secondary = projectSecondaryViewport();
@@ -219,6 +227,7 @@ namespace lfs::vis {
             .previous_position = settings.split_position,
             .previous_offset = settings.split_view_offset,
             .previous_focus = focus,
+            .primary_viewport = &primary,
             .previous_primary = primary,
             .previous_secondary = secondary,
         });
@@ -287,13 +296,7 @@ namespace lfs::vis {
         const auto& nodes = model_alignment_view_->nodes;
         const auto* reference = scene.getNodeByUuid(nodes[0]);
         const auto* mobile = scene.getNodeByUuid(nodes[1]);
-        if (!reference || !mobile || scene.isNodeEffectivelyLocked(reference->id))
-            return false;
-        for (auto* parent = mobile; parent; parent = scene.getNodeById(parent->parent_id)) {
-            if (parent->id == reference->id)
-                return false;
-        }
-        return true;
+        return reference && mobile && canBeginModelAlignment(scene, *mobile, *reference);
     }
 
     void RenderingManager::swapModelAlignmentRoles(Viewport& primary, const core::Scene& scene) {

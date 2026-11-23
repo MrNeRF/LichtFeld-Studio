@@ -29,7 +29,6 @@ namespace lfs::vis::op {
         struct PointSample;
         virtual bool acceptsPointSample(const PointSample&, std::optional<int>) const { return true; }
         virtual bool sequentialPoints() const { return false; }
-        virtual bool editablePairs() const { return false; }
         virtual void showPointMenu(glm::dvec2, int) {}
         virtual bool applyPickedPoints(OperatorContext& ctx, float value) = 0;
         virtual void handleToolUiAction(OperatorContext&, PointPickState::UiAction) {}
@@ -66,7 +65,7 @@ namespace lfs::vis::op {
         void removeSelectedPoint();
         void clearAllPoints(bool preserve_history = false);
         void undoPointEdit();
-        [[nodiscard]] bool pendingPairOnRight() const { return state_.pendingPairOnRight(); }
+        [[nodiscard]] bool pendingPairOnRight() const { return pending_pair_on_right_; }
         [[nodiscard]] bool tryPlacePoint(double x, double y);
         void setStatus(const char* locale_key, double duration_seconds = 1.5) const;
 
@@ -83,6 +82,10 @@ namespace lfs::vis::op {
         void rememberPointEdit();
         std::vector<PointEdit> edits_;
         bool drag_edit_recorded_ = false;
+        bool pending_pair_on_right_ = false;
+        std::vector<size_t> pair_color_slots_;
+        void addPairColorSlot();
+        void removePairColorSlot(size_t pair);
         PointPickState& state_;
 
         const char* no_surface_key_;

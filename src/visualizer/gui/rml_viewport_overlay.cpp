@@ -1018,7 +1018,7 @@ namespace lfs::vis::gui {
             overlay->SetProperty("top", std::format("{:.1f}px", split_divider_overlay_.y + split_divider_toolbar_clearance_));
             overlay->SetProperty("width", std::format("{:.1f}px", std::max(split_divider_overlay_.width, 0.0f)));
             overlay->SetProperty("height", std::format("{:.1f}px",
-                std::max(split_divider_overlay_.height - split_divider_toolbar_clearance_, 0.0f)));
+                                                       std::max(split_divider_overlay_.height - split_divider_toolbar_clearance_, 0.0f)));
             markRenderNeeded(RenderReason::SplitDivider);
         }
         const auto apply_name = [&](const char* id, const std::string& name, float right) {

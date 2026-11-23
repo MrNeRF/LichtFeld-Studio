@@ -57,7 +57,6 @@ namespace lfs::vis::tools {
     void drawPointMarkers(lfs::rendering::ScreenOverlayRenderer& overlay, const PanelProjection& panel_proj,
                           const std::vector<glm::vec3>& picked_points, std::optional<int> selected_point,
                           const lfs::rendering::OverlayColor& color, float label_size,
-                          std::optional<float> pair_divider_x = std::nullopt,
                           std::optional<SplitViewPanelId> pair_panel = std::nullopt,
                           bool pending_pair_on_right = false,
                           std::span<const size_t> pair_color_slots = {});

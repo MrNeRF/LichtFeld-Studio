@@ -178,7 +178,7 @@ namespace lfs::vis {
                   modal_id == op::to_string(op::BuiltinOp::ScaleDistancePickPoint)) &&
                  isAlignModalAction(action)) ||
                 (modal_id == op::to_string(op::BuiltinOp::AlignPickPoint) &&
-                 action == input::Action::UNDO);
+                 (action == input::Action::UNDO || action == input::Action::REDO));
             if (!accepted) {
                 return false;
             }
@@ -2211,6 +2211,7 @@ namespace lfs::vis {
 
         if (const auto* renderer = services().renderingOrNull(); renderer && renderer->modelAlignmentView()) {
             switch (bound_action) {
+            case input::Action::DELETE_NODE:
             case input::Action::PIE_MENU:
             case input::Action::APPLY_CROP_BOX:
             case input::Action::TOGGLE_SELECTION_CROP_FILTER:

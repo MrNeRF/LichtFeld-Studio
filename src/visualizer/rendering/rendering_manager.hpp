@@ -427,6 +427,8 @@ namespace lfs::vis {
             float previous_position;
             size_t previous_offset;
             SplitViewPanelId previous_focus;
+            // The viewer owns this viewport for the lifetime of the transient session.
+            Viewport* primary_viewport;
             Viewport previous_primary;
             Viewport previous_secondary;
             std::optional<glm::mat4> preview;
@@ -435,6 +437,8 @@ namespace lfs::vis {
             bool linked = false;
         };
 
+        [[nodiscard]] static bool canBeginModelAlignment(const core::Scene& scene,
+                                                         const core::SceneNode& reference, const core::SceneNode& mobile);
         bool beginModelAlignment(Viewport& primary, const core::Scene& scene,
                                  const core::SceneNode& reference, const core::SceneNode& mobile);
         void endModelAlignment(Viewport& primary);

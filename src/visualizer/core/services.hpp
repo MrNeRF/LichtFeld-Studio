@@ -57,9 +57,7 @@ namespace lfs::vis {
         [[nodiscard]] bool pendingPairOnRight() const { return pending_pair_on_right_; }
         void setPendingPairOnRight(bool right) { pending_pair_on_right_ = right; }
         [[nodiscard]] const std::vector<size_t>& pairColorSlots() const { return pair_color_slots_; }
-        void restorePairColorSlots(std::vector<size_t> slots) { pair_color_slots_ = std::move(slots); }
-        void addPairColorSlot();
-        void removePairColorSlot(size_t pair);
+        void setPairColorSlots(std::vector<size_t> slots) { pair_color_slots_ = std::move(slots); }
         void clearPickedPoints() {
             pair_color_slots_.clear();
             pending_pair_on_right_ = false;
