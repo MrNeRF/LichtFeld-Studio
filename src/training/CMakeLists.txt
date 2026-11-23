@@ -28,6 +28,8 @@ set(LFS_TRAINING_KERNEL_SOURCES
     kernels/pruning_kernels.cu
     kernels/mcmc_kernels.cu
     kernels/mrnf_kernels.cu
+    kernels/mrnf_growth_kernels.cu
+    kernels/mrnf_retire_kernels.cu
     kernels/densification_kernels.cu
     kernels/morton_reorder_kernels.cu
     kernels/grad_alpha.cu
@@ -100,6 +102,8 @@ set(TRAINING_NEW_SOURCES
     strategies/postprocess_compaction.cpp
     strategies/mcmc.cpp
     strategies/mrnf.cpp
+    strategies/mrnf_growth.cpp
+    strategies/mrnf_retire.cpp
     strategies/blob_seeding.cpp
     strategies/strategy_factory.cpp
     strategies/improved_gs_plus.cpp

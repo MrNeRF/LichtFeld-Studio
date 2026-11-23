@@ -62,6 +62,8 @@ namespace lfs::training {
         };
         fused_adam.enabled = optimizer_fused.enabled;
         fused_adam.rendered_count = fused_extra_gradients.rendered_count;
+        fused_adam.blend_peak = fused_extra_gradients.blend_peak;
+        fused_adam.reg_rendered_only = fused_extra_gradients.reg_rendered_only;
         fused_adam.beta1 = optimizer_fused.beta1;
         fused_adam.beta2 = optimizer_fused.beta2;
         fused_adam.eps = optimizer_fused.eps;
@@ -956,8 +958,6 @@ namespace lfs::training {
             shN.bits,
             fused_extra_gradients.edge_weight_map,
             fused_extra_gradients.edge_score_out,
-            fused_extra_gradients.impact_sum_out,
-            fused_extra_gradients.impact_peak_out,
             variance);
 
         ctx.mark_forward_context_released();

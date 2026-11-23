@@ -292,6 +292,68 @@ TEST_F(LossWorkspaceUnionTest, PhotometricLossExposesSharedArena) {
     expect_exact_active_allocation(arena, LossWorkspaceArena::pure_ssim_layout_bytes(shape));
 }
 
+// With a step allocator bound, the partials come from it each step and the arena keeps only the
+// outputs; loss and gradients stay bit-identical to the owned layout, and steps allocate nothing.
+TEST_F(LossWorkspaceUnionTest, StepScratchPartialsMatchOwnedLayout) {
+    const std::vector<size_t> shape = {1, 3, 48, 64};
+    const float ssim_weight = 0.22f;
+    auto corrected = Tensor::randn({1, 3, 48, 64}, Device::CUDA);
+    auto raw = Tensor::randn({1, 3, 48, 64}, Device::CUDA);
+    auto gt = Tensor::randn({1, 3, 48, 64}, Device::CUDA);
+    auto mask = Tensor::ones({48, 64}, Device::CUDA);
+
+    const auto run = [&](LossWorkspaceArena& arena) {
+        auto& ws = arena.masked_decoupled();
+        auto [loss, ctx] = masked_decoupled_fused_l1_ssim_forward(corrected, raw, gt, mask, ssim_weight, ws);
+        const auto grads = masked_decoupled_fused_l1_ssim_backward(ctx, ws);
+        return std::pair{loss.cpu(), combined_gradient(grads, ctx).cpu()};
+    };
+
+    LossWorkspaceArena owned;
+    const auto [owned_loss, owned_grad] = run(owned);
+
+    auto scratch = Tensor::empty({size_t{1} << 20}, Device::CUDA, DataType::UInt8);
+    char* const scratch_base = static_cast<char*>(scratch.data_ptr());
+    size_t scratch_used = 0;
+    const auto bump = [&](const size_t bytes) -> char* {
+        char* const memory = scratch_base + scratch_used;
+        scratch_used += align_arena_bytes(bytes);
+        return scratch_used <= scratch.numel() ? memory : nullptr;
+    };
+
+    LossWorkspaceArena stepped;
+    const auto run_step = [&] {
+        scratch_used = 0;
+        stepped.bind_step_scratch(bump);
+        const auto result = run(stepped);
+        const auto* partial = static_cast<const char*>(stepped.masked_decoupled().raw_dm_dmu1.data_ptr());
+        EXPECT_TRUE(partial >= scratch_base && partial < scratch_base + scratch_used);
+        stepped.release_step_scratch();
+        EXPECT_FALSE(stepped.masked_decoupled().raw_dm_dmu1.is_valid());
+        return result;
+    };
+
+    const auto [step_loss, step_grad] = run_step();
+    expect_exact_active_allocation(stepped, LossWorkspaceArena::masked_decoupled_layout_bytes(shape, true));
+    EXPECT_EQ(scratch_used, 4 * align_arena_bytes(3 * 48 * 64 * sizeof(std::uint16_t)));
+    EXPECT_EQ(step_loss.item<float>(), owned_loss.item<float>());
+    ASSERT_EQ(step_grad.numel(), owned_grad.numel());
+    for (size_t i = 0; i < step_grad.numel(); ++i)
+        ASSERT_EQ(step_grad.ptr<float>()[i], owned_grad.ptr<float>()[i]) << "at " << i;
+
+    const auto alloc_snapshot = lfs::core::alloc_counter::snapshot();
+    const auto [again_loss, again_grad] = run_step();
+    EXPECT_EQ(lfs::core::alloc_counter::delta_since(alloc_snapshot), 0u)
+        << "a bound step must not commit device memory for its partials";
+    EXPECT_EQ(again_loss.item<float>(), owned_loss.item<float>());
+
+    stepped.shrink_to_required();
+    expect_exact_active_allocation(stepped, LossWorkspaceArena::masked_decoupled_layout_bytes(shape, true));
+    const auto [unbound_loss, unbound_grad] = run(stepped);
+    expect_exact_active_allocation(stepped, LossWorkspaceArena::masked_decoupled_layout_bytes(shape));
+    EXPECT_EQ(unbound_loss.item<float>(), owned_loss.item<float>());
+}
+
 // The appearance branch omits sigma partials while preserving gradient results.
 TEST_F(LossWorkspaceUnionTest, ZeroTermsDeletedAndDecoupledGradsStable) {
     const int N = 1, C = 3, H = 48, W = 48;

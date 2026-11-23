@@ -298,7 +298,7 @@ namespace {
         TemporaryDirectory temporary;
         const auto path = temporary.path / "file-size-limit.licht";
         const int status = run_child_process([&] {
-            struct rlimit limit {};
+            struct rlimit limit{};
             if (::getrlimit(RLIMIT_FSIZE, &limit) != 0 ||
                 std::signal(SIGXFSZ, SIG_IGN) == SIG_ERR) {
                 ::_exit(1);

@@ -41,13 +41,10 @@ namespace lfs::training::mrnf_strategy {
     void launch_apply_edge_guidance(float* weights, EdgeGuidance edge_guidance, size_t N,
                                     void* stream = nullptr);
 
-    // The `count` rows the growth exchange gives up first. A row's rank is the
-    // later of its positions in ascending `primary` and `secondary` importance
-    // (NaN last, ties by row; `secondary` may be null); rows come out by rank,
-    // ties by row, and ineligible rows rank after all eligible ones.
-    void launch_rank_exchange_rows(
-        const float* primary,
-        const float* secondary,
+    // The `count` eligible rows with the lowest value (exchange victims and retirees): ascending value,
+    // NaN last, ties by row; ineligible rows come after every eligible one.
+    void launch_lowest_eligible_rows(
+        const float* values,
         const bool* eligible,
         size_t N,
         size_t count,
@@ -106,6 +103,8 @@ namespace lfs::training::mrnf_strategy {
      * @param train_t — current training progress [0, 1]
      * @param N — number of splats
      * @param stream — CUDA stream
+     * @param reach [N] — optional per-row factor; a row with r < 1 takes opacity_decay x r and scale_decay x r
+     *        (r <= 0 leaves it as it is), r >= 1 decays as without it
      */
     void launch_mrnf_decay(
         float* raw_opacities,
@@ -117,7 +116,8 @@ namespace lfs::training::mrnf_strategy {
         float train_t,
         size_t N,
         void* stream = nullptr,
-        const float* rendered_count = nullptr);
+        const float* rendered_count = nullptr,
+        const float* reach = nullptr);
 
     /**
      * Compute percentile-based bounding box on GPU.
@@ -182,15 +182,6 @@ namespace lfs::training::mrnf_strategy {
         size_t K,
         void* stream = nullptr);
 
-    // Row 0 is MRNF's persistent visibility count and must not be cleared.
-    // Fold row 1 into the persistent error maximum and clear only the row-1
-    // per-iteration scratch.
-    void launch_fold_densification_error_and_zero(
-        float* refine_weight_max,
-        float* densification_info,
-        size_t N,
-        void* stream = nullptr);
-
     void launch_far_field_mask(
         const float* means,
         float centroid_x,
@@ -210,4 +201,64 @@ namespace lfs::training::mrnf_strategy {
         size_t K,
         void* stream = nullptr);
 
+    // Growth at the cap (mrnf_growth_kernels.cu).
+    // Folds one view of a [4, N] densification_info into the window. Rows 0 and 1 hold this view's
+    // coverage and error, row 2 the window coverage and row 3 the count of views with error. Adds
+    // s^0.2 of this view's error s to refine_weight, moves the coverage to row 2 and clears rows 0
+    // and 1. With coverage_views ([N]), also counts the views with coverage > 0.
+    void launch_fold_densification_error_view_sum_and_zero(
+        float* refine_weight,
+        float* densification_info,
+        size_t N,
+        float* coverage_views = nullptr,
+        void* stream = nullptr);
+
+    // refine_weight = refine_weight / max(view count, 1), with the count in row 3.
+    void launch_refine_error_view_mean(
+        float* refine_weight,
+        const float* densification_info,
+        size_t N,
+        void* stream = nullptr);
+
+    // Need-guided growth: turns the refine window's error into NEED in place,
+    //   need = min(error / error_scale, error_max)^power; non-positive and NaN errors give 0.
+    void launch_fold_need(
+        float* error_inout,
+        float error_scale,
+        float error_max,
+        float power,
+        size_t N,
+        void* stream = nullptr);
+
+    // Retire quota and keep covered (mrnf_retire_kernels.cu).
+    // Peak blend weight, one launch per training step after the backward: renders += 1 where step_peak > 0,
+    // peak = max(peak x peak_decay, step_peak), and step_peak is cleared for the next step.
+    void launch_blend_peak_update(
+        float* step_peak,
+        float* peak,
+        float* renders,
+        float peak_decay,
+        size_t N,
+        void* stream = nullptr);
+
+    // Keep covered. A row's reach: for a row rendered at least grace times, clamp(peak / max(sigmoid(raw
+    // opacity), 1e-6), 0, 1), the share of its opacity that reached a photo in its best recent view; 1 for the
+    // others. factor: the reach for a kept row (reach < keep_reach and largest log-scale >= log_size_floor), 1 for
+    // every other row.
+    void launch_mrnf_covered_factor(
+        const float* peak,
+        const float* renders,
+        const float* raw_opacities,
+        const float* log_scales,
+        float grace,
+        float keep_reach,
+        float log_size_floor,
+        size_t N,
+        float* factor,
+        void* stream = nullptr);
+
+    // Retire rank key, ascending: peak - 1 for a dead row (peak < dead_peak), so dead rows come first, by peak;
+    // the reach of every other row, as in launch_mrnf_covered_factor.
+    void launch_mrnf_retire_key(const float* peak, const float* raw_opacities, float dead_peak, size_t N, float* key,
+                                void* stream = nullptr);
 } // namespace lfs::training::mrnf_strategy

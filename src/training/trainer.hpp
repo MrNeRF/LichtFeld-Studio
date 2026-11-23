@@ -48,6 +48,7 @@
 #include <thread>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace lfs::core {
     class Scene;
@@ -580,6 +581,7 @@ namespace lfs::training {
         friend struct TrainerThinStructureTestAccess;
         friend struct TrainerGradientResidualTestAccess;
         friend struct TrainerMaskSupervisionTestAccess;
+        friend struct TrainerBlurTolerantSsimTestAccess;
 
         // Release GPU state that is only needed while a train step is active.
         // The model, optimizer, and source background image remain resident so
@@ -637,6 +639,11 @@ namespace lfs::training {
             std::optional<lfs::training::kernels::DecoupledRawGradient> raw_gradient;
             std::optional<RawGradientResidual> raw_residual;
         };
+
+        // MRNF trains with blur-tolerant SSIM (kernels::blur_tolerant_loss) at the blur sigma of the photo's size;
+        // sets blur_sigma_ for this step, 0 = plain SSIM, and logs each photo size's sigma once.
+        void select_blur_tolerant_ssim(const lfs::core::param::OptimizationParameters& params,
+                                       const lfs::core::Tensor& gt_image, bool in_popspa);
 
         // Compute photometric loss AND gradient manually (no autograd)
         // Returns GPU tensors for loss and gradients (avoid sync!)
@@ -1008,6 +1015,12 @@ namespace lfs::training {
 
         // Persistent photometric loss (workspace reuse across iterations)
         lfs::training::losses::PhotometricLoss photometric_loss_;
+        // Bound between a FastGS forward and its backward: scratch the loss reads only before the
+        // backward, taken from the frame's phase slice. Empty otherwise.
+        std::function<char*(size_t)> loss_step_scratch_;
+        // This step's blur-tolerant SSIM sigma (select_blur_tolerant_ssim), 0 = plain SSIM.
+        float blur_sigma_ = 0.0f;
+        std::vector<std::pair<int, int>> blur_sigma_logged_sizes_; // width, height
 
         // Cached GPU scalar to avoid per-iteration allocation
         core::Tensor loss_accumulator_;

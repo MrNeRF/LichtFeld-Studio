@@ -57,16 +57,10 @@ namespace fast_lfs::rasterization {
         // The stream all of this context's kernels/allocations are ordered on;
         // releases (sorted indices, arena frame, helper buffers) must use it.
         cudaStream_t stream = nullptr;
-        // Add helper buffer pointers to avoid re-allocation in backward
-        void* grad_mean2d_helper = nullptr;
-        void* grad_conic_helper = nullptr;
-        void* grad_depth_helper = nullptr;
-        void* grad_opacity_helper = nullptr;
-        void* grad_color_helper = nullptr;
         void* primitive_normals = nullptr;
         const uint* primitive_work_indices = nullptr;
-        // Backward-phase allocator retained by the frame context for the
-        // optional normal helper, which is only known at backward dispatch.
+        // Backward-phase allocator for the gradient helpers, which backward_raw
+        // takes from the room the forward reserved for them.
         std::function<char*(size_t)> phase_allocator;
         std::shared_ptr<FastGSPhaseArena> phase_arena;
         // Error handling for OOM / pathological frames
@@ -113,6 +107,13 @@ namespace fast_lfs::rasterization {
         float dilation_scale = 1.0f);
 
     void release_forward_context(const ForwardContext& forward_ctx);
+
+    // Scratch for the work between forward and backward on the context's stream,
+    // carved from the frame's phase slice above the retained forward outputs. The
+    // allocator returns null when the slice cannot grow and lives as long as the
+    // context. Its memory is reused by backward_raw, so nothing allocated from it
+    // may be read after that begins.
+    std::function<char*(size_t)> begin_loss_phase(const ForwardContext& forward_ctx);
 
     // Read-only device buffers for correctness captures. Their lifetime is the
     // context lifetime; callers synchronize its stream before reading them.
@@ -170,8 +171,6 @@ namespace fast_lfs::rasterization {
         unsigned shN_value_bits = 0u,
         const float* edge_weight_map = nullptr,
         float* edge_score_out = nullptr,
-        float* impact_sum_out = nullptr,
-        float* impact_peak_out = nullptr,
         const ColorVarianceLoss& color_variance = {});
 
     // Pre-compile all CUDA kernels to avoid JIT delays during rendering
