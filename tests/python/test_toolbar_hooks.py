@@ -2814,6 +2814,7 @@ def test_model_alignment_replaces_active_tool_controls_and_refreshes_on_preview(
     preview = {record["button_id"]: record for record in records}
     assert preview["align-preview"]["tooltip_key"] == "align.edit_points"
     assert preview["align-apply"]["enabled"]
+    assert preview["align-apply"]["tooltip_key"] == "align.apply_preview"
     assert "align-clear" not in preview
     assert all(not record["label"] and record["icon_src"] for record in records)
     assert by_value["left"]["icon_src"] != by_value["right"]["icon_src"]

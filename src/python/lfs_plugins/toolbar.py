@@ -838,6 +838,8 @@ class _GizmoToolbarController:
                     selected=True, enabled=True, opacity="1", icon_src=_icon_src("scene/hidden"),
                 )
                 records = records[:2]
+                records[1].update(tooltip_key="align.apply_preview",
+                                  tooltip_text=_ui_label("align.apply_preview", "Apply alignment and exit."))
                 link_tooltip = "align.unlink_cameras" if linked else "align.link_cameras_help"
                 controls = (
                     ("separate", "align.separate", "Separate", "layout-columns", "",
