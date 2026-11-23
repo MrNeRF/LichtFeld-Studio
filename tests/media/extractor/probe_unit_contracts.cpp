@@ -740,6 +740,9 @@ namespace {
         broken.packets[0].bytes = nest("DEVC", device);
         const auto amplified = interpretGpmfMetadata(broken, 7000);
         require(!amplified && amplified.error().code() == ErrorCode::ResourceExhausted, "repeated descriptor copies consume the cumulative decoded budget");
+        const auto detail = amplified.error().detail();
+        require(detail.find("GPMF packet 0:") != std::string_view::npos && detail.find("record=GYRO") != std::string_view::npos,
+                "decoded budget error identifies the packet and record");
     }
     void timedPacketContracts() {
         using namespace lfs::media;

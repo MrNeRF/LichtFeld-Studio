@@ -283,10 +283,11 @@ namespace lfs::media {
                 ++packet_index;
             }
             return result;
-        } catch (Failure& error) {
-            return make_error({.code = error.code, .domain = ErrorDomain::IO, .detail = "GPMF packet " + std::to_string(packet_index) + ": " + error.detail, .detection = LFS_SOURCE_SITE_CURRENT()});
-        } catch (const std::bad_alloc&) {
-            return make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detection = LFS_SOURCE_SITE_CURRENT()});
-        }
+        } catch (const Failure& error) {
+            try {
+                return make_error({.code = error.code, .domain = ErrorDomain::IO, .detail = "GPMF packet " + std::to_string(packet_index) + ": " + error.detail, .detection = LFS_SOURCE_SITE_CURRENT()});
+            } catch (const std::bad_alloc&) {}
+        } catch (const std::bad_alloc&) {}
+        return make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detection = LFS_SOURCE_SITE_CURRENT()});
     }
 } // namespace lfs::media
