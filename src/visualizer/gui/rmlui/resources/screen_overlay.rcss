@@ -30,49 +30,40 @@ body {
 
 #active-outline {
     border-width: 1dp;
-    border-radius: 0;
 }
 
-#divider-highlight {
-    border-radius: 1dp;
-}
+
 
 #corner-hint {
     border-width: 0;
 }
 
 #corner-hint.top-left {
-    border-top-left-radius: 6dp;
     border-left-width: 2dp;
     border-top-width: 2dp;
 }
 
 #corner-hint.top-right {
-    border-top-right-radius: 6dp;
     border-right-width: 2dp;
     border-top-width: 2dp;
 }
 
 #corner-hint.bottom-left {
-    border-bottom-left-radius: 6dp;
     border-left-width: 2dp;
     border-bottom-width: 2dp;
 }
 
 #corner-hint.bottom-right {
-    border-bottom-right-radius: 6dp;
     border-right-width: 2dp;
     border-bottom-width: 2dp;
 }
 
 #split-new {
     border-width: 1dp;
-    border-radius: 6dp;
 }
 
 #join-target {
     border-width: 2dp;
-    border-radius: 6dp;
 }
 
 #join-arrow {
@@ -103,5 +94,4 @@ body {
 #swap-source,
 #swap-target {
     border-width: 2dp;
-    border-radius: 6dp;
 }

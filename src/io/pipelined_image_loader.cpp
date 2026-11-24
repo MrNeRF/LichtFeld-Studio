@@ -374,6 +374,10 @@ namespace lfs::io {
                 it->second.mask_expected = req.mask_path.has_value() || req.extract_alpha_as_mask;
                 it->second.depth_expected = req.depth_path.has_value();
                 it->second.normal_expected = req.normal_path.has_value();
+                it->second.prior_target_width = req.aux_target_width;
+                it->second.prior_target_height = req.aux_target_height;
+                it->second.depth_own_size = req.depth_own_size && !req.undistort;
+                it->second.normal_own_size = req.normal_own_size && !req.undistort;
                 accepted_sequences_.fetch_add(1, std::memory_order_relaxed);
                 in_flight_.fetch_add(1, std::memory_order_acq_rel);
             }
@@ -1320,6 +1324,10 @@ namespace lfs::io {
             .normal_ready = std::move(pair.normal_ready),
             .decoded_frame_leases = std::move(pair.decoded_frame_leases),
             .error = {},
+            .prior_target_width = pair.prior_target_width,
+            .prior_target_height = pair.prior_target_height,
+            .depth_own_size = pair.depth_own_size,
+            .normal_own_size = pair.normal_own_size,
         };
         const auto loader_generation = pair.loader_generation;
         const SidecarTally tally{
@@ -1380,9 +1388,10 @@ namespace lfs::io {
         key << lfs::core::path_to_utf8(item.path)
             << (kind == SidecarCacheFormat::Depth ? ":depth" : ":normal")
             << ":rf" << item.params.resize_factor
-            << ":mw" << item.params.max_width
-            << ":tw" << item.aux_target_width
-            << ":th" << item.aux_target_height;
+            << ":mw" << item.params.max_width;
+        // A prior resized to its target depends on that size; one at its own size does not.
+        if (!item.prior_own_size)
+            key << ":tw" << item.aux_target_width << ":th" << item.aux_target_height;
         if (item.undistort) {
             const auto& u = *item.undistort;
             key << ":ud4"
@@ -1521,20 +1530,17 @@ namespace lfs::io {
                 depth_result.undistort = request.undistort;
                 depth_result.aux_target_width = request.aux_target_width;
                 depth_result.aux_target_height = request.aux_target_height;
-                if (!cuda_run) {
-                    cold_queue_.push(std::move(depth_result));
-                    return;
-                }
+                depth_result.prior_own_size = request.depth_own_size && !request.undistort;
                 depth_result.cache_key = make_sidecar_key(depth_result, SidecarCacheFormat::Depth);
                 if (auto cached = load_cached_jpeg_blob(depth_result.cache_key)) {
                     depth_result.jpeg_data = std::move(cached);
                     depth_result.is_cache_hit = true;
-                    hot_queue_.push(std::move(depth_result));
+                    (cuda_run ? hot_queue_ : cold_queue_).push(std::move(depth_result));
                     std::lock_guard<std::mutex> lock(stats_mutex_);
                     ++stats_.hot_path_hits;
                     return;
                 }
-                if (!jpeg2k_cache_available_.load(std::memory_order_relaxed)) {
+                if (!cuda_run || !jpeg2k_cache_available_.load(std::memory_order_relaxed)) {
                     cold_queue_.push(std::move(depth_result));
                     return;
                 }
@@ -1567,20 +1573,17 @@ namespace lfs::io {
                 normal_result.undistort = request.undistort;
                 normal_result.aux_target_width = request.aux_target_width;
                 normal_result.aux_target_height = request.aux_target_height;
-                if (!cuda_run) {
-                    cold_queue_.push(std::move(normal_result));
-                    return;
-                }
+                normal_result.prior_own_size = request.normal_own_size && !request.undistort;
                 normal_result.cache_key = make_sidecar_key(normal_result, SidecarCacheFormat::Normal);
                 if (auto cached = load_cached_jpeg_blob(normal_result.cache_key)) {
                     normal_result.jpeg_data = std::move(cached);
                     normal_result.is_cache_hit = true;
-                    hot_queue_.push(std::move(normal_result));
+                    (cuda_run ? hot_queue_ : cold_queue_).push(std::move(normal_result));
                     std::lock_guard<std::mutex> lock(stats_mutex_);
                     ++stats_.hot_path_hits;
                     return;
                 }
-                if (!jpeg2k_cache_available_.load(std::memory_order_relaxed)) {
+                if (!cuda_run || !jpeg2k_cache_available_.load(std::memory_order_relaxed)) {
                     cold_queue_.push(std::move(normal_result));
                     return;
                 }

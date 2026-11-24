@@ -41,7 +41,7 @@ namespace lfs::training {
                                     : (chw ? kernels::launch_bilateral_grid_slice_backward_chw : kernels::launch_bilateral_grid_slice_backward);
             launch(grid.ptr<float>(), rgb.ptr<float>(), grad_output.ptr<float>(), grad_grid.ptr<float>(), grad_rgb.ptr<float>(),
                    static_cast<int>(shape[2]), static_cast<int>(shape[3]), static_cast<int>(shape[4]), h, w,
-                   shared_offset.ptr<float>(), nullptr, params.warp_aggregate);
+                   shared_offset.ptr<float>(), nullptr);
         }
         void tv_forward(In grids, Out loss, Out reduction_temp, int norm_n) {
             const auto& shape = grids.shape();

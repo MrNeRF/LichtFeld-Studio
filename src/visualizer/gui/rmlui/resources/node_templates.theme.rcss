@@ -1,3 +1,25 @@
+
+
+#window-frame.template-window {
+    border-radius: 10dp;
+}
+
+.template-window .preferences-nav-item {
+    border-radius: 5dp;
+}
+
+.template-window .asset-search-box {
+    border-radius: 5dp;
+}
+
+.template-window .asset-card {
+    border-radius: 7dp;
+}
+
+.template-chip {
+    border-radius: @{radius.control}dp;
+}
+
 #template-backdrop { background-color: @{modal.backdrop}; }
 #window-frame.template-window { background-color: @{surface}; color: @{text}; }
 .template-window #close-btn { color: @{text_dim}; background-color: transparent; }

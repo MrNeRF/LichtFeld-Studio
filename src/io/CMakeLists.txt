@@ -51,6 +51,8 @@ if(LFS_USE_VULKAN)
 else()
     target_sources(lfs_video PRIVATE hdr_libplacebo_unavailable.cpp)
 endif()
+target_sources(lfs_video PRIVATE sharpness_tensor.cpp)
+lfs_add_gpu_program(lfs_video sharpness_program SOURCE sharpness.slang COMPUTE countEdges)
 lfs_add_gpu_program(lfs_video hdr_tonemap_program SOURCE hdr_tonemap.slang COMPUTE chroma_vertical decode measure resample gamut render
     DEPENDS "${CMAKE_SOURCE_DIR}/src/core/tensor/programs/video_sampling.slangh" "${CMAKE_SOURCE_DIR}/src/core/include/core/video_color_math.h" "${CMAKE_SOURCE_DIR}/src/core/include/core/color_transfer.h")
 if(LFS_HAS_CUDA)
@@ -59,6 +61,7 @@ if(LFS_HAS_CUDA)
         video/color_convert.cu
         video/cuda_frame_handoff.hpp
         video/cuda_frame_handoff.cpp
+        cuda/sharpness_score.cpp
         media_cuda_backend.cpp)
 endif()
 
@@ -84,6 +87,7 @@ target_link_libraries(lfs_video
         nlohmann_json::nlohmann_json
         $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::cudart>
         $<$<BOOL:${LFS_HAS_CUDA}>:lfs_cuda_driver>
+        TBB::tbb
 )
 
 # libplacebo's static pkg-config dependency chain includes shaderc and
@@ -235,6 +239,7 @@ add_library(lfs_io STATIC
         loaders/checkpoint_loader.cpp
         loaders/mesh_loader.hpp
         loaders/mesh_loader.cpp
+        loaders/skinned_mesh_loader.cpp
         mesh/texture_loader.hpp
         mesh/texture_loader.cpp
         cache_image_loader.cpp

@@ -223,7 +223,13 @@ namespace fast_lfs::rasterization::kernels::backward {
         }
 
         // Compute SH backward gradients before entering the geometry path.
-        if (in_range && !contributed) {
+        bool skip_shape_reg = false;
+        if constexpr (!DISABLED_FEATURES)
+            skip_shape_reg = fused_adam.reg_rendered_only;
+        if (in_range && !contributed && skip_shape_reg) {
+            // MRNF: the shape regularizers act on rendered splats only; momentum decay elsewhere.
+            opacity_grads[0] = opacity_extra_grad(fused_adam, fused_adam.opacity, static_cast<uint>(primitive_idx));
+        } else if (in_range && !contributed) {
             // Reg-only scale/opacity; SH/means/rot get pure momentum decay (zeros).
             const uint scale_base = static_cast<uint>(primitive_idx) * 3u;
             scale_grads[0] = scale_regularization_grad<!DISABLED_FEATURES>(fused_adam, fused_adam.scaling, scale_base) + erank_grads[0];
@@ -687,7 +693,7 @@ namespace fast_lfs::rasterization::kernels::backward {
     // splats share the first exchange: the lower half-warp keeps one, the upper
     // half-warp the other.
     // ---------------------------------------------------------------------------
-    template <DensificationType DENSIFICATION_TYPE, bool NORMAL_CHANNEL, bool IMPACT_SCORE, int WARP_CULL_MODE = 0, bool COLOR_VARIANCE = false>
+    template <DensificationType DENSIFICATION_TYPE, bool NORMAL_CHANNEL, bool BLEND_PEAK, int WARP_CULL_MODE = 0, bool COLOR_VARIANCE = false, bool IMPACT_SCORE = false>
     __global__ void __launch_bounds__(config::block_size_blend_backward, 4) blend_backward_cu(
         const uint2* __restrict__ tile_instance_ranges,
         const uint* __restrict__ instance_primitive_indices,
@@ -715,6 +721,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float* __restrict__ densification_error_map,
         const float* __restrict__ edge_weight_map,
         float* __restrict__ edge_score_out,
+        float* __restrict__ blend_peak_out,
         float* __restrict__ impact_sum_out,
         float* __restrict__ impact_peak_out,
         uint* __restrict__ primitive_touched,
@@ -793,7 +800,6 @@ namespace fast_lfs::rasterization::kernels::backward {
                                             grad_normal_map[2 * n_pixels + pixel_idx[k]]);
                 }
             }
-            behind[k] = make_float3(0.0f);
             if constexpr (IMPACT_SCORE)
                 behind[k] = inside[k] ? background_color_at(background_grad, pixel_idx[k], n_pixels) : make_float3(0.0f);
             pixel_error[k] = 1.0f;
@@ -923,7 +929,7 @@ namespace fast_lfs::rasterization::kernels::backward {
             float h;
             float h_dy;
             float u[kU];
-            float peak;
+            float peak, impact_peak;
             bool contributed;
         };
         // Walks one staged splat over the thread's two pixels, back to front.
@@ -955,6 +961,8 @@ namespace fast_lfs::rasterization::kernels::backward {
                 const bool saturated = unclamped >= config::max_fragment_alpha;
                 const float T_before = accepted ? T[k] * rcp_approx(1.0f - alpha) : T[k];
                 const float w = alpha * T_before;
+                if constexpr (BLEND_PEAK)
+                    sums.peak = fmaxf(sums.peak, w);
                 const float3 pixel_grad_color = accepted ? grad_c[k] : make_float3(0.0f);
                 const float pixel_grad_depth = accepted ? grad_d[k] : 0.0f;
                 const float normal_dot_grad = NORMAL_CHANNEL && accepted ? dot(normal, grad_n[k]) : 0.0f;
@@ -997,7 +1005,7 @@ namespace fast_lfs::rasterization::kernels::backward {
                                                       fabsf(color.y - behind[k].y) +
                                                       fabsf(color.z - behind[k].z));
                     sums.u[kUImpact] += removal_impact;
-                    sums.peak = fmaxf(sums.peak, removal_impact);
+                    sums.impact_peak = fmaxf(sums.impact_peak, removal_impact);
                     behind[k] = accepted ? alpha * color + (1.0f - alpha) * behind[k] : behind[k];
                 }
                 const float next_grad_T = dot(pixel_grad_color, alpha * color) + alpha * depth * pixel_grad_depth +
@@ -1169,9 +1177,16 @@ namespace fast_lfs::rasterization::kernels::backward {
 #pragma unroll
                 for (int f = 0; f < kPairOut; ++f)
                     store_field(pair_fields[f], values[f], s_primitive[slot], s_work[slot]);
-                if constexpr (IMPACT_SCORE) {
+                if constexpr (BLEND_PEAK) {
                     float peak = fmaxf(upper ? second.peak : first.peak,
                                        __shfl_xor_sync(0xffffffffu, upper ? first.peak : second.peak, 16));
+                    peak = reduce_max<8>(peak);
+                    if ((lane & 15u) == 0u && peak > 0.0f)
+                        atomicMax(reinterpret_cast<int*>(blend_peak_out + s_primitive[slot]), __float_as_int(peak));
+                }
+                if constexpr (IMPACT_SCORE) {
+                    float peak = fmaxf(upper ? second.impact_peak : first.impact_peak,
+                                       __shfl_xor_sync(0xffffffffu, upper ? first.impact_peak : second.impact_peak, 16));
                     peak = reduce_max<8>(peak);
                     if ((lane & 15u) == 0u && peak > 0.0f)
                         atomicMax(reinterpret_cast<int*>(impact_peak_out + s_primitive[slot]), __float_as_int(peak));
@@ -1210,8 +1225,13 @@ namespace fast_lfs::rasterization::kernels::backward {
 #pragma unroll
                     for (int f = 0; f < kSingleOut; ++f)
                         store_field(single_fields[f], values[f], s_primitive[slot], s_work[slot]);
-                    if constexpr (IMPACT_SCORE) {
+                    if constexpr (BLEND_PEAK) {
                         const float peak = reduce_max<16>(sums.peak);
+                        if (lane == 0u && peak > 0.0f)
+                            atomicMax(reinterpret_cast<int*>(blend_peak_out + s_primitive[slot]), __float_as_int(peak));
+                    }
+                    if constexpr (IMPACT_SCORE) {
+                        const float peak = reduce_max<16>(sums.impact_peak);
                         if (lane == 0u && peak > 0.0f)
                             atomicMax(reinterpret_cast<int*>(impact_peak_out + s_primitive[slot]), __float_as_int(peak));
                     }

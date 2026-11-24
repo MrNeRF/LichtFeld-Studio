@@ -258,9 +258,9 @@ namespace lfs::vis {
                       settings.equirectangular ? "enabled" : "disabled");
         }
         if (settings.scene() != settings_)
-            markDirty(DirtyFlag::SPLATS | DirtyFlag::CAMERA | DirtyFlag::BACKGROUND, lfs::vis::FrameReason::SceneChange);
+            markDirty(DirtyFlag::SPLATS | DirtyFlag::CAMERA | DirtyFlag::BACKGROUND, lfs::vis::FrameReason::SettingsChange);
         else
-            markViewDirty(view_source_.activeView(), DirtyFlag::SPLATS | DirtyFlag::CAMERA | DirtyFlag::BACKGROUND, lfs::vis::FrameReason::SceneChange);
+            markViewDirty(view_source_.activeView(), DirtyFlag::SPLATS | DirtyFlag::CAMERA | DirtyFlag::BACKGROUND, lfs::vis::FrameReason::SettingsChange);
 
         storeActiveSettingsLocked(settings);
         lock.unlock();
@@ -445,7 +445,7 @@ namespace lfs::vis {
         std::lock_guard<std::mutex> lock(settings_mutex_);
         auto settings = activeSettingsLocked();
         settings.use_crop_box = enabled;
-        markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
+        markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SettingsChange);
 
         storeActiveSettingsLocked(settings);
     }
@@ -454,7 +454,7 @@ namespace lfs::vis {
         std::lock_guard<std::mutex> lock(settings_mutex_);
         auto settings = activeSettingsLocked();
         settings.use_ellipsoid = enabled;
-        markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
+        markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SettingsChange);
 
         storeActiveSettingsLocked(settings);
     }
@@ -467,7 +467,7 @@ namespace lfs::vis {
         LOG_DEBUG("Point cloud mode: {}, voxel size: {}",
                   event.enabled ? "enabled" : "disabled", event.voxel_size);
         this->state().viewport_artifact_service_.clearViewportOutput();
-        markViewDirty(view_source_.activeView(), DirtyFlag::SPLATS, lfs::vis::FrameReason::SceneChange);
+        markViewDirty(view_source_.activeView(), DirtyFlag::SPLATS, lfs::vis::FrameReason::SettingsChange);
 
         storeActiveSettingsLocked(settings);
     }

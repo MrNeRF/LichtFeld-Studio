@@ -81,4 +81,6 @@ namespace lfs::core {
     Tensor resize_normal_prior(const Tensor& input, int output_h, int output_w,
                                cudaStream_t cuda_stream = nullptr);
 
+    LFS_CUDA_API Tensor resize_prior_async(const Tensor& input, int height, int width, bool normal);
+
 } // namespace lfs::core

@@ -799,7 +799,7 @@ namespace lfs::training {
         if (!param.is_valid() || param.numel() == 0) {
             return;
         }
-        if ((apply_sh_warmup && iteration <= SH_WARMUP_ITERATIONS) || splat_data_.active_sh_coeffs_rest() == 0) {
+        if ((apply_sh_warmup && config_.sh_warmup && iteration <= SH_WARMUP_ITERATIONS) || splat_data_.active_sh_coeffs_rest() == 0) {
             return;
         }
 
@@ -1088,7 +1088,7 @@ namespace lfs::training {
         const auto layout_rest = static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest());
         GroupFields shN = prepare_param(ParamType::ShN,
                                         static_cast<int>(lfs::core::sh_float4_slots_for_rest(layout_rest) * 4u),
-                                        active_rest > 0 && iteration > SH_WARMUP_ITERATIONS);
+                                        active_rest > 0 && !(config_.sh_warmup && iteration <= SH_WARMUP_ITERATIONS));
         // Generation-checked q16 fetch. The neutral group binds the live tensors;
         // fast_adam_group re-resolves their pointers for the kernel.
         if (shN.enabled && splat_data_.shN_value_quantized() &&
@@ -1215,7 +1215,7 @@ namespace lfs::training {
             if (!param.is_valid() || param.numel() == 0)
                 continue;
             if (type == ParamType::ShN &&
-                (iteration <= SH_WARMUP_ITERATIONS || active_rest == 0)) {
+                ((config_.sh_warmup && iteration <= SH_WARMUP_ITERATIONS) || active_rest == 0)) {
                 continue;
             }
             const auto name = param_name(type);
@@ -2145,6 +2145,7 @@ namespace lfs::training {
         }
         const auto gpu_upload_finished = std::chrono::steady_clock::now();
 
+        loaded_config.sh_warmup = config_.sh_warmup;
         config_ = std::move(loaded_config);
         states_ = std::move(loaded_states);
 

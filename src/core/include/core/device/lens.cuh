@@ -492,15 +492,31 @@ undistort_area_kernel_impl(
     if (ox >= params.dst_width || oy >= params.dst_height)
         return;
 
+    const bool panorama = params.view && static_cast<CameraModelType>(params.model_type) == CameraModelType::EQUIRECTANGULAR;
+    int samples = quadrature;
+    if (panorama) {
+        // A face pixel spans 1 / cos(latitude) as many panorama columns as rows, so it takes that many more
+        // samples per axis to keep one per column it covers.
+        const float nx = (static_cast<float>(ox) + 0.5f - params.dst_cx) / params.dst_fx;
+        const float ny = (static_cast<float>(oy) + 0.5f - params.dst_cy) / params.dst_fy;
+        const auto* r = params.view_rotation;
+        const float x = r[0] * nx + r[1] * ny + r[2];
+        const float y = r[3] * nx + r[4] * ny + r[5];
+        const float z = r[6] * nx + r[7] * ny + r[8];
+        const float cos_latitude = hypotf(x, z) / sqrtf(x * x + y * y + z * z);
+        const float columns = fmaxf(params.src_fx / params.dst_fx, params.src_fy / params.dst_fy) /
+                              fmaxf(cos_latitude, 1.0f / 64);
+        samples = max(quadrature, min(64, static_cast<int>(ceilf(columns))));
+    }
     float result[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     float valid_samples = 0.0f;
     const int input_plane = params.src_width * params.src_height;
-    for (int qy = 0; qy < quadrature; ++qy) {
-        for (int qx = 0; qx < quadrature; ++qx) {
+    for (int qy = 0; qy < samples; ++qy) {
+        for (int qx = 0; qx < samples; ++qx) {
             const float pixel_x = static_cast<float>(ox) +
-                                  (static_cast<float>(qx) + 0.5f) / quadrature;
+                                  (static_cast<float>(qx) + 0.5f) / samples;
             const float pixel_y = static_cast<float>(oy) +
-                                  (static_cast<float>(qy) + 0.5f) / quadrature;
+                                  (static_cast<float>(qy) + 0.5f) / samples;
             const auto [sx, sy] = detail::source_position<Bounded>(pixel_x, pixel_y, params);
             if constexpr (Bounded) {
                 if (!isfinite(sx) || !isfinite(sy) || fabsf(sx) > 1073741824.f || fabsf(sy) > 1073741824.f)

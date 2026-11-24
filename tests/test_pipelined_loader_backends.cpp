@@ -25,6 +25,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <future>
 #include <limits>
@@ -321,6 +322,60 @@ namespace {
                 ASSERT_EQ(actual.dtype(), expected.dtype());
                 EXPECT_EQ(actual.to_vector(), expected.to_vector());
             }
+        }
+    }
+
+    TEST_P(PipelinedLoaderBackends, DownsampledSourceJpegUsesLanczosAndByteRounding) {
+        const GpuBackendScope scope(GetParam());
+        constexpr int width = 149, height = 107, max_width = 77;
+        std::vector<uint8_t> pixels(width * height * 3);
+        uint32_t state = 68;
+        for (auto& sample : pixels) {
+            state = 1664525u * state + 1013904223u;
+            sample = static_cast<uint8_t>(state >> 24);
+        }
+        std::vector<uint8_t> encoded;
+        ASSERT_TRUE(image_codecs::encode_jpeg_memory(pixels, width, height, 3, width * 3, encoded, {}));
+        {
+            std::ofstream file(path("downsample.jpg"), std::ios::binary);
+            file.write(reinterpret_cast<const char*>(encoded.data()), encoded.size());
+            ASSERT_TRUE(file);
+        }
+
+        auto photo = request("downsample.jpg");
+        photo.params.output_uint8 = true;
+        const auto original = load(photo).image;
+        ASSERT_EQ(original.dtype(), DataType::UInt8);
+        auto source = original.permute({1, 2, 0}).contiguous().to(Device::GPU);
+        const auto [w, h] = resized_image_dimensions(width, height, 1, max_width);
+        const auto* ops = shared_image_ops(GetParam());
+        auto filtered = ops->resize(source, h, w, lfs::gpu_ops::Resample::LanczosRGB, 2);
+        auto expected = Tensor::empty(filtered.shape(), Device::GPU, DataType::UInt8);
+        ops->convert(filtered, expected, lfs::gpu_ops::ImageConversion::F32CHWToU8CHW, h, w, 3, {});
+
+        photo.params.max_width = max_width;
+        const auto result = load(photo).image;
+        ASSERT_EQ(result.shape(), expected.shape());
+        EXPECT_EQ(result.to_vector_uint8(), expected.cpu().to_vector_uint8());
+
+        // Hold the decoded JPEG bytes fixed to isolate the two devices' filters.
+        if (GetParam() == GpuBackend::Vulkan && gpu_backend_available(GpuBackend::CUDA)) {
+            const auto actual = filtered.cpu().to_vector();
+            const GpuBackendScope cuda_scope(GpuBackend::CUDA);
+            auto cuda_source = original.permute({1, 2, 0}).contiguous().to(Device::GPU);
+            auto reference = shared_image_ops(GpuBackend::CUDA)
+                                 ->resize(cuda_source, h, w, lfs::gpu_ops::Resample::LanczosRGB, 2)
+                                 .cpu()
+                                 .to_vector();
+            ASSERT_EQ(actual.size(), reference.size());
+            float max_difference = 0.0f;
+            for (size_t i = 0; i < actual.size(); ++i) {
+                ASSERT_TRUE(std::isfinite(actual[i]) && std::isfinite(reference[i])) << i;
+                max_difference = std::max(max_difference, std::abs(actual[i] - reference[i]));
+            }
+            // Different FMA ordering in the two sums can round the last few bits.
+            RecordProperty("filter_max_absolute_difference", std::format("{:.9g}", max_difference));
+            EXPECT_LE(max_difference, 2.e-5f);
         }
     }
 

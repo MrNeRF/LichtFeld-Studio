@@ -1,7 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/image_codecs.hpp"
 #include "core/image_exr.hpp"
@@ -13,6 +12,7 @@
 #include "masked_image_fill.hpp"
 
 #include <stb_image.h>
+#include <zstd.h>
 
 #include <algorithm>
 #include <array>
@@ -236,6 +236,49 @@ namespace lfs::io {
             auto alpha_grid = alpha.clamp(0.0f, 1.0f).mul(65535.0f).add(0.5f).to(DataType::Int32);
             alpha = alpha_grid.to(DataType::Float32).div(65535.0f);
             return {rgb.contiguous(), alpha, alpha_grid};
+        }
+
+        // Run-local lossless storage of the prepared tensor. The normal/depth flag
+        // supplies the channel count. A resized integer prior uses the same 16-bit
+        // sample grid as the other loader, while float depth retains its range.
+        using PriorDimensions = std::array<uint32_t, 2>;
+        std::shared_ptr<std::vector<uint8_t>> encode_prior_cache(const Tensor& prior, bool quantize, bool normal) {
+            auto stored = prior;
+            if (quantize) {
+                if (normal)
+                    stored = stored.mul(0.5f).add(0.5f);
+                stored = stored.clamp(0.0f, 1.0f).mul(65535.0f).add(0.5f).to(DataType::Int32).to(DataType::Float32).mul(UINT16_SCALE);
+                if (normal)
+                    stored = stored.mul(2.0f).sub(1.0f);
+            }
+            const auto host = stored.contiguous().to_pageable_host();
+            const PriorDimensions dims{uint32_t(host.size(host.ndim() - 2)), uint32_t(host.size(host.ndim() - 1))};
+            auto bytes = std::make_shared<std::vector<uint8_t>>(sizeof(dims) + ZSTD_compressBound(host.bytes()));
+            std::memcpy(bytes->data(), dims.data(), sizeof(dims));
+            const auto written = ZSTD_compress(bytes->data() + sizeof(dims), bytes->size() - sizeof(dims),
+                                               host.data_ptr(), host.bytes(), 1);
+            if (ZSTD_isError(written))
+                throw std::runtime_error(ZSTD_getErrorName(written));
+            bytes->resize(sizeof(dims) + written);
+            bytes->shrink_to_fit();
+            return bytes;
+        }
+
+        Tensor decode_prior_cache(const std::vector<uint8_t>& bytes, bool normal, lfs::core::TensorUpload& upload) {
+            PriorDimensions dims{};
+            if (bytes.size() <= sizeof(dims))
+                throw std::runtime_error("Truncated prior cache");
+            std::memcpy(dims.data(), bytes.data(), sizeof(dims));
+            const auto [height, width] = dims;
+            const uint64_t pixels = uint64_t(width) * height;
+            const auto* payload = bytes.data() + sizeof(dims);
+            const size_t size = bytes.size() - sizeof(dims);
+            if (!pixels || pixels > INT32_MAX || ZSTD_getFrameContentSize(payload, size) != pixels * (normal ? 3 : 1) * sizeof(float))
+                throw std::runtime_error("Invalid prior cache dimensions");
+            auto host = Tensor::empty_pageable_host(normal ? TensorShape{3, height, width} : TensorShape{height, width}, DataType::Float32);
+            if (ZSTD_decompress(host.data_ptr(), host.bytes(), payload, size) != host.bytes())
+                throw std::runtime_error("Invalid prior cache payload");
+            return to_device(upload, host);
         }
 
         // Normal maps store v = n * 0.5 + 0.5, optionally through the sRGB display transform.
@@ -534,7 +577,7 @@ namespace lfs::io {
             }
         }
         const bool float_decode = decodes_float(path, params);
-        // A masked fill needs the full-resolution source, which the encoded path resizes while decoding.
+        // A masked fill must be applied to the original samples before any resize.
         if (!params.undistort && !float_decode && (!encoded || params.masked_fill))
             return load_rgb_decoded_ahead(path, params, decodes_16bit(params));
         Tensor host;
@@ -566,22 +609,35 @@ namespace lfs::io {
                        .permute({2, 0, 1})
                        .contiguous();
         } else {
-            // Warps consume full-resolution UInt8 directly; do not resize or
-            // expand these sources to float before the area warp.
-            const int resize_factor = params.undistort ? 1 : params.resize_factor;
-            const int max_width = params.undistort ? 0 : params.max_width;
             auto ahead = params.undistort ? take_decoded_ahead(path, HostDecodeKind::UInt8) : std::nullopt;
             auto [data, width, height, channels] =
                 ahead ? std::tuple{static_cast<unsigned char*>(ahead->data.release()), ahead->width, ahead->height, ahead->channels}
                 : encoded != nullptr
-                    ? lfs::core::load_image_from_memory(encoded->data(), encoded->size(), resize_factor, max_width)
-                    : lfs::core::load_image(path, resize_factor, max_width);
+                    ? lfs::core::load_image_from_memory(encoded->data(), encoded->size(), 1, 0)
+                    : lfs::core::load_image(path, 1, 0);
             if (!data)
                 throw std::runtime_error("Failed to decode image: " + lfs::core::path_to_utf8(path));
             std::unique_ptr<void, ReleaseFn> owner(data, lfs::core::free_image);
             // Only a full-resolution warp source gets here with a fill.
             if (params.masked_fill)
                 fill_masked_image_host(data, width, height, channels, false, *params.masked_fill);
+
+            if (!params.undistort) {
+                const auto [target_w, target_h] = lfs::core::resized_image_dimensions(width, height, params.resize_factor, params.max_width);
+                if (target_w != width || target_h != height) {
+                    // A JPEG served from the compressed source cache follows the same
+                    // Lanczos-2 filter and byte rounding as a freshly decoded image.
+                    auto source = to_device(upload, host_uint8(owner.release(), image_shape(height, width, channels), lfs::core::free_image));
+                    const auto* ops = lfs::core::shared_image_ops(config_.backend);
+                    auto resized = ops->resize(source, target_h, target_w, lfs::gpu_ops::Resample::LanczosRGB, 2);
+                    if (!params.output_uint8)
+                        return resized;
+                    auto result = Tensor::empty(resized.shape(), Device::GPU, DataType::UInt8);
+                    ops->convert(resized, result, lfs::gpu_ops::ImageConversion::F32CHWToU8CHW,
+                                 target_h, target_w, channels, {});
+                    return result;
+                }
+            }
             // Planar bytes avoid a second device image and a per-step GPU transpose.
             host = host_uint8_planar(owner.release(), height, width, channels, lfs::core::free_image);
         }
@@ -706,7 +762,22 @@ namespace lfs::io {
             };
 
             try {
-                if (item.is_cache_hit) {
+                if (item.is_cache_hit && (item.is_normal || item.is_depth)) {
+                    try {
+                        auto prior = decode_prior_cache(*item.jpeg_data, item.is_normal, upload);
+                        if (item.is_normal && !item.prior_own_size)
+                            prior = lfs::core::shared_image_ops(config_.backend)->resize(prior, int(prior.size(1)), int(prior.size(2)), lfs::gpu_ops::Resample::NormalPrior, 2);
+                        if (item.is_depth)
+                            try_complete_pair(item.sequence_id, item.loader_generation, {}, {}, std::move(prior));
+                        else
+                            try_complete_pair(item.sequence_id, item.loader_generation, {}, {}, {}, std::move(prior));
+                        continue;
+                    } catch (const std::exception& e) {
+                        LOG_DEBUG("Prepared prior cache read failed for {}: {}", item.cache_key, e.what());
+                        invalidate_cache_entry(item.cache_key);
+                        warn_portable_cache_failure(e.what());
+                    }
+                } else if (item.is_cache_hit) {
                     // Masked RGB prepared on an earlier visit, with its alpha for an alpha mask.
                     Tensor rgb, alpha;
                     try {
@@ -820,11 +891,11 @@ namespace lfs::io {
                                                     item.normal_transform_world_to_camera ? &item.normal_world_to_camera
                                                                                           : nullptr);
                     }
-                    const auto resize_prior = [&item](const Tensor& input, const int height, const int width) {
-                        return item.is_depth ? lfs::core::resize_depth_prior(input.contiguous(), height, width, nullptr)
-                                             : lfs::core::resize_normal_prior(input.contiguous(), height, width, nullptr);
+                    const auto resize_prior = [this, &item](const Tensor& input, const int height, const int width) {
+                        return lfs::core::shared_image_ops(config_.backend)->resize(input.contiguous(), height, width, item.is_depth ? lfs::gpu_ops::Resample::DepthPrior : lfs::gpu_ops::Resample::NormalPrior, 2);
                     };
-                    prior = resize_prior(prior, target_h, target_w);
+                    if (!item.prior_own_size)
+                        prior = resize_prior(prior, target_h, target_w);
                     if (item.undistort) {
                         const auto scaled = undistort_for(*item.undistort, prior, params.resize_factor, params.max_width);
                         if (item.is_depth) {
@@ -834,12 +905,20 @@ namespace lfs::io {
                         }
                     }
                     const size_t rank = prior.ndim();
-                    if (item.aux_target_width > 0 && item.aux_target_height > 0 &&
+                    if (!item.prior_own_size && item.aux_target_width > 0 && item.aux_target_height > 0 &&
                         (static_cast<int>(prior.shape()[rank - 1]) != item.aux_target_width ||
                          static_cast<int>(prior.shape()[rank - 2]) != item.aux_target_height)) {
                         prior = resize_prior(prior, item.aux_target_height, item.aux_target_width);
                     }
                     prior = prior.contiguous();
+                    try {
+                        const bool quantize = !item.prior_own_size &&
+                                              (item.is_normal || samples.dtype() != DataType::Float32 || lfs::core::image_quantization_step(item.path) != 0.0f);
+                        put_in_jpeg_cache(item.cache_key, encode_prior_cache(prior, quantize, item.is_normal));
+                    } catch (const std::exception& e) {
+                        LOG_DEBUG("Prepared prior cache write failed for {}: {}", item.cache_key, e.what());
+                        warn_portable_cache_failure(e.what());
+                    }
                     if (item.is_depth) {
                         try_complete_pair(item.sequence_id, item.loader_generation, std::nullopt,
                                           std::nullopt, std::move(prior));

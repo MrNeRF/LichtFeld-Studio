@@ -417,9 +417,11 @@ void projectionBackward(BackPush back, uint primitive_idx) {
             uint cell = (primitive_idx / 32 * ((p.rest * 3 + 3) / 4) + slot) * 32 + primitive_idx % 32;
             ((Ptr<float4, Access.ReadWrite>)back.shGradient)[cell] = float4(0);
         }
-        [unroll] for (uint a = 0; a < 3; ++a)
-            scale_grads[a] = scaleRegularization(back, primitive_idx * 3 + a);
-        flattenRegularization(back, primitive_idx, scale_grads);
+        if (!back.regRenderedOnly) {
+            [unroll] for (uint a = 0; a < 3; ++a)
+                scale_grads[a] = scaleRegularization(back, primitive_idx * 3 + a);
+            flattenRegularization(back, primitive_idx, scale_grads);
+        }
         opacity_grads[0] = opacityRegularization(back, primitive_idx);
     }
     if (back.renderedCount != 0 && work_idx != 0xffffffffu)
@@ -436,7 +438,10 @@ void projectionBackward(BackPush back, uint primitive_idx) {
         EffectiveRankPenalty penalty = effective_rank_penalty(rawScales.x, rawScales.y, rawScales.z);
         float coef = back.erankWeight / float(p.count);
         erankLoss = coef * penalty.value;
-        [unroll] for (uint a = 0; a < 3; ++a) scale_grads[a] += coef * penalty.gradient[a];
+        if (contributed || !back.regRenderedOnly) {
+            [unroll] for (uint a = 0; a < 3; ++a)
+                scale_grads[a] += coef * penalty.gradient[a];
+        }
     }
     regularizerLoss(back.erankLoss, erankLoss);
     float dcLoss = 0, shLoss = 0;

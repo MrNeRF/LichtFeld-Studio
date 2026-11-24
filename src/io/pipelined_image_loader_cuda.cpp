@@ -88,6 +88,56 @@ namespace lfs::io {
                    std::memcmp(bytes.data(), FLOAT_DEPTH_MAGIC.data(), FLOAT_DEPTH_MAGIC.size()) == 0;
         }
 
+        // Run-local cache payloads: a normal file's RGB samples [H,W,3] as read, before the prior
+        // transform, raw. Float files keep float32; 8-bit files keep their bytes, since nvJPEG2000 can
+        // hang decoding 8-bit RGB codestreams (a 37x53 noise image does), and 16-bit files use J2K.
+        constexpr std::array<uint8_t, 8> FLOAT_NORMAL_MAGIC{'L', 'F', 'N', 'O', 'R', 'M', 'F', 1};
+        constexpr std::array<uint8_t, 8> U8_NORMAL_MAGIC{'L', 'F', 'N', 'O', 'R', 'M', '8', 1};
+        constexpr size_t RAW_NORMAL_HEADER_BYTES = 16;
+
+        bool is_raw_normal_cache(const std::vector<uint8_t>& bytes, const std::array<uint8_t, 8>& magic) {
+            return bytes.size() >= RAW_NORMAL_HEADER_BYTES &&
+                   std::memcmp(bytes.data(), magic.data(), magic.size()) == 0;
+        }
+
+        lfs::core::Tensor decode_raw_normal_cache(const std::vector<uint8_t>& bytes, const lfs::core::DataType dtype,
+                                                  cudaStream_t stream) {
+            const size_t sample_bytes = dtype == lfs::core::DataType::UInt8 ? 1 : sizeof(float);
+            std::array<uint32_t, 2> dimensions{};
+            std::memcpy(dimensions.data(), bytes.data() + U8_NORMAL_MAGIC.size(), sizeof(dimensions));
+            const auto [height, width] = dimensions;
+            const uint64_t samples = uint64_t(height) * width * 3;
+            const size_t payload_bytes = bytes.size() - RAW_NORMAL_HEADER_BYTES;
+            if (height == 0 || width == 0 || payload_bytes % sample_bytes != 0 || samples != payload_bytes / sample_bytes) {
+                throw std::runtime_error("Invalid raw normal cache dimensions");
+            }
+            auto cpu = lfs::core::Tensor::empty({size_t(height), size_t(width), size_t{3}}, lfs::core::Device::CPU, dtype);
+            std::memcpy(cpu.data_ptr(), bytes.data() + RAW_NORMAL_HEADER_BYTES, cpu.bytes());
+            return cpu.to(lfs::core::Device::GPU, stream);
+        }
+
+        // Sample precision of a J2K codestream's first component, from its SIZ
+        // marker (SOC, SIZ, Lsiz, Rsiz, eight 4-byte sizes and offsets, Csiz,
+        // then Ssiz), or 0 for anything else.
+        int jpeg2k_sample_bits(const std::vector<uint8_t>& bytes) {
+            constexpr size_t SSIZ_OFFSET = 2 + 2 + 2 + 2 + 8 * 4 + 2;
+            if (bytes.size() <= SSIZ_OFFSET || bytes[0] != 0xFF || bytes[1] != 0x4F ||
+                bytes[2] != 0xFF || bytes[3] != 0x51) {
+                return 0;
+            }
+            return (bytes[SSIZ_OFFSET] & 0x7F) + 1;
+        }
+
+        template <typename Item>
+        lfs::gpu_ops::NormalPriorTransform normal_prior_transform(const Item& item) {
+            lfs::gpu_ops::NormalPriorTransform transform;
+            transform.srgb = item.normal_srgb;
+            transform.flip_yz = item.normal_flip_yz;
+            transform.world_to_camera = item.normal_transform_world_to_camera;
+            std::copy(item.normal_world_to_camera.begin(), item.normal_world_to_camera.end(), transform.w2c);
+            return transform;
+        }
+
         lfs::core::Tensor decode_float_depth_cache(const std::vector<uint8_t>& bytes, cudaStream_t stream) {
             std::array<uint32_t, 2> dimensions{};
             std::memcpy(dimensions.data(), bytes.data() + FLOAT_DEPTH_MAGIC.size(), sizeof(dimensions));
@@ -747,26 +797,45 @@ namespace lfs::io {
         // Cache hits go to the hot queue, which only the GPU decode thread drains.
         if (!is_nvcodec_available())
             return;
-        if (kind != SidecarCacheFormat::DepthFloat && !jpeg2k_cache_available_.load(std::memory_order_relaxed)) {
+        const bool raw = kind == SidecarCacheFormat::DepthFloat || kind == SidecarCacheFormat::NormalSamplesFloat ||
+                         kind == SidecarCacheFormat::NormalSamples8;
+        if (!raw && !jpeg2k_cache_available_.load(std::memory_order_relaxed)) {
             return;
         }
 
         try {
             std::vector<uint8_t> bytes;
-            // Sidecars are stored as lossless HT J2K after all resize/undistort/prior
-            // transforms. Depth [H,W] is quantized as round(v*65535). Normals
-            // [3,H,W] in [-1,1] are mapped to HWC [0,1] as (n+1)/2 before the same
-            // u16 quantization; hot decode reverses that map with <= 1/65535 loss.
-            if (kind == SidecarCacheFormat::DepthFloat) {
+            // Priors at their own size keep the file's samples (8-bit stays 8-bit), as
+            // lossless HT J2K or raw, and cached visits repeat the first visit's
+            // decode-side transform exactly. Resized priors are stored after their
+            // resize/undistort/prior transforms: depth [H,W] quantized as round(v*65535),
+            // normals [3,H,W] in [-1,1] mapped to HWC [0,1] as (n+1)/2 before the same
+            // u16 quantization, which hot decode reverses with <= 1/65535 loss.
+            if (raw) {
+                if (kind != SidecarCacheFormat::DepthFloat && (tensor.ndim() != 3 || tensor.shape()[2] != 3)) {
+                    throw std::runtime_error("Normal sample cache expects [H,W,3] tensor");
+                }
                 const auto cpu = tensor.cpu();
-                bytes.resize(FLOAT_DEPTH_HEADER_BYTES + cpu.bytes());
+                const bool normal = kind != SidecarCacheFormat::DepthFloat;
+                const size_t header = normal ? RAW_NORMAL_HEADER_BYTES : FLOAT_DEPTH_HEADER_BYTES;
+                const auto& magic = kind == SidecarCacheFormat::NormalSamples8 ? U8_NORMAL_MAGIC
+                                    : normal                                   ? FLOAT_NORMAL_MAGIC
+                                                                               : FLOAT_DEPTH_MAGIC;
+                bytes.resize(header + cpu.bytes());
                 const std::array<uint32_t, 2> dimensions{
                     static_cast<uint32_t>(tensor.shape()[0]), static_cast<uint32_t>(tensor.shape()[1])};
-                std::memcpy(bytes.data(), FLOAT_DEPTH_MAGIC.data(), FLOAT_DEPTH_MAGIC.size());
-                std::memcpy(bytes.data() + FLOAT_DEPTH_MAGIC.size(), dimensions.data(), sizeof(dimensions));
-                std::memcpy(bytes.data() + FLOAT_DEPTH_HEADER_BYTES, cpu.data_ptr(), cpu.bytes());
+                std::memcpy(bytes.data(), magic.data(), magic.size());
+                std::memcpy(bytes.data() + magic.size(), dimensions.data(), sizeof(dimensions));
+                std::memcpy(bytes.data() + header, cpu.data_ptr(), cpu.bytes());
             } else if (kind == SidecarCacheFormat::Depth) {
                 bytes = nvcodec.encode_grayscale_to_jpeg2k(tensor, cuda_stream);
+            } else if (kind == SidecarCacheFormat::Depth8) {
+                bytes = nvcodec.encode_grayscale_to_jpeg2k(tensor, cuda_stream, true, true);
+            } else if (kind == SidecarCacheFormat::NormalSamples16) {
+                if (tensor.ndim() != 3 || tensor.shape()[2] != 3) {
+                    throw std::runtime_error("Normal sample cache expects [H,W,3] tensor");
+                }
+                bytes = nvcodec.encode_to_jpeg2k(tensor, RgbLayout::HWC, cuda_stream);
             } else {
                 if (tensor.ndim() != 3 || tensor.shape()[0] != 3) {
                     throw std::runtime_error("Normal sidecar cache expects [3,H,W] tensor");
@@ -784,8 +853,8 @@ namespace lfs::io {
             put_in_jpeg_cache(item.cache_key, std::make_shared<std::vector<uint8_t>>(std::move(bytes)));
         } catch (...) {
             const auto message = describe_current_exception("non-standard nvImageCodec exception");
-            if (kind == SidecarCacheFormat::DepthFloat) {
-                LOG_DEBUG("[PipelinedImageLoader] Float depth cache write skipped for {}: {}",
+            if (raw) {
+                LOG_DEBUG("[PipelinedImageLoader] Float sidecar cache write skipped for {}: {}",
                           lfs::core::path_to_utf8(item.path), message);
             } else if (jpeg2k_cache_available_.exchange(false)) {
                 LOG_ERROR("[PipelinedImageLoader] JPEG 2000 sidecar cache encode unavailable ({}); "
@@ -805,14 +874,44 @@ namespace lfs::io {
         if (!item.jpeg_data) {
             return {};
         }
+        const auto stream = static_cast<cudaStream_t>(cuda_stream);
+        const auto& bytes = *item.jpeg_data;
+        if (item.is_depth && is_float_depth_cache(bytes))
+            return finish_cached_sidecar(item, decode_float_depth_cache(bytes, stream), stream);
+        if (item.is_normal && is_raw_normal_cache(bytes, FLOAT_NORMAL_MAGIC))
+            return finish_cached_sidecar(item, decode_raw_normal_cache(bytes, lfs::core::DataType::Float32, stream), stream);
+        if (item.is_normal && is_raw_normal_cache(bytes, U8_NORMAL_MAGIC))
+            return finish_cached_sidecar(item, decode_raw_normal_cache(bytes, lfs::core::DataType::UInt8, stream), stream);
+        // J2K: 8-bit depth decodes to UInt8, 16-bit samples to Float32 [0,1].
+        auto sidecar = finish_cached_sidecar(
+            item, nvcodec.decode_jpeg2k_16bit_from_memory_gpu(bytes, cuda_stream, false, true), stream);
+        if (item.is_normal && !item.prior_own_size) {
+            // Decoded on its own, a resized normal map passes a same-size prior resize, which
+            // renormalizes it; the paired decode leaves it as decoded.
+            const lfs::core::CUDAStreamGuard guard(stream);
+            sidecar = lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->resize(sidecar, sidecar.shape()[1], sidecar.shape()[2], lfs::gpu_ops::Resample::NormalPrior, 2);
+        }
+        return sidecar;
+    }
 
-        auto decoded = nvcodec.decode_jpeg2k_16bit_from_memory_gpu(
-            *item.jpeg_data, cuda_stream, false);
+    lfs::core::Tensor PipelinedImageLoader::finish_cached_sidecar(const PrefetchedImage& item,
+                                                                  lfs::core::Tensor decoded,
+                                                                  void* queue) const {
+        const auto stream = static_cast<cudaStream_t>(queue);
+        const lfs::core::CUDAStreamGuard guard(stream);
+        using lfs::core::DataType;
         if (item.is_depth) {
             if (!decoded.is_valid() || decoded.ndim() != 2) {
                 throw std::runtime_error("Decoded depth sidecar cache is not [H,W]");
             }
-            decoded.set_stream(static_cast<cudaStream_t>(cuda_stream));
+            decoded.set_stream(stream);
+            if (decoded.dtype() == DataType::UInt8) {
+                // The depth file's 8-bit samples, scaled as on the first visit. Materialized here,
+                // so the ready event recorded after this covers it.
+                const lfs::core::CUDAStreamGuard stream_guard(stream);
+                decoded = decoded.to(DataType::Float32).div(255.0f);
+                (void)decoded.ptr<float>();
+            }
             return decoded;
         }
 
@@ -824,11 +923,13 @@ namespace lfs::io {
         auto normal = lfs::core::Tensor::empty(
             lfs::core::TensorShape({size_t{3}, height, width}),
             lfs::core::Device::GPU,
-            lfs::core::DataType::Float32);
-        const lfs::core::CUDAStreamGuard execution_scope(static_cast<cudaStream_t>(cuda_stream));
-        lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(decoded, normal, lfs::gpu_ops::ImageConversion::J2KHWCToNormalCHW, height, width, 3, {});
-        normal.set_stream(static_cast<cudaStream_t>(cuda_stream));
-        return lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->resize(normal, static_cast<int>(height), static_cast<int>(width), lfs::gpu_ops::Resample::NormalPrior, 2);
+            DataType::Float32);
+        const auto conversion = !item.prior_own_size                 ? lfs::gpu_ops::ImageConversion::J2KHWCToNormalCHW
+                                : decoded.dtype() == DataType::UInt8 ? lfs::gpu_ops::ImageConversion::NormalPriorU8
+                                                                     : lfs::gpu_ops::ImageConversion::NormalPriorF32;
+        lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(decoded, normal, conversion, height, width, 3, normal_prior_transform(item));
+        normal.set_stream(stream);
+        return normal;
     }
 
     std::optional<lfs::core::TensorFence> PipelinedImageLoader::record_sidecar_ready_event(void* stream) {
@@ -900,27 +1001,8 @@ namespace lfs::io {
 
                 const auto prepare_sidecar = [&](const PrefetchedImage& item,
                                                  lfs::core::Tensor decoded) {
-                    if (item.is_depth) {
-                        if (!decoded.is_valid() || decoded.ndim() != 2) {
-                            throw std::runtime_error("Decoded depth sidecar cache is not [H,W]");
-                        }
-                        decoded.set_stream(queue_stream(*decode_queue_));
-                        return decoded;
-                    }
-                    if (!decoded.is_valid() || decoded.ndim() != 3 || decoded.shape()[2] != 3) {
-                        throw std::runtime_error("Decoded normal sidecar cache is not [H,W,3]");
-                    }
-                    const size_t height = decoded.shape()[0];
-                    const size_t width = decoded.shape()[1];
-                    auto normal = lfs::core::Tensor::empty(
-                        lfs::core::TensorShape({size_t{3}, height, width}),
-                        lfs::core::Device::GPU,
-                        lfs::core::DataType::Float32);
-                    lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(decoded, normal, lfs::gpu_ops::ImageConversion::J2KHWCToNormalCHW, height, width, 3, {});
-                    normal.set_stream(queue_stream(*decode_queue_));
-                    return normal;
+                    return finish_cached_sidecar(item, std::move(decoded), queue_stream(*decode_queue_));
                 };
-
                 const auto complete_sidecar = [&](const PrefetchedImage& item,
                                                   lfs::core::Tensor sidecar) {
                     auto ready_event = record_sidecar_ready_event(queue_stream(*decode_queue_));
@@ -1051,18 +1133,18 @@ namespace lfs::io {
                     try {
                         batch[i].params.cuda_stream = queue_stream(*decode_queue_);
                         if (batch[i].is_depth || batch[i].is_normal) {
-                            if (batch[i].is_depth && batch[i].jpeg_data && is_float_depth_cache(*batch[i].jpeg_data)) {
-                                complete_sidecar(batch[i], decode_float_depth_cache(*batch[i].jpeg_data, queue_stream(*decode_queue_)));
-                                continue;
-                            }
+                            // A frame's depth and normals share one batched decode when both are
+                            // 16-bit J2K; raw float and 8-bit entries decode on their own.
+                            const auto pairable = [](const PrefetchedImage& item) {
+                                return item.jpeg_data && jpeg2k_sample_bits(*item.jpeg_data) == 16;
+                            };
                             size_t pair_index = batch.size();
-                            for (size_t j = i + 1; j < batch.size(); ++j) {
+                            for (size_t j = i + 1; pairable(batch[i]) && j < batch.size(); ++j) {
                                 if (!decoded_as_pair[j] &&
                                     batch[j].sequence_id == batch[i].sequence_id &&
                                     batch[j].is_depth != batch[i].is_depth &&
                                     (batch[j].is_depth || batch[j].is_normal) &&
-                                    batch[i].jpeg_data && batch[j].jpeg_data &&
-                                    !(batch[j].is_depth && is_float_depth_cache(*batch[j].jpeg_data))) {
+                                    pairable(batch[j])) {
                                     pair_index = j;
                                     break;
                                 }
@@ -1345,6 +1427,7 @@ namespace lfs::io {
                     const lfs::core::CUDAStreamGuard stream_guard(aux_stream);
                     lfs::core::Tensor aux_tensor;
                     bool used_gpu = false;
+                    lfs::core::Tensor depth_samples_u8;
                     bool float_depth = false;
                     // nvimagecodec and the uint8 path truncate to 8 bits; 16-bit
                     // depth priors must keep their precision.
@@ -1439,9 +1522,13 @@ namespace lfs::io {
                         const auto [target_w, target_h] = sidecar_target_size(item, src_w, src_h);
 
                         if (item.is_depth) {
-                            if (gpu_gray.dtype() == lfs::core::DataType::UInt8)
+                            if (gpu_gray.dtype() == lfs::core::DataType::UInt8) {
+                                if (item.prior_own_size)
+                                    depth_samples_u8 = gpu_gray;
                                 gpu_gray = gpu_gray.to(lfs::core::DataType::Float32).div(255.0f);
-                            aux_tensor = lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->resize(gpu_gray, target_h, target_w, lfs::gpu_ops::Resample::DepthPrior, 2);
+                            }
+                            aux_tensor = item.prior_own_size ? std::move(gpu_gray)
+                                                             : lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->resize(gpu_gray, target_h, target_w, lfs::gpu_ops::Resample::DepthPrior, 2);
                         } else if (target_w != src_w || target_h != src_h) {
                             aux_tensor = lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->resize(gpu_gray, target_h, target_w, lfs::gpu_ops::Resample::LanczosGray, 2);
                         } else if (gpu_gray.dtype() == lfs::core::DataType::Float32) {
@@ -1475,16 +1562,15 @@ namespace lfs::io {
                         aux_tensor = (item.is_depth ? lfs::core::undistort_depth_area(aux_tensor, scaled, aux_stream) : lfs::core::undistort_mask_area(aux_tensor, scaled, aux_stream));
                     }
 
-                    if (item.is_mask && item.mask_source_promise) {
-                        item.mask_source_promise->set_value(
-                            lfs::core::cuda::mask_values_to_byte_grid(aux_tensor));
-                    }
-                    if (item.is_mask && aux_tensor.dtype() == lfs::core::DataType::Float32)
-                        lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->mask(aux_tensor, lfs::gpu_ops::MaskTransform::QuantizeByteGrid, 0.0f);
-
+                    // The cold visit and every cache hit use the same quantized bytes.
+                    auto mask_bytes = item.is_mask ? lfs::core::cuda::quantize_mask_to_byte_grid(
+                                                         aux_tensor, is_nvcodec_available() || item.mask_source_promise != nullptr)
+                                                   : lfs::core::Tensor{};
+                    if (item.mask_source_promise)
+                        item.mask_source_promise->set_value(mask_bytes);
                     if (item.is_mask && is_nvcodec_available()) {
                         try {
-                            auto jpeg_bytes = nvcodec->encode_grayscale_to_jpeg2k(aux_tensor, lfs::core::getCurrentCUDAStream(), true, true);
+                            auto jpeg_bytes = nvcodec->encode_grayscale_to_jpeg2k(mask_bytes, aux_stream, true, true);
                             put_in_jpeg_cache(item.cache_key,
                                               std::make_shared<std::vector<uint8_t>>(std::move(jpeg_bytes)));
                         } catch (...) { // LFS-CENSUS-OK(empty-catch): optional mask cache encoding failure is logged and does not block loading.
@@ -1503,7 +1589,7 @@ namespace lfs::io {
                         }
                         aux_tensor = process_mask(std::move(aux_tensor), item.mask_params.threshold);
                     } else {
-                        if (item.aux_target_width > 0 && item.aux_target_height > 0 &&
+                        if (!item.prior_own_size && item.aux_target_width > 0 && item.aux_target_height > 0 &&
                             aux_tensor.ndim() == 2 &&
                             (static_cast<int>(aux_tensor.shape()[1]) != item.aux_target_width ||
                              static_cast<int>(aux_tensor.shape()[0]) != item.aux_target_height)) {
@@ -1515,8 +1601,11 @@ namespace lfs::io {
                         try_complete_pair(item.sequence_id, item.loader_generation,
                                           std::nullopt, std::move(aux_tensor));
                     } else {
-                        write_sidecar_cache(*nvcodec, aux_tensor, item,
-                                            float_depth ? SidecarCacheFormat::DepthFloat : SidecarCacheFormat::Depth, sidecar_stream);
+                        if (depth_samples_u8.is_valid())
+                            write_sidecar_cache(*nvcodec, depth_samples_u8, item, SidecarCacheFormat::Depth8, sidecar_stream);
+                        else
+                            write_sidecar_cache(*nvcodec, aux_tensor, item,
+                                                float_depth ? SidecarCacheFormat::DepthFloat : SidecarCacheFormat::Depth, sidecar_stream);
                         auto ready_event = record_sidecar_ready_event(sidecar_stream);
                         try_complete_pair(
                             item.sequence_id,
@@ -1602,7 +1691,8 @@ namespace lfs::io {
                     }
 
                     const auto [target_w, target_h] = sidecar_target_size(item, src_w, src_h);
-                    normal_tensor = lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->resize(normal_tensor, target_h, target_w, lfs::gpu_ops::Resample::NormalPrior, 2);
+                    if (!item.prior_own_size)
+                        normal_tensor = lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->resize(normal_tensor, target_h, target_w, lfs::gpu_ops::Resample::NormalPrior, 2);
 
                     if (!normal_tensor.is_valid() || normal_tensor.ndim() != 3 || normal_tensor.shape()[0] != 3) {
                         throw std::runtime_error("Normal preprocessing produced an invalid tensor");
@@ -1618,7 +1708,7 @@ namespace lfs::io {
                         normal_tensor = lfs::core::undistort_normal_area(normal_tensor, scaled, sidecar_stream);
                     }
 
-                    if (item.aux_target_width > 0 && item.aux_target_height > 0 &&
+                    if (!item.prior_own_size && item.aux_target_width > 0 && item.aux_target_height > 0 &&
                         normal_tensor.ndim() == 3 &&
                         (static_cast<int>(normal_tensor.shape()[2]) != item.aux_target_width ||
                          static_cast<int>(normal_tensor.shape()[1]) != item.aux_target_height)) {
@@ -1628,7 +1718,13 @@ namespace lfs::io {
                     if (!normal_tensor.is_valid() || normal_tensor.ndim() != 3 || normal_tensor.shape()[0] != 3) {
                         throw std::runtime_error("Normal preprocessing produced an invalid tensor");
                     }
-                    write_sidecar_cache(*nvcodec, normal_tensor, item, SidecarCacheFormat::Normal, sidecar_stream);
+                    if (item.prior_own_size) {
+                        const auto format = normal_float ? SidecarCacheFormat::NormalSamplesFloat : normal_16bit ? SidecarCacheFormat::NormalSamples16
+                                                                                                                 : SidecarCacheFormat::NormalSamples8;
+                        write_sidecar_cache(*nvcodec, gpu_staging, item, format, sidecar_stream);
+                    } else {
+                        write_sidecar_cache(*nvcodec, normal_tensor, item, SidecarCacheFormat::Normal, sidecar_stream);
+                    }
                     auto ready_event = record_sidecar_ready_event(sidecar_stream);
 
                     try_complete_pair(

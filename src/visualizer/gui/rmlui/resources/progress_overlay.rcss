@@ -31,7 +31,7 @@ body {
 .progress-title {
     display: block;
     font-size: 13dp;
-    font-weight: bold;
+    font-weight: 600;
     text-align: center;
 }
 

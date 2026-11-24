@@ -1582,6 +1582,17 @@ namespace lfs::vis {
         // NOTE: Training control and project-save commands
         // are now handled by TrainerManager::setupEventHandlers()
 
+        cmd::DetectVr::when([this](const auto&) {
+            auto* const context = window_manager_ ? window_manager_->getGraphicsContext() : nullptr;
+            if (!context || vr_active_ || !UserPreferences::instance().vrPreferences().enabled)
+                return;
+            if (!vr_->prepareOn(*context)) {
+                lfs::ErrorBus::instance().publish(vrNotice(
+                    lfs::ErrorCode::Unavailable, LOCF(vr_->statusKey(), vr_->statusDetail()),
+                    LFS_SOURCE_SITE_CURRENT()));
+            }
+            publishVrState();
+        });
         cmd::SetVrActive::when([this](const auto& command) {
             vr_request_ = command.active;
             wakeMainLoop();
@@ -1593,9 +1604,12 @@ namespace lfs::vis {
             preferences.setVrPreferences({.enabled = command.enabled,
                                           .resolution_scale = command.resolution_scale,
                                           .scene_units_per_meter = command.scene_units_per_meter,
-                                          .move_speed = command.move_speed},
+                                          .move_speed = command.move_speed,
+                                          .show_hands = command.show_hands},
                                          command.persist);
-            vr_->setMoveSpeed(preferences.vrPreferences().move_speed);
+            const auto applied = preferences.vrPreferences();
+            vr_->setMoveSpeed(applied.move_speed);
+            vr_->setShowHands(applied.show_hands);
         });
 
         cmd::ResetTraining::when([this](const auto&) {
@@ -2302,9 +2316,13 @@ namespace lfs::vis {
         if (!window_initialized_) {
             {
                 LOG_TIMER("startup.window_manager.init"); // wraps Vulkan instance/device/swapchain bring-up
-                if (UserPreferences::instance().vrPreferences().enabled && !vr_->prepare())
+                const bool vr_wanted = UserPreferences::instance().vrPreferences().enabled;
+                if (vr_wanted && !vr_->prepare())
                     LOG_WARN("VR unavailable: {}", vr_->statusDetail());
-                const auto* const vr_hooks = vr_->available() ? vr_->deviceHooks() : nullptr;
+                // Without a headset yet, the device is still made fit to join one later.
+                const auto* vr_hooks = vr_->available() ? vr_->deviceHooks()
+                                       : vr_wanted      ? vr::OpenXrService::lateJoinHooks()
+                                                        : nullptr;
                 if (!window_manager_->init(vr_hooks)) {
                     return false;
                 }

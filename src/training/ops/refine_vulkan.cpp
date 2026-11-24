@@ -104,7 +104,7 @@ namespace lfs::training {
             context->recorders().record(reads, writes, [&](VkCommandBuffer cmd) {vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_COMPUTE,pipeline->handle);vkCmdPushConstants(cmd,pipeline->layout,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(p),&p);vkCmdDispatch(cmd,groups,1,1); }, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_WHOLE_SIZE, pipeline);
         }
         uint32_t groups(size_t n) { return static_cast<uint32_t>((n + 255) / 256); }
-        void split(const RefineOutputs& parents, const RefineOutputs& children, In indices) {
+        void conserving_split(const RefineOutputs& parents, const RefineOutputs& children, In indices, float scale) {
             size_t n = indices.numel();
             if (!n)
                 return;
@@ -121,10 +121,14 @@ namespace lfs::training {
             p.i = vk::address(ref(children.sh0));
             p.j = vk::address(ref(children.opacity));
             p.k = vk::address(ref(indices));
+            p.limit = scale;
             p.count = n32(n);
             std::array reads{ref(parents.means), ref(parents.rotations), ref(parents.scales), ref(parents.sh0), ref(parents.opacity), ref(indices)};
             std::array writes{ref(parents.means), ref(parents.scales), ref(parents.opacity), ref(children.means), ref(children.rotations), ref(children.scales), ref(children.sh0), ref(children.opacity)};
             launch(p, kSplit, reads, writes, groups(n));
+        }
+        void split(const RefineOutputs& parents, const RefineOutputs& children, In indices) {
+            conserving_split(parents, children, indices, 0.f);
         }
         void fill_slots(In indices, const RefineInputs& source, const RefineOutputs& dst, Out free_mask) {
             size_t n = indices.numel();
@@ -258,7 +262,17 @@ namespace lfs::training {
             const std::array writes{ref(mask)};
             launch(p, kRotation, reads, writes, groups(n));
         }
-        const RefineOps kOps{.split = split, .fill_slots = fill_slots, .counts = counts, .normalize_positive_median = normalize_positive_median, .clip_scales = clip_scales, .oversize_scores = oversize_scores, .dead_mask = dead_mask, .rotation_mask = rotation_mask};
+        const RefineOps kOps{
+            .split = split,
+            .fill_slots = fill_slots,
+            .counts = counts,
+            .normalize_positive_median = normalize_positive_median,
+            .clip_scales = clip_scales,
+            .oversize_scores = oversize_scores,
+            .dead_mask = dead_mask,
+            .rotation_mask = rotation_mask,
+            .conserving_split = conserving_split,
+        };
     } // namespace
     const RefineOps& vulkan_refine_ops() { return kOps; }
 } // namespace lfs::training

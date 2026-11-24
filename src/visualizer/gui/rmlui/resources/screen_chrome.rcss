@@ -18,7 +18,6 @@ body {
 .area {
     position: absolute;
     box-sizing: border-box;
-    border-radius: 6dp;
     overflow: hidden;
 }
 
@@ -33,8 +32,6 @@ body {
     align-items: center;
     padding: 0 6dp 0 8dp;
     gap: 2dp;
-    border-top-left-radius: 6dp;
-    border-top-right-radius: 6dp;
     border-bottom-width: 1dp;
 }
 
@@ -46,7 +43,6 @@ body {
     padding: 0 5dp 0 6dp;
     margin-right: 6dp;
     gap: 3dp;
-    border-radius: 4dp;
     cursor: pointer;
 }
 
@@ -93,7 +89,6 @@ body {
     height: 20dp;
     padding: 0 7dp;
     gap: 4dp;
-    border-radius: 4dp;
     cursor: pointer;
     white-space: nowrap;
 }
@@ -176,7 +171,6 @@ body {
     min-height: 28dp;
     margin-left: 3dp;
     border-width: 1dp;
-    border-radius: 6dp 0 0 6dp;
     white-space: nowrap;
     cursor: pointer;
 }
@@ -219,7 +213,6 @@ body {
     height: 20dp;
     padding: 0;
     border-width: 0;
-    border-radius: 4dp;
     line-height: 20dp;
     font-size: 10dp;
     text-align: center;
@@ -238,10 +231,9 @@ body {
     margin: 0;
     padding: 0;
     border-width: 0;
-    border-radius: 4dp;
     line-height: 16dp;
     text-align: center;
     font-size: 13dp;
-    font-weight: bold;
+    font-weight: 600;
     cursor: pointer;
 }

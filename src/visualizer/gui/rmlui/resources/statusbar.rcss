@@ -35,8 +35,8 @@ body {
 #safe-mode-badge {
     margin-right: 10dp;
     padding: 0 5dp;
-    border-radius: 2dp;
-    font-weight: bold;
+
+    font-weight: 600;
 }
 
 #input-device-toggle {
@@ -62,7 +62,7 @@ body {
     height: 16dp;
     padding: 0 7dp;
     border-width: 1dp;
-    border-radius: 2dp;
+
     cursor: pointer;
 }
 
@@ -75,7 +75,7 @@ body {
     box-sizing: border-box;
     padding: 9dp 10dp;
     border-width: 1dp;
-    border-radius: 3dp;
+
     white-space: normal;
 }
 
@@ -84,7 +84,7 @@ body {
     flex-direction: row;
     align-items: center;
     justify-content: space-between;
-    font-weight: bold;
+    font-weight: 600;
     margin-bottom: 5dp;
 }
 
@@ -130,7 +130,6 @@ body {
     width: 22dp;
     height: 10dp;
     border-width: 1dp;
-    border-radius: 6dp;
 }
 
 .mcp-switch-knob {
@@ -140,7 +139,6 @@ body {
     top: 1dp;
     width: 6dp;
     height: 6dp;
-    border-radius: 4dp;
 }
 
 #mcp-toggle.is-on .mcp-switch-knob {
@@ -157,7 +155,6 @@ body {
     min-width: 54dp;
     padding: 2dp 10dp;
     border-width: 1dp;
-    border-radius: 2dp;
 }
 
 #status-left {
@@ -251,7 +248,7 @@ body {
     width: 360dp;
     height: 16dp;
     overflow: hidden;
-    border-radius: 2dp;
+
     flex-shrink: 0;
     cursor: pointer;
 }
@@ -319,7 +316,7 @@ body {
     bottom: 1dp;
     width: 6dp;
     margin-left: -3dp;
-    border-radius: 2dp;
+
     cursor: pointer;
 }
 
@@ -337,7 +334,7 @@ body {
     height: 12dp;
     margin-left: -6dp;
     bottom: auto;
-    border-radius: 0;
+
     background-color: transparent;
 }
 
@@ -423,12 +420,12 @@ body {
     margin-left: 3dp;
     min-width: 1.8em;
     text-align: right;
-    font-weight: normal;
+    font-weight: 400;
 }
 
 #fps-label {
     font-size: 12dp;
-    font-weight: bold;
+    font-weight: 600;
     margin-right: 8dp;
 }
 
@@ -567,7 +564,6 @@ body.fit-9 #gpu-mem {
     margin-left: 8dp;
     padding: 0 6dp;
     border-width: 1dp;
-    border-radius: 4dp;
     box-sizing: border-box;
     flex-shrink: 0;
 }
@@ -578,7 +574,7 @@ body.fit-9 #gpu-mem {
 
 .backend-value {
     font-size: 11dp;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 body.fit-8 .backend-chip {
@@ -601,7 +597,7 @@ body.fit-8 #fps-group { margin-left: 6dp; }
 #upscaler-popup {
     pointer-events: auto; position: absolute; right: 0; bottom: 20dp;
     width: 240dp; max-height: 300dp; overflow-y: auto;
-    padding: 6dp; border-width: 1dp; border-radius: 4dp; box-sizing: border-box;
+    padding: 6dp; border-width: 1dp;  box-sizing: border-box;
 }
 .upscaler-choice { display: block; width: 100%; padding: 5dp 8dp; text-align: left; border-width: 0; cursor: pointer; }
 .upscaler-presets-label { padding: 6dp 8dp 3dp; font-size: 10dp; }
@@ -614,7 +610,7 @@ body.fit-9 .backend-chip { margin-left: 2dp; padding: 0 2dp; }
 .gpu-restart-chip { display: flex; align-items: center; justify-content: center; box-sizing: border-box; margin-left: 6dp; margin-right: 8dp; padding: 0 7dp; height: 18dp; font-size: 11dp; white-space: nowrap; flex-shrink: 0; }
 
 .gpu-restart-chip.hidden { display: none; }
-.gpu-restart-symbol { display: none; font-weight: bold; }
+.gpu-restart-symbol { display: none; font-weight: 600; }
 body.gpu-action-tiny .gpu-restart-label { display: none; }
 body.gpu-action-tiny .gpu-restart-symbol { display: inline; }
 body.gpu-action-tiny .gpu-restart-chip { margin-left: 4dp; padding: 0; width: 20dp; min-width: 20dp; }
@@ -626,9 +622,9 @@ body.fit-9.gpu-restart-pending .fps-separator { display: none; }
 /* Tessle eats leaf snacks along the training track. */
 #progress-container.tessle {
     background-color: #1d1f22;
-    border-radius: 2dp;
+
     decorator: none;
-    border-bottom: 1dp #45494d;
+
     box-sizing: border-box;
 }
 
@@ -673,7 +669,7 @@ body.fit-9.gpu-restart-pending .fps-separator { display: none; }
     width: 14dp;
     height: 14dp;
     margin-left: -7dp;
-    border-radius: 0;
+
     background-color: transparent;
 }
 

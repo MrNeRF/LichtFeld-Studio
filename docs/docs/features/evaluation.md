@@ -52,7 +52,7 @@ Images are named after their input image. When two input images share a name, th
 
 A caption band above each row names its two images, for example `Ground Truth, Mask` and `Render, Mask`; the image pixels themselves are not drawn over.
 
-`metrics.csv` has the columns `iteration, psnr, ssim, lpips, time_per_image, num_gaussians, normal_angle_deg, depth_absrel, bias_r, bias_g, bias_b, bias_corr_r, bias_corr_g, bias_corr_b, flip`. Columns without a value are left empty.
+`metrics.csv` has the columns `iteration, psnr, ssim, lpips, time_per_image, num_gaussians, normal_angle_deg, depth_absrel, bias_r, bias_g, bias_b, bias_corr_r, bias_corr_g, bias_corr_b, flip`. Columns without a value are left empty. With calibration correction on (the default; see [Refine camera poses](../cli.md#refine-camera-poses)), the columns `psnr_aligned, ssim_aligned, lpips_aligned` follow: the headline scores after aligning each render onto its photograph. The scores before them stay the plain ones. Each image's evaluation in `per_image_metrics.json` then has the same three fields, inside the headline set's object with `--eval-mask-report`.
 
 `per_image_metrics.json` maps each image name to its size and a list of evaluations:
 

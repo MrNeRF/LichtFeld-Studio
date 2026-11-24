@@ -13,9 +13,11 @@
 #include "io/loaders/blender_loader.hpp"
 #include "io/loaders/colmap_loader.hpp"
 #include "io/pipelined_image_loader.hpp"
+#include "training/dataset.hpp"
 #include <algorithm>
 #include <cmath>
 
+#include "core/shared_image_ops.hpp"
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
@@ -698,6 +700,11 @@ TEST_F(ColmapImageLayoutTest, HalfResolutionDepthAndNormalReachTrainingSize) {
             const auto rgb = camera->load_and_get_image(1, 120);
             ASSERT_EQ(rgb.shape()[1], 79u);
             ASSERT_EQ(rgb.shape()[2], 120u);
+            // The loader's slots are sized from the priors' own size.
+            EXPECT_EQ(camera->depth_prior_size().width, 77);
+            EXPECT_EQ(camera->depth_prior_size().height, 51);
+            EXPECT_EQ(camera->normal_prior_size().width, 77);
+            EXPECT_EQ(camera->normal_prior_size().height, 51);
             lfs::io::PipelinedLoaderConfig config;
             config.io_threads = 1;
             config.cold_process_threads = 1;
@@ -710,14 +717,32 @@ TEST_F(ColmapImageLayoutTest, HalfResolutionDepthAndNormalReachTrainingSize) {
             request.params.max_width = 120;
             request.aux_target_width = camera->image_width();
             request.aux_target_height = camera->image_height();
+            // Priors smaller than the training image travel at their own size.
+            request.depth_own_size = true;
+            request.normal_own_size = true;
             for (size_t sequence = 0; sequence < 2; ++sequence) {
                 request.sequence_id = sequence;
                 pipeline.prefetch({request});
-                const auto ready = pipeline.get();
+                auto ready = pipeline.get();
                 ASSERT_TRUE(ready.error.empty()) << ready.error;
                 ASSERT_TRUE(ready.depth.has_value());
                 ASSERT_TRUE(ready.normal.has_value());
-                ASSERT_NO_FATAL_FAILURE(check(*ready.depth, *ready.normal));
+                for (auto* const event : {&ready.depth_ready, &ready.normal_ready}) {
+                    if (*event)
+                        (*event)->wait();
+                }
+                // The priors arrive at their own size and reach the training size where the loss reads them.
+                ASSERT_EQ(ready.depth->shape(), lfs::core::TensorShape({51, 77}));
+                ASSERT_EQ(ready.normal->shape(), lfs::core::TensorShape({3, 51, 77}));
+                ASSERT_EQ(ready.prior_target_width, 120);
+                ASSERT_EQ(ready.prior_target_height, 79);
+                ASSERT_TRUE(ready.depth_own_size);
+                ASSERT_TRUE(ready.normal_own_size);
+                ASSERT_NO_FATAL_FAILURE(check(
+                    lfs::core::fit_image_prior(*ready.depth, ready.prior_target_height, ready.prior_target_width,
+                                               79, 120, false),
+                    lfs::core::fit_image_prior(*ready.normal, ready.prior_target_height, ready.prior_target_width,
+                                               79, 120, true)));
             }
             // Both loaders must retain their existing failure codes.
             write_derived_image(dataset / "normals/frame.png", source, 32, 32);
@@ -728,6 +753,73 @@ TEST_F(ColmapImageLayoutTest, HalfResolutionDepthAndNormalReachTrainingSize) {
                 EXPECT_EQ(result.error().code, lfs::io::ErrorCode::NORMAL_SIZE_MISMATCH);
             }
         }
+    }
+}
+
+// Training requests keep a prior at its own size only when it holds no more pixels than the
+// training image. A larger prior reaches the trainer at the training image's size, on the first
+// visit and on cached visits; a smaller one at its own size.
+TEST_F(ColmapImageLayoutTest, TrainingRequestsResizePriorsLargerThanTheTrainingImage) {
+    if (!lfs::core::gpu_backend_available(lfs::core::default_gpu_backend()))
+        GTEST_SKIP() << "CUDA device required";
+    ensure_image_loader();
+    const auto source = read_bicycle_pixels();
+    for (const bool larger : {true, false}) {
+        SCOPED_TRACE(larger ? "prior at the photo's 154 x 102" : "prior at 77 x 51");
+        const int prior_w = larger ? 154 : 77;
+        const int prior_h = larger ? 102 : 51;
+        const auto dataset = temp_dir_ / (larger ? "larger" : "smaller");
+        write_derived_image(dataset / "images/frame.png", source, 154, 102);
+        fs::create_directories(dataset / "depth");
+        fs::create_directories(dataset / "normals");
+        const std::vector<uint16_t> depth(static_cast<size_t>(prior_w) * prior_h, 49151);
+        std::vector<uint16_t> normals(static_cast<size_t>(prior_w) * prior_h * 3, 32768);
+        for (size_t i = 2; i < normals.size(); i += 3)
+            normals[i] = 65535;
+        ASSERT_TRUE(lfs::core::save_png(dataset / "depth/frame.png", depth.data(), prior_w, prior_h, 1, 16, 6));
+        ASSERT_TRUE(lfs::core::save_png(dataset / "normals/frame.png", normals.data(), prior_w, prior_h, 3, 16, 6));
+        write_text_file(dataset / "cameras.txt", "1 PINHOLE 154 102 100 100 77 51\n");
+        write_text_file(dataset / "images.txt", "1 1 0 0 0 0 0 0 1 frame.png\n");
+        const lfs::io::LoadOptions options{.max_width = 120, .load_depths = true, .load_normals = true};
+        const auto result = lfs::io::read_colmap_cameras_and_images_text(dataset, "images", options);
+        ASSERT_TRUE(result.has_value()) << result.error().format();
+        auto cameras = std::get<0>(result->value);
+        ASSERT_EQ(cameras.size(), 1u);
+
+        lfs::training::DatasetConfig dataset_config;
+        dataset_config.max_width = 120;
+        const auto camera_dataset = std::make_shared<lfs::training::CameraDataset>(std::move(cameras), dataset_config);
+        lfs::io::PipelinedLoaderConfig config;
+        config.io_threads = 1;
+        config.cold_process_threads = 1;
+        config.decoder_pool_size = 1;
+        config.prefetch_count = 2;
+        lfs::training::PipelinedAuxiliaryImageConfig aux_config;
+        aux_config.load_depths = true;
+        aux_config.load_normals = true;
+        lfs::training::PipelinedDataLoader<lfs::training::InfiniteRandomSampler> loader(
+            camera_dataset, lfs::training::InfiniteRandomSampler(1, 7), config, aux_config);
+        // Two requests are in flight from the start; the visits after them read the cache.
+        for (int visit = 0; visit < 4; ++visit) {
+            SCOPED_TRACE(visit);
+            auto example = loader.next();
+            ASSERT_TRUE(example.has_value());
+            for (auto* const event : {&example->depth_ready, &example->normal_ready}) {
+                if (*event)
+                    (*event)->wait();
+            }
+            ASSERT_TRUE(example->depth.has_value());
+            ASSERT_TRUE(example->normal.has_value());
+            const size_t height = larger ? 79 : 51;
+            const size_t width = larger ? 120 : 77;
+            EXPECT_EQ(example->depth->shape(), lfs::core::TensorShape({height, width}));
+            EXPECT_EQ(example->normal->shape(), lfs::core::TensorShape({3, height, width}));
+            EXPECT_EQ(example->depth_own_size, !larger);
+            EXPECT_EQ(example->normal_own_size, !larger);
+            EXPECT_EQ(example->prior_target_width, 120);
+            EXPECT_EQ(example->prior_target_height, 79);
+        }
+        EXPECT_GE(loader.get_stats().hot_path_hits, 4u);
     }
 }
 
@@ -1247,6 +1339,79 @@ TEST_F(ColmapImageLayoutTest, WriteBackAcceptsTrackObservingOneImageTwice) {
     const auto points = lfs::io::read_colmap_point_cloud(output_dir);
     ASSERT_TRUE(points.has_value()) << points.error().format();
     EXPECT_EQ(points->value.size(), 1);
+}
+
+TEST_F(ColmapImageLayoutTest, WriteBackRoundTripsZeroCameraImageAndPointIds) {
+    const fs::path dataset_dir = temp_dir_ / "dataset";
+    const fs::path text_dir = temp_dir_ / "out_text";
+    const fs::path binary_dir = temp_dir_ / "out_binary";
+
+    write_text_file(dataset_dir / "cameras.txt",
+                    "0 PINHOLE 640 480 500 500 320 240\n");
+    write_text_file(dataset_dir / "images.txt",
+                    "0 1 0 0 0 0 0 0 0 frame_0000.png\n"
+                    "12 34 0 56 78 -1\n"
+                    "1 1 0 0 0 1 2 3 0 frame_0001.png\n"
+                    "90 12 0\n");
+    write_text_file(dataset_dir / "points3D.txt",
+                    "0 10 20 30 1 2 3 0.25 0 0 1 0\n");
+
+    // Text output from the source, then binary output from the re-read text output.
+    for (const auto& [source, output, format] :
+         {std::tuple{dataset_dir, text_dir, lfs::io::ColmapWriteFormat::Text},
+          std::tuple{text_dir, binary_dir, lfs::io::ColmapWriteFormat::Binary}}) {
+        auto cameras_result = lfs::io::read_colmap_cameras_only(source);
+        ASSERT_TRUE(cameras_result.has_value()) << cameras_result.error().format();
+        const auto& cameras = std::get<0>(*cameras_result);
+        ASSERT_EQ(cameras.size(), 2u);
+        std::vector<lfs::io::ColmapCameraWriteData> camera_data;
+        for (const auto& camera : cameras) {
+            EXPECT_EQ(camera->camera_id(), 0);
+            camera_data.push_back({.camera = camera, .data_world_transform = glm::mat4(1.0f)});
+        }
+        const auto write_result = lfs::io::write_colmap_reconstruction(
+            source, output, camera_data, nullptr, glm::mat4(1.0f),
+            lfs::io::ColmapWriteOptions{.format = format});
+        ASSERT_TRUE(write_result.has_value()) << write_result.error().format();
+    }
+
+    const auto images = lfs::io::read_colmap_images_binary(binary_dir / "images.bin");
+    ASSERT_TRUE(images.has_value()) << images.error().format();
+    ASSERT_EQ(images->value.size(), 2u);
+    const auto& first = images->value[0];
+    const auto& second = images->value[1];
+    EXPECT_EQ(first.image_id, 0u);
+    EXPECT_EQ(first.camera_id, 0u);
+    EXPECT_EQ(first.name, "frame_0000.png");
+    ASSERT_EQ(first.points2D.size(), 2u);
+    EXPECT_EQ(first.points2D[0].x, 12.0);
+    EXPECT_EQ(first.points2D[0].y, 34.0);
+    EXPECT_EQ(first.points2D[0].point3D_id, 0u);
+    EXPECT_EQ(first.points2D[1].point3D_id, lfs::io::INVALID_POINT3D_ID);
+    EXPECT_EQ(second.image_id, 1u);
+    EXPECT_EQ(second.camera_id, 0u);
+    EXPECT_EQ(second.name, "frame_0001.png");
+    ASSERT_EQ(second.points2D.size(), 1u);
+    EXPECT_EQ(second.points2D[0].point3D_id, 0u);
+    ASSERT_EQ(second.tvec.size(), 3u);
+    EXPECT_NEAR(second.tvec[0], 1.0f, 1e-6f);
+    EXPECT_NEAR(second.tvec[1], 2.0f, 1e-6f);
+    EXPECT_NEAR(second.tvec[2], 3.0f, 1e-6f);
+
+    const auto points = lfs::io::read_colmap_point3D_binary_records(binary_dir / "points3D.bin");
+    ASSERT_TRUE(points.has_value()) << points.error().format();
+    ASSERT_EQ(points->value.size(), 1u);
+    const auto& point = points->value[0];
+    EXPECT_EQ(point.point3D_id, 0u);
+    EXPECT_EQ(point.xyz[0], 10.0);
+    EXPECT_EQ(point.xyz[1], 20.0);
+    EXPECT_EQ(point.xyz[2], 30.0);
+    EXPECT_EQ(point.error, 0.25);
+    ASSERT_EQ(point.track.size(), 2u);
+    EXPECT_EQ(point.track[0].image_id, 0u);
+    EXPECT_EQ(point.track[0].point2D_idx, 0u);
+    EXPECT_EQ(point.track[1].image_id, 1u);
+    EXPECT_EQ(point.track[1].point2D_idx, 0u);
 }
 
 TEST_F(ColmapImageLayoutTest, WriteBackRemovesStaleOppositeFormatSparseFiles) {

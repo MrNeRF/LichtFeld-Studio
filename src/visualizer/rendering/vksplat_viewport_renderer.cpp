@@ -1729,7 +1729,7 @@ namespace lfs::vis {
         VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
         properties.pNext = &identity;
         vkGetPhysicalDeviceProperties2(context.physicalDevice(), &properties);
-        if (!std::equal(cuda_device->uuid.begin(), cuda_device->uuid.end(), identity.deviceUUID))
+        if (!lfs::core::gpu_device_matches_uuid(*cuda_device, identity.deviceUUID))
             return std::unexpected("Direct CUDA interop requires matching training and viewport GPUs");
         if (!training_completion_) {
             try {

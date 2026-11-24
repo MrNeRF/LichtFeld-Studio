@@ -72,7 +72,7 @@ namespace {
                     same(output, expected);
                     EXPECT_NE(bytes(output), before);
                     table().slice_backward(grid, rgb, grad_output, offset, grad_grid, grad_rgb, params);
-                    backward(grid.ptr<float>(), rgb.ptr<float>(), grad_output.ptr<float>(), direct_grid.ptr<float>(), direct_rgb.ptr<float>(), 2, 2, 2, 5, 7, offset.ptr<float>(), nullptr, warp);
+                    backward(grid.ptr<float>(), rgb.ptr<float>(), grad_output.ptr<float>(), direct_grid.ptr<float>(), direct_rgb.ptr<float>(), 2, 2, 2, 5, 7, offset.ptr<float>(), nullptr);
                     same(grad_grid, direct_grid);
                     same(grad_rgb, direct_rgb);
                     EXPECT_NE(bytes(grad_rgb), before);

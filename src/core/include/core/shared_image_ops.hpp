@@ -52,10 +52,12 @@ namespace lfs::gpu_ops {
         // Returning the result keeps allocation inside the existing launchers.
         core::Tensor (*resize)(const core::Tensor& source, int height, int width, Resample, int kernel_size);
         core::Tensor (*undistort)(const core::Tensor& source, const core::UndistortParams&, bool mask);
+        core::Tensor (*resize_prior_async)(const core::Tensor&, int height, int width, bool normal) = nullptr;
     };
 
 } // namespace lfs::gpu_ops
 
 namespace lfs::core {
+    LFS_CORE_API Tensor fit_image_prior(const Tensor& input, int request_h, int request_w, int render_h, int render_w, bool normal);
     LFS_CORE_API const gpu_ops::SharedImageOps* shared_image_ops(GpuBackend backend);
 } // namespace lfs::core

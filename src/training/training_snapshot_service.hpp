@@ -29,6 +29,7 @@ namespace lfs::training {
     class PPISPControllerPool;
     class POPSpaController;
     class AdamOptimizer;
+    class CalibrationCorrection;
 
     struct TrainingSnapshotServiceConfig {
 #if defined(__APPLE__)
@@ -127,6 +128,7 @@ namespace lfs::training {
         const PPISPControllerPool* ppisp_controller_pool = nullptr;
         const POPSpaController* popspa_controller = nullptr;
         const AdamOptimizer* popspa_optimizer = nullptr;
+        const CalibrationCorrection* calibration_correction = nullptr;
         std::span<const lfs::core::TensorExecutionTarget> mutating_queues;
         // Runs inside the measured safe-point clock after all mutation streams
         // are quiescent. The callback may only copy detached value state and

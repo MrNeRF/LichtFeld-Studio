@@ -1,3 +1,13 @@
+/* Shared border roles and shape scale. */
+
+.training-preparation-status {
+    border-radius: 4dp;
+}
+
+.training-preparation-indicator {
+    border-radius: 4dp;
+}
+
 /* Training panel theme overrides. */
 
 .training-toolbar-action img {
@@ -30,12 +40,12 @@
 }
 
 .training-panel-block > .section-header {
-    border-top-color: @{panel.primary_border_faint};
+    border-top-color: @{border};
 }
 
 .training-panel-title {
     color: @{text};
-    border-top-color: @{panel.primary_border_soft};
+    border-top-color: @{primary};
 }
 
 .training-panel-title-icon {
@@ -74,7 +84,7 @@
 
 .mask-settings-group,
 .sharpen-settings-group {
-    border-left-color: @{panel.primary_accent};
+    border-left-color: @{primary};
 }
 
 .mask-settings-divider {

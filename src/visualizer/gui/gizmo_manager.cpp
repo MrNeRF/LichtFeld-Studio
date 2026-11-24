@@ -1799,6 +1799,7 @@ namespace lfs::vis::gui {
         ToolStateStamp stamp;
         stamp.valid = true;
         stamp.ui_hidden = ui_hidden;
+        stamp.gt_compare = rendering_manager && rendering_manager->isGTComparisonActive();
         stamp.has_scene_manager = scene_manager != nullptr;
         stamp.has_selected_node = has_selected_node;
         stamp.align_tool = align_tool;
@@ -1809,9 +1810,15 @@ namespace lfs::vis::gui {
         stamp.gizmo_type = gizmo_type;
         stamp.selected_node_name = scene_manager ? scene_manager->getSelectedNodeName() : std::string{};
         stamp.selection_mode = selection_mode_;
-        if (stamp == last_tool_state_stamp_)
+        if (stamp == last_tool_state_stamp_) {
+            if (stamp.gt_compare && is_crop_tool && !ui_hidden)
+                (void)ensureCropToolState();
             return;
+        }
         last_tool_state_stamp_ = stamp;
+        if (stamp.gt_compare && (cropbox_gizmo_active_ || ellipsoid_gizmo_active_ || crop_tool_drag_active_ ||
+                                 selection_volume_gizmo_active_ || crop_polygon_vertex_drag_))
+            cancelActiveGizmoDrag();
         resetIdleGizmoHover();
 
         if (rendering_manager)
@@ -3061,6 +3068,9 @@ namespace lfs::vis::gui {
     }
 
     void GizmoManager::renderCropBoxGizmo(const UIContext& ctx, const ViewportLayout& viewport) {
+        if (last_tool_state_stamp_.gt_compare)
+            return;
+
         if (isVolumeGizmoToolActive() && crop_tool_shape_ == CropToolShape::Box) {
             renderCropToolBoxGizmo(ctx, viewport);
             return;
@@ -3543,6 +3553,9 @@ namespace lfs::vis::gui {
     }
 
     void GizmoManager::renderEllipsoidGizmo(const UIContext& ctx, const ViewportLayout& viewport) {
+        if (last_tool_state_stamp_.gt_compare)
+            return;
+
         // The polygon prism is centred like the ellipsoid and shares its crop tool gizmo.
         if (isVolumeGizmoToolActive() &&
             (crop_tool_shape_ == CropToolShape::Ellipsoid || crop_tool_shape_ == CropToolShape::Polygon)) {

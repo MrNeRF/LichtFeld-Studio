@@ -5,6 +5,7 @@
 
 #include "core/tensor.hpp"
 
+#include <functional>
 #include <memory>
 
 namespace lfs::gpu_ops {
@@ -18,6 +19,14 @@ namespace lfs::gpu_ops {
         virtual ~BackendState() = default;
     };
     using State = std::unique_ptr<BackendState>;
+
+    // Storage borrowed between raster forward and backward. Native arenas retain
+    // their own allocation. Tensor-backed arenas also retain a queue-visible lease.
+    struct StepScratch {
+        char* native = nullptr;
+        Tensor storage;
+    };
+    using StepScratchAllocator = std::function<StepScratch(size_t)>;
 
     struct HW {
         int h = 0;

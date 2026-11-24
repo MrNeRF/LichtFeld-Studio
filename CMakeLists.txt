@@ -1569,7 +1569,14 @@ set(CMAKE_INSTALL_OPENMP_LIBRARIES TRUE)
 include(GNUInstallDirs)
 include(InstallRequiredSystemLibraries)
 
-install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+if(WIN32 AND BUILD_PORTABLE)
+    if(NOT CMAKE_INSTALL_BINDIR STREQUAL "bin")
+        message(FATAL_ERROR "Windows portable packages require CMAKE_INSTALL_BINDIR=bin")
+    endif()
+    install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION "." COMPONENT runtime)
+else()
+    install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
 install(TARGETS lfs_core lfs_error lfs_file_io lfs_image_codecs lfs_media
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
@@ -1675,6 +1682,7 @@ install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/fonts" DESTINAT
 install(FILES "${CMAKE_SOURCE_DIR}/src/rendering/resources/assets/JetBrainsMono-Regular.ttf" DESTINATION "${INSTALL_RESOURCE_DIR}/assets/fonts")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/themes" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/environments" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
+install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/vr" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
 install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/lichtfeld-icon.png" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
 install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/lichtfeld-splash-logo.png" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
 install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/lichtfeld-splash-logo-dark.png" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
@@ -1790,7 +1798,8 @@ if(BUILD_PORTABLE)
     endforeach()
 
     # Helper: bundle runtime dependencies for a target.
-    # On Windows DLLs must live beside the exe (bin/); on Linux they go in lib/.
+    # Windows DLLs stay in bin/; the portable root EXE uses a private assembly.
+    # Linux runtime libraries go in lib/.
     if(WIN32)
         set(_BUNDLE_DEST "${CMAKE_INSTALL_BINDIR}")
     else()
@@ -1927,6 +1936,14 @@ install(CODE "
     endif()
     file(INSTALL \"\${_lfs_notice_output}\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}\")
 " COMPONENT runtime)
+
+if(WIN32 AND BUILD_PORTABLE)
+    # Resolve startup imports before main(), without changing the build-tree EXE.
+    configure_file(cmake/InstallWindowsPortableManifest.cmake.in
+        ${CMAKE_CURRENT_BINARY_DIR}/InstallWindowsPortableManifest.cmake @ONLY)
+    install(SCRIPT ${CMAKE_CURRENT_BINARY_DIR}/InstallWindowsPortableManifest.cmake
+        COMPONENT runtime)
+endif()
 
 option(BUILD_SPLAT_TRANSFER_TESTS "Build splat drag export contract tests" ${BUILD_FORMAT_TESTS})
 option(BUILD_SELECTION_OUTLINE_TESTS "Build selection outline request and persistence contracts" ${BUILD_VISUALIZER_TESTS})

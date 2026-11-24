@@ -123,6 +123,7 @@ namespace lfs::training {
                     .sh_rest_reg_loss = device_f32(fused_extra_gradients.sh_rest_reg_loss_out, {1}),
                     .impact_sum = device_f32(fused_extra_gradients.impact_sum_out, {static_cast<size_t>(gaussian_model.size())}),
                     .impact_peak = device_f32(fused_extra_gradients.impact_peak_out, {static_cast<size_t>(gaussian_model.size())}),
+                    .reg_rendered_only = fused_extra_gradients.reg_rendered_only,
                     .color_variance_weight = color_variance.weight,
                     .color_variance_loss = color_variance.loss,
                     .color_variance_pixel_weight = color_variance.pixel_weight,

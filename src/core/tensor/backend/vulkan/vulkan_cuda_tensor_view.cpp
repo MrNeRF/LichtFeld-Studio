@@ -65,7 +65,7 @@ namespace lfs::core {
             VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
             properties.pNext = &identity;
             vkGetPhysicalDeviceProperties2(context->physical_device(), &properties);
-            if (!cuda || !std::equal(cuda->uuid.begin(), cuda->uuid.end(), identity.deviceUUID))
+            if (!cuda || !lfs::core::gpu_device_matches_uuid(*cuda, identity.deviceUUID))
                 return false;
             context->cuda_imports()->import_timeline(context->timeline());
             return context->cuda_imports()->timeline_imported();

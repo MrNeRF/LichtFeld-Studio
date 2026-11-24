@@ -43,6 +43,10 @@ namespace lfs::training {
 
         float growth_factor = 1.5f;  // Capacity growth factor
         size_t initial_capacity = 0; // Pre-allocation size (0 = auto)
+
+        // The higher SH coefficients take no step during the first 1,000 iterations. MRNF trains them from
+        // the first step. A property of the strategy, not stored in checkpoints.
+        bool sh_warmup = true;
     };
 
     struct AdamParamState {
@@ -129,6 +133,7 @@ namespace lfs::training {
         [[nodiscard]] const bool* mean_step_far_mask() const noexcept {
             return mean_step_far_mask_;
         }
+        [[nodiscard]] const lfs::core::Tensor& mean_step_far_mask_tensor() const noexcept { return mean_step_far_mask_storage_; }
         [[nodiscard]] int mean_step_far_mask_n() const noexcept { return mean_step_far_mask_n_; }
         [[nodiscard]] const lfs::core::Tensor& crop_damping_mask() const noexcept {
             return crop_damping_mask_;

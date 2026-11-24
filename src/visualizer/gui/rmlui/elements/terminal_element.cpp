@@ -49,7 +49,7 @@ namespace lfs::vis::gui {
             if (style.bg != 0)
                 out += "background-color: " + terminalColorToCss(style.bg) + ";";
             if (style.bold)
-                out += "font-weight: bold;";
+                out += "font-weight: 600;";
             if (style.underline)
                 out += "text-decoration: underline;";
             out += "\">";

@@ -93,7 +93,7 @@ namespace lfs::core {
             const auto stream = getCurrentCUDAStream();
             return mask ? undistort_mask(source, params, stream) : undistort_image(source, params, stream);
         }
-        const SharedImageOps kCudaSharedImageOps{sentinel_fill, sentinel_check, convert, rgba_split, mask, resize, undistort};
+        const SharedImageOps kCudaSharedImageOps{sentinel_fill, sentinel_check, convert, rgba_split, mask, resize, undistort, resize_prior_async};
     } // namespace
     const gpu_ops::SharedImageOps& cuda_shared_image_ops() { return kCudaSharedImageOps; }
 } // namespace lfs::core

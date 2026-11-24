@@ -288,6 +288,7 @@ namespace lfs::core {
             params.dst_fx, params.dst_fy, params.dst_cx, params.dst_cy, Tensor{}, Tensor{},
             CameraModelType::PINHOLE, image_name, _image_path, _mask_path,
             params.dst_width, params.dst_height, uid, _camera_id, _depth_path, _normal_path);
+        view->_photograph_uid = _uid;
         view->_split = _split;
         view->_has_alpha = _has_alpha;
         view->_has_image = _has_image;
@@ -321,6 +322,7 @@ namespace lfs::core {
           _FoVy(other._FoVy),
           _uid(other._uid),
           _camera_id(other._camera_id),
+          _photograph_uid(other._photograph_uid),
           _focal_x(other._focal_x),
           _focal_y(other._focal_y),
           _center_x(other._center_x),
@@ -335,6 +337,8 @@ namespace lfs::core {
           _mask_path(std::move(other._mask_path)),
           _depth_path(std::move(other._depth_path)),
           _normal_path(std::move(other._normal_path)),
+          _depth_prior_size(other._depth_prior_size),
+          _normal_prior_size(other._normal_prior_size),
           _has_alpha(other._has_alpha),
           _has_image(other._has_image),
           _split(other._split),
@@ -399,6 +403,7 @@ namespace lfs::core {
             _FoVy = other._FoVy;
             _uid = other._uid;
             _camera_id = other._camera_id;
+            _photograph_uid = other._photograph_uid;
             _focal_x = other._focal_x;
             _focal_y = other._focal_y;
             _center_x = other._center_x;
@@ -413,6 +418,8 @@ namespace lfs::core {
             _mask_path = std::move(other._mask_path);
             _depth_path = std::move(other._depth_path);
             _normal_path = std::move(other._normal_path);
+            _depth_prior_size = other._depth_prior_size;
+            _normal_prior_size = other._normal_prior_size;
             _has_alpha = other._has_alpha;
             _has_image = other._has_image;
             _split = other._split;
@@ -468,6 +475,7 @@ namespace lfs::core {
     Camera::Camera(const Camera& other, const Tensor& transform)
         : _uid(other._uid),
           _camera_id(other._camera_id),
+          _photograph_uid(other._photograph_uid),
           _focal_x(other._focal_x),
           _focal_y(other._focal_y),
           _center_x(other._center_x),
@@ -482,6 +490,8 @@ namespace lfs::core {
           _mask_path(other._mask_path),
           _depth_path(other._depth_path),
           _normal_path(other._normal_path),
+          _depth_prior_size(other._depth_prior_size),
+          _normal_prior_size(other._normal_prior_size),
           _has_alpha(other._has_alpha),
           _has_image(other._has_image),
           _split(other._split),
@@ -492,7 +502,8 @@ namespace lfs::core {
           _image_size_loaded(other._image_size_loaded),
           _source_image_width(other._source_image_width),
           _source_image_height(other._source_image_height),
-          _cam_position(other._cam_position),
+          // Its own position, like the transform the caller hands it: moving one camera never moves the other.
+          _cam_position(other._cam_position.is_valid() ? other._cam_position.clone() : Tensor{}),
           _FoVx(other._FoVx),
           _FoVy(other._FoVy),
           _undistort_precomputed(other._undistort_precomputed),
@@ -763,12 +774,14 @@ namespace lfs::core {
 
     void Camera::set_depth_path(std::filesystem::path path) {
         _depth_path = std::move(path);
+        _depth_prior_size = {};
         _depth_quantization_step = -1.0f;
         release_depth_cache();
     }
 
     void Camera::set_normal_path(std::filesystem::path path) {
         _normal_path = std::move(path);
+        _normal_prior_size = {};
         release_normal_cache();
     }
 
@@ -1298,6 +1311,10 @@ namespace lfs::core {
     }
 
     void Camera::set_pose(const Tensor& R, const Tensor& T) {
+        set_pose(R, T, nullptr);
+    }
+
+    void Camera::set_pose(const Tensor& R, const Tensor& T, const float* shared_centre) {
         auto R_cpu = R.cpu().contiguous();
         auto T_cpu = T.cpu().contiguous();
         if (R_cpu.numel() != 9 || T_cpu.numel() != 3)
@@ -1307,10 +1324,13 @@ namespace lfs::core {
         const std::array<float, 16> w2c{r[0], r[1], r[2], t[0], r[3], r[4], r[5], t[1],
                                         r[6], r[7], r[8], t[2], 0.0f, 0.0f, 0.0f, 1.0f};
         std::array<float, 3> centre{};
-        for (int j = 0; j < 3; ++j)
-            centre[j] = -(r[j] * t[0] + r[3 + j] * t[1] + r[6 + j] * t[2]);
+        if (!shared_centre) {
+            for (int j = 0; j < 3; ++j)
+                centre[j] = -(r[j] * t[0] + r[3 + j] * t[1] + r[6 + j] * t[2]);
+            shared_centre = centre.data();
+        }
         set_device_pose(Tensor::from_vector(std::vector<float>(w2c.begin(), w2c.end()), {4, 4}, Device::CPU),
-                        Tensor::from_vector(std::vector<float>(centre.begin(), centre.end()), {3}, Device::CPU));
+                        Tensor::from_vector(std::vector<float>(shared_centre, shared_centre + 3), {3}, Device::CPU));
         _R = R_cpu.reshape({3, 3});
         _T = T_cpu.reshape({3});
     }

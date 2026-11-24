@@ -149,11 +149,14 @@ namespace nvimgcodec {
 
     nvimgcodecProcessingStatus_t ImageGenericDecoder::canProcessImpl(Entry& sample, ProcessorEntry* processor, int tid) noexcept {
         NVIMGCODEC_LOG_TRACE(this->logger_, tid << ": " << processor->id_ << " canDecode #" << sample.sample_idx);
-        nvimgcodecProcessingStatus_t status;
+        nvimgcodecProcessingStatus_t status = NVIMGCODEC_PROCESSING_STATUS_UNKNOWN;
         try {
-            processor->instance_->canDecode(
+            bool can_decode = processor->instance_->canDecode(
                 sample.getImageDesc(), sample.code_stream->getCodeStreamDesc(),
                 static_cast<const nvimgcodecDecodeParams_t*>(sample.params), &status, tid);
+            // A refusal must not be mistaken for acceptance, even if the decoder left no reason for it.
+            if (!can_decode && (status == NVIMGCODEC_PROCESSING_STATUS_SUCCESS || status == NVIMGCODEC_PROCESSING_STATUS_UNKNOWN))
+                status = NVIMGCODEC_PROCESSING_STATUS_FAIL;
             NVIMGCODEC_LOG_DEBUG(
                 this->logger_, tid << ": " << processor->id_ << " canDecode #" << sample.sample_idx << " returned " << status);
             return status;
@@ -202,14 +205,18 @@ namespace nvimgcodec {
             // in initState()), so any sample carries the correct pointer.
             assert(!batched_processed_.empty());
             auto* batch_params = static_cast<const nvimgcodecDecodeParams_t*>(batched_processed_.front()->params);
-            auto ret = processor.instance_->decodeBatch(
+            const bool success = processor.instance_->decodeBatch(
                 batched_image_descs_.data(), batched_code_stream_descs_.data(), batch_params, batched_processed_.size(), 0);
-            if (ret != NVIMGCODEC_STATUS_SUCCESS)
-                return false;
+            if (!success) {
+                for (auto* sample : batched_processed_) {
+                    if (sample->status == NVIMGCODEC_PROCESSING_STATUS_SUCCESS || sample->status == NVIMGCODEC_PROCESSING_STATUS_UNKNOWN)
+                        sample->status = NVIMGCODEC_PROCESSING_STATUS_FAIL;
+                }
+            }
 
             // Now handle the copies after decode
             for (auto* sample : batched_processed_) {
-                if (ret == NVIMGCODEC_STATUS_SUCCESS && sample->status == NVIMGCODEC_PROCESSING_STATUS_SUCCESS) {
+                if (sample->status == NVIMGCODEC_PROCESSING_STATUS_SUCCESS) {
                     if (sample->should_copy) {
                         nvtx3::scoped_range marker{"copyToOutputBuffer " + std::to_string(sample->sample_idx)};
                         copyToOutputBuffer(sample->orig_image_info, sample->image_info, tid);
@@ -220,7 +227,8 @@ namespace nvimgcodec {
         } catch (const std::exception& e) {
             NVIMGCODEC_LOG_ERROR(logger_, "Exception during decodeBatch: " << e.what());
             for (auto* sample : batched_processed_) {
-                sample->status = NVIMGCODEC_PROCESSING_STATUS_FAIL;
+                if (sample->status == NVIMGCODEC_PROCESSING_STATUS_SUCCESS || sample->status == NVIMGCODEC_PROCESSING_STATUS_UNKNOWN)
+                    sample->status = NVIMGCODEC_PROCESSING_STATUS_FAIL;
             }
             return false;
         }

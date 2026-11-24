@@ -29,6 +29,8 @@ namespace lfs::training {
     const TrainingOps& cuda_training_ops_table() {
         static const TrainingOps table{
             .backend = core::GpuBackend::CUDA,
+            .calibration = &cuda_calibration_ops(),
+            .pose = &cuda_pose_ops(),
             .photometric = &cuda_photometric_ops(),
             .adam = &cuda_adam_ops(),
             .mcmc = &cuda_mcmc_ops(),

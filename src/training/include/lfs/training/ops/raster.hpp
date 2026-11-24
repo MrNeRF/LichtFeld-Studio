@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #pragma once
+#include <functional>
 
 #include "lfs/training/ops/domain_types.hpp"
 #include "lfs/training/ops/types.hpp"
@@ -109,6 +110,8 @@ namespace lfs::gpu_ops {
         Tensor rendered_count, erank_reg_loss, dc_reg_loss, sh_rest_reg_loss;
         // Optional per-splat [N] float32 outputs: summed and peak per-pixel blend weight.
         Tensor impact_sum, impact_peak;
+        Tensor blend_peak;
+        bool reg_rendered_only = false;
         // SteadySplats color variance loss against the expected splat color, off at
         // weight 0. The saved forward image must retain the raw render until backward.
         // color_variance_loss is an optional
@@ -176,6 +179,7 @@ namespace lfs::gpu_ops {
         // |T * alpha * (color - color behind)|^2, into scores ([N, 8], the PopspaOps
         // encoding). The frame stays live; backward or release still follows.
         void (*pop_scores)(const FastSaved&, In bg_color, In bg_image, Out scores) = nullptr;
+        StepScratchAllocator (*begin_loss_phase)(FastSaved&) = nullptr;
     };
 
 } // namespace lfs::gpu_ops

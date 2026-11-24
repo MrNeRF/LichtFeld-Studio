@@ -28,7 +28,9 @@ namespace {
         explicit HostColorEncoder(std::unique_ptr<lfs::media::detail::GpuJpegEncoder> encoder) : encoder_(std::move(encoder)) {}
         std::size_t capacity() const noexcept override { return encoder_->capacity(); }
         bool canConvertHardware() const noexcept override { return false; }
-        void convertHardware(const lfs::media::detail::CudaVideoFrame&, std::uint8_t*) override { throw std::logic_error("host color test unexpectedly converted hardware"); }
+        void convertHardware(const lfs::media::detail::CudaVideoFrame&) override { throw std::logic_error("host color test unexpectedly converted hardware"); }
+        std::optional<double> scoreHardware(lfs::io::SharpnessAlgorithm) override { return std::nullopt; }
+        void readHardware(std::uint8_t*) override { throw std::logic_error("unexpected hardware frame"); }
         void finishHardware() override { encoder_->finishHardware(); }
         void* queueHardware(std::size_t) override { throw std::logic_error("host color test unexpectedly queued hardware"); }
         void* queueHost(std::size_t index, const std::uint8_t* bytes) override { return encoder_->queueHost(index, bytes); }

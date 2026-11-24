@@ -4,7 +4,7 @@
 
 .progress-dialog {
     background-color: @{modal.surface};
-    border-color: @{modal.border};
+    border-color: @{border};
     border-radius: @{num(size.window_rounding)}dp;
 }
 

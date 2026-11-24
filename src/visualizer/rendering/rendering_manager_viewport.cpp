@@ -285,6 +285,16 @@ namespace lfs::vis {
             static_cast<float>(viewport_width),
             static_cast<float>(viewport_height)};
 
+        const auto& presentation = viewState(view);
+        const auto extent = presentation.gt_composite_extent;
+        if (extent.x > 0 && extent.y > 0 && viewport_width > 0 && viewport_height > 0 &&
+            presentation.split_view_service_.isGTComparisonActive(settingsForView(view))) {
+            const auto rect = presentation.gt_composite_rect;
+            const glm::vec2 scale = glm::vec2(viewport_size) / glm::vec2(extent);
+            const glm::vec2 first = glm::round(glm::vec2(rect.x, rect.y) * scale);
+            const glm::vec2 last = glm::round(glm::vec2(rect.x + rect.z, rect.y + rect.w) * scale);
+            return {first.x, first.y, std::max(1.f, last.x - first.x), std::max(1.f, last.y - first.y)};
+        }
         if (viewState(view).gt_comparison_published_actual_frame_) {
             const auto& published = *viewState(view).gt_comparison_published_actual_frame_;
             const glm::ivec4 physical_rect =

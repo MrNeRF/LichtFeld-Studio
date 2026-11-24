@@ -212,18 +212,34 @@ namespace lfs::vis::gui {
         last_theme_signature_ = theme_signature;
         has_theme_signature_ = true;
 
-        if (!base_rcss_loaded_) {
+        if (!stylesheets_loaded_) {
+            panel_theme_rcss_ = rml_theme::loadBaseRCSS("rmlui/panel_host.theme.rcss");
             try {
                 const auto document_path = resolveDocumentPath(rml_path_);
-                std::unordered_set<std::string> loaded_rcss;
-                for (const auto& linked_rcss :
-                     rml_documents::loadLinkedStylesheetPaths(document_path)) {
-                    appendBaseRCSS(base_rcss_, loaded_rcss, linked_rcss);
-                }
+                const auto linked_rcss = rml_documents::loadLinkedStylesheetPaths(document_path);
+                std::unordered_set<std::string> loaded_base;
+                for (const auto& path : linked_rcss)
+                    appendBaseRCSS(base_rcss_, loaded_base, path);
 
                 auto sibling_rcss = document_path;
                 sibling_rcss.replace_extension(".rcss");
-                appendBaseRCSS(base_rcss_, loaded_rcss, sibling_rcss);
+                appendBaseRCSS(base_rcss_, loaded_base, sibling_rcss);
+
+                std::unordered_set<std::string> loaded_themes;
+                const auto append_theme = [&](std::filesystem::path path) {
+                    if (isThemeProvidedStaticStylesheet(path))
+                        return;
+                    path.replace_extension(".theme.rcss");
+                    // The widget theme is shared by immediate and hybrid panels.
+                    if (path.filename() == "im_mode_panel.theme.rcss" &&
+                        path.lexically_normal() == lfs::vis::getAssetPath("rmlui/im_mode_panel.theme.rcss").lexically_normal())
+                        return;
+                    appendBaseRCSS(panel_theme_rcss_, loaded_themes, path);
+                };
+                // Shared linked theme rules precede the document-specific overrides.
+                for (const auto& path : linked_rcss)
+                    append_theme(path);
+                append_theme(document_path);
             } catch (const std::exception& e) {
                 LOG_INFO("RCSS load failed for '{}': {}", rml_path_, e.what());
             }
@@ -232,25 +248,11 @@ namespace lfs::vis::gui {
                     base_rcss_ += "\n";
                 base_rcss_ += inline_rcss_;
             }
-            base_rcss_loaded_ = true;
-        }
-
-        std::string panel_theme = rml_theme::loadBaseRCSS("rmlui/panel_host.theme.rcss");
-        try {
-            auto theme_path = resolveDocumentPath(rml_path_);
-            theme_path.replace_extension(".theme.rcss");
-            std::error_code ec;
-            if (lfs::core::native_fs::exists(theme_path, ec)) {
-                if (!panel_theme.empty())
-                    panel_theme += "\n";
-                panel_theme += rml_theme::loadBaseRCSS(lfs::core::path_to_utf8(theme_path));
-            }
-        } catch (const std::exception&) {
-            // Sibling theme files are optional; missing ones should not produce startup noise.
+            stylesheets_loaded_ = true;
         }
 
         LOG_TIMER_THRESHOLD(context_name_ + ".rml_theme_apply", 2.0);
-        rml_theme::applyTheme(document_, base_rcss_, panel_theme);
+        rml_theme::applyTheme(document_, base_rcss_, panel_theme_rcss_);
         content_dirty_ = true;
         direct_cache_dirty_ = true;
         return true;
@@ -259,11 +261,12 @@ namespace lfs::vis::gui {
     bool RmlPanelHost::ensureContext() {
         if (rml_context_)
             return true;
-        rml_context_ = manager_->createContext(context_name_, 100, 100, desktop_requested_);
-        if (auto* native = nativeWindow()) {
-            SDL_SetWindowPosition(native, static_cast<int>(desktop_bounds_[0]), static_cast<int>(desktop_bounds_[1]));
-            SDL_SetWindowSize(native, static_cast<int>(desktop_bounds_[2]), static_cast<int>(desktop_bounds_[3]));
-        }
+        const std::optional<WindowRectangle> bounds = desktop_requested_
+                                                          ? std::optional<WindowRectangle>{{static_cast<int>(desktop_bounds_[0]), static_cast<int>(desktop_bounds_[1]),
+                                                                                            static_cast<int>(desktop_bounds_[2]), static_cast<int>(desktop_bounds_[3])}}
+                                                          : std::nullopt;
+        rml_context_ = manager_->createContext(context_name_, bounds ? bounds->width : 100, bounds ? bounds->height : 100,
+                                               desktop_requested_, bounds);
         return rml_context_ != nullptr;
     }
 
@@ -327,7 +330,7 @@ namespace lfs::vis::gui {
         // across UnloadDocument(), where they immediately become dangling.
         live_inspector_resize_target_ = nullptr;
         close_button_ = nullptr;
-        minimize_button_ = maximize_button_ = nullptr;
+        pin_button_ = minimize_button_ = maximize_button_ = nullptr;
         close_button_bound_ = false;
         resize_cursor_override_.clear();
         if (document_) {
@@ -341,7 +344,8 @@ namespace lfs::vis::gui {
         content_el_ = nullptr;
         scroll_el_ = nullptr;
         base_rcss_.clear();
-        base_rcss_loaded_ = false;
+        panel_theme_rcss_.clear();
+        stylesheets_loaded_ = false;
         has_text_focus_ = false;
         wants_keyboard_ = false;
         has_theme_signature_ = false;
@@ -1227,14 +1231,19 @@ namespace lfs::vis::gui {
 
     void RmlPanelHost::WindowControlListener::ProcessEvent(Rml::Event& event) {
         auto* target = event.GetTargetElement();
-        while (target && target->GetId() != "minimize-btn" && target->GetId() != "maximize-btn" && target->GetId() != "title-text")
+        while (target && target->GetId() != "pin-btn" && target->GetId() != "minimize-btn" && target->GetId() != "maximize-btn" && target->GetId() != "title-text")
             target = target->GetParentNode();
         if (!target)
             return;
         const auto& id = target->GetId();
         auto& registry = PanelRegistry::instance();
         const std::string panel_id(host_->panelId());
-        if (id == "minimize-btn") {
+        if (id == "pin-btn") {
+            if (const auto pinned = host_->manager_->nativeWindowPinned(panel_id)) {
+                host_->manager_->setNativeWindowPinned(panel_id, !*pinned);
+                host_->syncWindowControls();
+            }
+        } else if (id == "minimize-btn") {
             if (host_->nativeWindow())
                 host_->manager_->minimizeNativeWindow(host_->rml_context_);
             else
@@ -1279,8 +1288,11 @@ namespace lfs::vis::gui {
             return;
         if (auto* native = nativeWindow(); native && state)
             state = (SDL_GetWindowFlags(native) & SDL_WINDOW_MAXIMIZED) ? FloatingWindowState::Maximized : FloatingWindowState::Normal;
-        if (presentation_ == state)
+        if (presentation_ == state) {
+            if (desktop_requested_)
+                syncWindowControls();
             return;
+        }
         presentation_ = state;
         syncWindowControls();
     }
@@ -1289,6 +1301,18 @@ namespace lfs::vis::gui {
         if (!document_)
             return;
         const bool allowed = floating_ && presentation_.has_value();
+        if (pin_button_) {
+            const auto pinned = manager_->nativeWindowPinned(panelId());
+            if (pin_button_->IsClassSet("available") != (allowed && pinned.has_value())) {
+                pin_button_->SetClass("available", allowed && pinned.has_value());
+                render_needed_ = direct_cache_dirty_ = true;
+            }
+            if (pin_button_->IsClassSet("pinned") != pinned.value_or(false)) {
+                pin_button_->SetClass("pinned", pinned.value_or(false));
+                pin_button_->SetAttribute("aria-pressed", pinned.value_or(false) ? "true" : "false");
+                render_needed_ = direct_cache_dirty_ = true;
+            }
+        }
         const auto desired = allowed ? windowState() : FloatingWindowState::Normal;
         const bool was_minimized = document_->IsClassSet("window-minimized");
         const bool was_maximized = document_->IsClassSet("window-maximized");
@@ -1319,7 +1343,7 @@ namespace lfs::vis::gui {
 
     std::optional<PanelDrawBounds> RmlPanelHost::titleControlsBounds() const {
         std::optional<PanelDrawBounds> bounds;
-        for (auto* control : {minimize_button_, maximize_button_, close_button_}) {
+        for (auto* control : {pin_button_, minimize_button_, maximize_button_, close_button_}) {
             if (!control || !control->IsVisible())
                 continue;
             const auto pos = control->GetAbsoluteOffset(Rml::BoxArea::Border);
@@ -1349,6 +1373,7 @@ namespace lfs::vis::gui {
         if (close_button_)
             close_button_->AddEventListener("click", &close_listener_);
         minimize_button_ = document_->GetElementById("minimize-btn");
+        pin_button_ = document_->GetElementById("pin-btn");
         maximize_button_ = document_->GetElementById("maximize-btn");
         if (auto* title = document_->GetElementById("title-bar"))
             title->AddEventListener("click", &window_control_listener_);

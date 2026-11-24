@@ -68,10 +68,22 @@ namespace lfs::core {
         return getExecutablePath().parent_path();
     }
 
+    // Installed Windows portable packages keep the application at the root and
+    // its runtime in bin/. Development and other install layouts are unchanged.
+    inline std::filesystem::path getRuntimeDir(const std::filesystem::path& exe_dir = getExecutableDir()) {
+#ifdef _WIN32
+        if (const auto runtime = exe_dir / "bin";
+            lfs::core::native_fs::is_regular_file(runtime / "bin.manifest")) {
+            return runtime;
+        }
+#endif
+        return exe_dir;
+    }
+
     // Resource lookup: production (bin/../share/LichtFeld-Studio) or dev (build/resources)
     inline std::filesystem::path getResourceBaseDir() {
         static const std::filesystem::path resource_base = [] {
-            const auto exe_dir = getExecutableDir();
+            const auto exe_dir = getRuntimeDir();
 
             // Production: exe in bin/, resources in ../share/LichtFeld-Studio/
             if (const auto prod = exe_dir.parent_path() / "share" / "LichtFeld-Studio";
@@ -98,7 +110,7 @@ namespace lfs::core {
 
     // Library path lookup: production (bin/../lib) or build directory
     inline std::filesystem::path getLibDir() {
-        const auto exe_dir = getExecutableDir();
+        const auto exe_dir = getRuntimeDir();
 
         // Production: exe in bin/, libs in ../lib/
         if (const auto prod = exe_dir.parent_path() / "lib";
@@ -116,7 +128,7 @@ namespace lfs::core {
 
     // Python module directory (lichtfeld.so/.pyd)
     inline std::filesystem::path getPythonModuleDir() {
-        const auto exe_dir = getExecutableDir();
+        const auto exe_dir = getRuntimeDir();
 
         auto module_exists = [](const std::filesystem::path& dir) {
             std::error_code ec;
@@ -289,7 +301,7 @@ namespace lfs::core {
 
     // Python home directory (for embedded Python)
     inline std::filesystem::path getPythonHome() {
-        const auto exe_dir = getExecutableDir();
+        const auto exe_dir = getRuntimeDir();
 
 #ifdef _WIN32
         // Windows Production: exe in bin/, Python stdlib in ../Lib/
@@ -323,7 +335,7 @@ namespace lfs::core {
 
     // Type stubs directory (lichtfeld/*.pyi)
     inline std::filesystem::path getTypingsDir() {
-        const auto exe_dir = getExecutableDir();
+        const auto exe_dir = getRuntimeDir();
 
         auto stubs_exist = [](const std::filesystem::path& dir) {
             return lfs::core::native_fs::exists(dir / "lichtfeld" / "__init__.pyi");
@@ -349,7 +361,7 @@ namespace lfs::core {
 
     // Embedded Python executable (base interpreter for uv sync/venv and plugin isolation)
     inline std::filesystem::path getEmbeddedPython() {
-        const auto exe_dir = getExecutableDir();
+        const auto exe_dir = getRuntimeDir();
 
 #ifdef _WIN32
         if (const auto p = exe_dir / "python.exe"; lfs::core::native_fs::exists(p))
@@ -383,7 +395,7 @@ namespace lfs::core {
 
     // nvImageCodec extensions directory
     inline std::filesystem::path getExtensionsDir() {
-        const auto exe_dir = getExecutableDir();
+        const auto exe_dir = getRuntimeDir();
 
         // Distribution: exe in bin/, extensions in ../extensions/ (sibling directories)
         if (const auto ext = exe_dir.parent_path() / "extensions"; lfs::core::native_fs::exists(ext)) {

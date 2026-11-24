@@ -1,6 +1,35 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+.area {
+    border-radius: @{radius.surface}dp;
+}
+
+.area-header {
+    border-top-left-radius: @{radius.surface}dp;
+    border-top-right-radius: @{radius.surface}dp;
+}
+
+.editor-switch {
+    border-radius: @{radius.control}dp;
+}
+
+.hitem {
+    border-radius: @{radius.control}dp;
+}
+
+.tab {
+    border-radius: 6dp 0 0 6dp;
+}
+
+.tab-nav {
+    border-radius: @{radius.control}dp;
+}
+
+.tab-close {
+    border-radius: @{radius.control}dp;
+}
+
 /* Theme colours of the area frames and headers. */
 
 .area {
@@ -14,7 +43,7 @@
 
 .area-header {
     background-color: @{blend(surface,background,0.35)};
-    border-bottom-color: @{alpha(border,0.4)};
+    border-bottom-color: @{border};
 }
 
 .area.view .area-header {
@@ -26,7 +55,7 @@
 }
 
 .area.view.active .area-header {
-    border-bottom-color: @{alpha(primary,0.55)};
+    border-bottom-color: @{primary};
 }
 
 .editor-switch {
@@ -89,7 +118,7 @@
 
 .tab {
     background-color: @{alpha(surface_bright,0.36)};
-    border-color: @{alpha(border,0.42)};
+    border-color: @{border};
     color: @{text_dim};
 }
 
@@ -100,7 +129,7 @@
 
 .tab.active {
     background-color: transparent;
-    border-color: @{alpha(primary,0.55)};
+    border-color: @{primary};
     color: @{text};
 }
 

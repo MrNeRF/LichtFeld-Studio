@@ -17,6 +17,7 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/main_loop.hpp"
+#include "core/memory_pressure.hpp"
 #include "core/mesh_data.hpp"
 #include "core/native_fs.hpp"
 #include "core/parameters.hpp"
@@ -50,6 +51,7 @@
 #include "io/project_container.hpp"
 #include "io/project_document.hpp"
 #include "io/project_inspector.hpp"
+#include "io/project_operations.hpp"
 #include "io/project_recovery.hpp"
 #include "io/session_chapters.hpp"
 #include "io/splat_chapter.hpp"
@@ -92,6 +94,7 @@
 #include <vk_mem_alloc.h>
 #endif
 
+#include "core/tensor_backend.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -110,6 +113,7 @@
 #include <gtest/gtest.h>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <optional>
@@ -5176,6 +5180,97 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
         EXPECT_TRUE(
             std::filesystem::is_regular_file(
                 sidecar));
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           CleanCloseDeletesAutosaveSidecarOnTeardown) {
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "clean-exit.licht";
+        const auto sidecar =
+            lfs::io::project::
+                autosave_sidecar_path(project_path);
+        write_empty_project(project_path);
+
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] {
+                    const auto info = viewer.projectGetInfo();
+                    return info && info->hydration_state == "complete";
+                }));
+            // A view setting change autosaves without making the project dirty.
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr, viewer);
+            viewer.input_controller_->setViewer(&viewer);
+            viewer.noteGuiSessionRestoreOwnerReady(1);
+            auto* const rendering = viewer.getRenderingManager();
+            ASSERT_NE(rendering, nullptr);
+            auto render_settings = rendering->getSettings();
+            render_settings.render_scale = 0.7F;
+            ASSERT_TRUE(rendering->updateSettingsFromUser(render_settings));
+            viewer.projectMarkSessionChapterCommitted("VIEW");
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->startAutosave());
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            ASSERT_TRUE(
+                std::filesystem::is_regular_file(
+                    sidecar));
+            const auto info = viewer.projectGetInfo();
+            ASSERT_TRUE(info);
+            ASSERT_FALSE(info->dirty);
+
+            viewer.requestApplicationClose();
+            ASSERT_TRUE(
+                viewer.getWindowManager()
+                    ->shouldClose());
+            EXPECT_TRUE(viewer.allowclose());
+        }
+        EXPECT_FALSE(std::filesystem::exists(sidecar));
+        EXPECT_TRUE(
+            std::filesystem::is_regular_file(
+                project_path));
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           TeardownLooksUpNoMissingLocalizationKeys) {
+        // A missing key is reported once per process; start from a clean slate.
+        lfs::event::LocalizationManager::getInstance().reset();
+        std::mutex warnings_mutex;
+        std::vector<std::string> warnings;
+        struct HandlerGuard {
+            lfs::core::LogHandlerToken token;
+            ~HandlerGuard() { lfs::core::Logger::get().remove_log_handler(token); }
+        } const guard{lfs::core::Logger::get().add_log_handler(
+            [&](const lfs::core::LogLevel level, const lfs::core::SourceSite&,
+                const std::string_view message) {
+                if (level == lfs::core::LogLevel::Warn &&
+                    message.find("Missing localization key") != std::string_view::npos) {
+                    const std::lock_guard lock(warnings_mutex);
+                    warnings.emplace_back(message);
+                }
+            })};
+        {
+            VisualizerImpl viewer(projectOptions());
+            ASSERT_NE(viewer.getGuiManager(), nullptr);
+        }
+        const std::lock_guard lock(warnings_mutex);
+        EXPECT_TRUE(warnings.empty()) << warnings.front();
     }
 
     TEST_F(VisualizerImplResetTest,
@@ -14995,6 +15090,7 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
         } const locale_reset;
         VisualizerImpl viewer(projectOptions());
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        ASSERT_FALSE(viewer.getTrainerManager() && viewer.getTrainerManager()->isTrainingActive());
         auto* const lifecycle = viewer.project_lifecycle_.get();
         ASSERT_NE(lifecycle, nullptr);
         CapturingErrorConsumer consumer;
@@ -15010,7 +15106,7 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
             .native = std::nullopt,
         });
         const auto settle_autosave = [&](const std::filesystem::path& destination,
-                                         const bool disk_full) {
+                                         const lfs::Error* failure) {
             const auto handle = viewer.jobs().init(JobType::ProjectWrite, "Autosave");
             ASSERT_TRUE(handle);
             lifecycle->project_write_job_ = *handle;
@@ -15019,9 +15115,9 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
             lifecycle->project_write_destination_ = destination;
             std::async(std::launch::async, [&] { viewer.jobs().work(*handle); }).get();
             std::async(std::launch::async, [&] {
-                if (disk_full) {
-                    viewer.jobs().finishWork(*handle, false, lfs::format_for_developer(full),
-                                             lfs::ErrorCode::ResourceExhausted, full);
+                if (failure) {
+                    viewer.jobs().finishWork(*handle, false, lfs::format_for_developer(*failure),
+                                             failure->code(), *failure);
                 } else {
                     viewer.jobs().finishWork(*handle, false);
                 }
@@ -15039,18 +15135,34 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
             });
         };
         // Backoff retries of the same failing autosave stay quiet.
-        settle_autosave(scratch, true);
-        settle_autosave(scratch, true);
-        settle_autosave(scratch, true);
+        settle_autosave(scratch, &full);
+        settle_autosave(scratch, &full);
+        settle_autosave(scratch, &full);
         EXPECT_EQ(toasts(), 1);
         // A successful autosave ends the streak.
-        settle_autosave(scratch, false);
-        settle_autosave(scratch, true);
-        settle_autosave(scratch, true);
+        settle_autosave(scratch, nullptr);
+        settle_autosave(scratch, &full);
+        settle_autosave(scratch, &full);
         EXPECT_EQ(toasts(), 2);
         // So does a new destination.
-        settle_autosave(other, true);
+        settle_autosave(other, &full);
         EXPECT_EQ(toasts(), 3);
+
+        const auto memory = lfs::make_error(lfs::ErrorInit{
+            .code = lfs::ErrorCode::ResourceExhausted,
+            .domain = lfs::ErrorDomain::IO,
+            .user_message = "Snapshot buffer allocation failed.",
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+        });
+        const auto memory_warning = std::string(LOC("runtime.autosave_deferred_no_memory"));
+        settle_autosave(scratch, &memory);
+        EXPECT_EQ(std::ranges::count(consumer.user_messages, memory_warning), 1);
+        const auto messages = consumer.user_messages.size();
+        settle_autosave(scratch, &memory);
+        EXPECT_EQ(consumer.user_messages.size(), messages) << "memory retries stay quiet without training";
+        settle_autosave(scratch, nullptr);
+        settle_autosave(scratch, &memory);
+        EXPECT_EQ(std::ranges::count(consumer.user_messages, memory_warning), 2);
     }
 
     TEST_F(VisualizerImplResetTest,
@@ -19054,6 +19166,65 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
             std::string::npos);
     }
 
+    TEST_F(VisualizerImplResetTest, MovedProjectRestoresExternalAndEmbeddedDatasetCameraPaths) {
+        if (!lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto project_path = temporary_.path / "embedded.licht";
+        const auto standalone_path = temporary_.path / "standalone" / "embedded.licht";
+        const auto dataset_path = temporary_.path / "external";
+        const auto sibling_path = standalone_path.parent_path() / dataset_path.filename();
+        const auto moved_path = temporary_.path / "external-moved";
+        const std::string image_name = "frame_0001.png";
+        write_minimal_transforms_dataset(dataset_path);
+        write_dataset_project_with_named_cameras(project_path, dataset_path, {{image_name, true}});
+        const auto embedded = lfs::io::project::embed_dataset_file(project_path);
+        ASSERT_TRUE(embedded) << lfs::format_for_developer(embedded.error());
+        ASSERT_EQ(embedded->images_embedded, 1u);
+
+        std::filesystem::create_directories(standalone_path.parent_path());
+        std::filesystem::copy_file(project_path, standalone_path);
+        for (const auto& expected_external : {dataset_path, sibling_path, std::filesystem::path{}}) {
+            SCOPED_TRACE(expected_external);
+            if (expected_external == sibling_path) {
+                std::filesystem::rename(dataset_path, sibling_path);
+            } else if (expected_external.empty()) {
+                std::filesystem::rename(sibling_path, moved_path);
+            }
+            auto options = projectOptions();
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            ASSERT_TRUE(viewer.getWindowManager()->init());
+            const auto opened = viewer.projectOpen(expected_external == dataset_path ? project_path : standalone_path,
+                                                   ProjectSwitchDisposition::DiscardChanges);
+            ASSERT_TRUE(opened) << lfs::format_for_developer(opened.error());
+            viewer.noteGuiSessionRestoreOwnerReady(1);
+            ASSERT_TRUE(waitUntil([&] {
+                viewer.pumpPostedWorkForProjectWrite();
+                const auto info = viewer.projectGetInfo();
+                return info && info->hydration_state == "complete" &&
+                       !viewer.jobs().anyRunning(JobType::ProjectOpen);
+            }));
+            ASSERT_TRUE(viewer.restoreProjectTrainingSession());
+            ASSERT_TRUE(waitUntil([&] {
+                viewer.pumpPostedWorkForProjectWrite();
+                return !viewer.projectTrainingSessionState().restoring &&
+                       viewer.getTrainerManager()->hasTrainer();
+            }));
+            const auto& root = viewer.getSceneManager()->getDatasetPath();
+            if (!expected_external.empty()) {
+                EXPECT_EQ(root, expected_external);
+            } else {
+                EXPECT_EQ(root.parent_path(), temporary_.path / "home" / "cache" / "embedded_datasets");
+            }
+            const auto* camera = camera_by_image_name(viewer.getSceneManager()->getScene(), image_name);
+            ASSERT_NE(camera, nullptr);
+            EXPECT_EQ(camera->image_path(), root / image_name);
+            EXPECT_TRUE(camera->has_image());
+            EXPECT_TRUE(std::filesystem::is_regular_file(camera->image_path()));
+        }
+    }
+
     TEST_F(VisualizerImplResetTest,
            MissingDatasetProjectArmsRelocationInsteadOfImport) {
         LFS_CUDA_BACKEND_OR_RETURN();
@@ -19119,9 +19290,12 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
         const auto moved_path =
             temporary_.path /
             "dataset-relocate-restore-moved";
+        const auto portable_path = temporary_.path / "portable" / project_path.filename();
+        const std::string image_name = "frame_0001.png";
         write_minimal_transforms_dataset(dataset_path);
-        write_dataset_project_without_checkpoint(
-            project_path, dataset_path);
+        write_dataset_project_with_named_cameras(project_path, dataset_path, {{image_name, true}});
+        std::filesystem::create_directories(portable_path.parent_path());
+        std::filesystem::copy_file(project_path, portable_path);
         std::filesystem::rename(dataset_path, moved_path);
 
         auto options = projectOptions();
@@ -19130,7 +19304,7 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
                         ->ensureLoaded());
         ASSERT_TRUE(viewer.getWindowManager()->init());
         auto opened = viewer.projectOpen(
-            project_path,
+            portable_path,
             ProjectSwitchDisposition::DiscardChanges);
         ASSERT_TRUE(opened)
             << lfs::format_for_developer(
@@ -19181,6 +19355,10 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
             viewer.getSceneManager()->getDatasetPath(),
             moved_path);
         ASSERT_NE(viewer.getTrainer(), nullptr);
+        const auto* camera = camera_by_image_name(viewer.getSceneManager()->getScene(), image_name);
+        ASSERT_NE(camera, nullptr);
+        EXPECT_EQ(camera->image_path(), moved_path / image_name);
+        EXPECT_TRUE(camera->has_image());
         EXPECT_EQ(
             viewer.getTrainer()->getParams().optimization.iterations,
             1234);
@@ -21282,11 +21460,12 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
             lfs::test::CudaBackendTest::SetUp();
             if (IsSkipped())
                 return;
-            lfs::io::project::detail::set_splat_capture_no_headroom_for_testing(false);
+            lfs::io::project::detail::set_splat_capture_no_headroom_for_testing(std::nullopt);
         }
 
         void TearDown() override {
             lfs::io::project::detail::set_splat_capture_no_headroom_for_testing(std::nullopt);
+            lfs::core::MemoryPressureCoordinator::instance().set_free_memory_probe(nullptr);
             VisualizerImplResetTest::TearDown();
         }
 
@@ -21363,6 +21542,53 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
             EXPECT_EQ(saved->model->visible_count(), live->model->visible_count());
             EXPECT_EQ(saved->model->means().cpu().to_vector(), live->model->means().cpu().to_vector());
             EXPECT_EQ(saved->model->opacity_raw().cpu().to_vector(), live->model->opacity_raw().cpu().to_vector());
+        }
+
+        void expectDeferredAutosave(VisualizerImpl& viewer) {
+            lfs::test::licht::drain_work_queue(viewer.work_queue_mutex_, viewer.work_queue_);
+            auto& lifecycle = *viewer.project_lifecycle_;
+            const auto deferred = lifecycle.startAutosave();
+            ASSERT_FALSE(deferred);
+            EXPECT_EQ(deferred.error().code(), lfs::ErrorCode::ResourceExhausted);
+            EXPECT_FALSE(viewer.jobs().anyRunning(JobType::ProjectWrite));
+            EXPECT_TRUE(lifecycle.hasDirtyProject());
+        }
+
+        void expectDeferredMaintenanceAndExplicitCapture(VisualizerImpl& viewer, const lfs::core::Uuid& uuid) {
+            CapturingErrorConsumer consumer;
+            auto subscription = lfs::ErrorBus::instance().subscribe(consumer);
+            auto& lifecycle = *viewer.project_lifecycle_;
+            EXPECT_EQ(lifecycle.document_->find_splat(uuid), nullptr);
+            lifecycle.last_autosave_at_ = std::chrono::steady_clock::now() - std::chrono::hours(1);
+            lifecycle.last_mutation_at_ = std::chrono::steady_clock::now() - std::chrono::hours(1);
+            lifecycle.updateMaintenance();
+            EXPECT_EQ(lifecycle.autosave_failure_backoff_seconds_, 60u);
+            EXPECT_TRUE(lifecycle.autosave_memory_warning_published_);
+            const auto messages = consumer.user_messages.size();
+            ASSERT_GT(messages, 0u);
+            lifecycle.updateMaintenance();
+            EXPECT_TRUE(lifecycle.autosave_memory_warning_published_);
+            lifecycle.autosave_retry_not_before_ = {};
+            lifecycle.updateMaintenance();
+            EXPECT_EQ(lifecycle.autosave_failure_backoff_seconds_, 120u);
+            EXPECT_EQ(consumer.user_messages.size(), messages) << "one warning per failure streak";
+            // Explicit synchronization still supports the synchronous fallback.
+            ASSERT_TRUE(lifecycle.synchronizeDocumentFromViewer());
+            ASSERT_NE(lifecycle.document_->find_splat(uuid), nullptr);
+        }
+
+        void expectPartialCapture(VisualizerImpl& viewer, const lfs::core::Uuid& first,
+                                  const lfs::core::Uuid& second) {
+            lfs::test::licht::drain_work_queue(viewer.work_queue_mutex_, viewer.work_queue_);
+            auto& lifecycle = *viewer.project_lifecycle_;
+            ASSERT_TRUE(lifecycle.startAutosave());
+            ASSERT_TRUE(viewer.jobs().anyRunning(JobType::ProjectWrite));
+            ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+            }));
+            EXPECT_NE(lifecycle.document_->find_splat(first), nullptr);
+            EXPECT_EQ(lifecycle.document_->find_splat(second), nullptr);
+            EXPECT_TRUE(lifecycle.hasDirtyProject());
         }
     };
 
@@ -21450,24 +21676,65 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
         expect_recaptured_once("crop apply");
     }
 
-    // Without VRAM headroom the capture runs synchronously on the viewer thread, so a
-    // repeated capture freezes the application on every autosave.
-    TEST_F(PayloadRecaptureTest, SynchronousCaptureRunsOncePerPayloadChange) {
-        lfs::io::project::detail::set_splat_capture_no_headroom_for_testing(true);
+    TEST_F(PayloadRecaptureTest, AutosaveDefersWithoutHeadroomAndRetriesDirtyPayload) {
         VisualizerImpl viewer(projectOptions());
         ASSERT_NO_FATAL_FAILURE(prepare(viewer));
         auto& scene = viewer.getScene();
         const auto splat_id = scene.addSplat("Synchronous", cudaSplat(64));
         ASSERT_NE(splat_id, lfs::core::NULL_NODE);
         const auto uuid = scene.getNodeById(splat_id)->uuid;
-        EXPECT_EQ(autosaveCaptures(viewer, uuid), 1) << "first capture";
+        lfs::core::MemoryPressureCoordinator::instance().set_free_memory_probe(
+            [](lfs::core::MemoryDomain) -> std::size_t { return 0; });
+        ASSERT_NO_FATAL_FAILURE(expectDeferredAutosave(viewer));
+        ASSERT_NO_FATAL_FAILURE(expectDeferredMaintenanceAndExplicitCapture(viewer, uuid));
         EXPECT_EQ(autosaveCaptures(viewer, uuid), 0) << "idle autosaves";
         ASSERT_TRUE(viewer.getSceneManager()->renameNode(splat_id, "Renamed"));
         EXPECT_EQ(autosaveCaptures(viewer, uuid), 0) << "rename";
         ASSERT_TRUE(cap::writeGaussianField(*viewer.getSceneManager(), viewer.getRenderingManager(), "Renamed",
                                             "opacity", {0}, {0.5f}));
+        ASSERT_NO_FATAL_FAILURE(expectDeferredAutosave(viewer));
+        lfs::core::MemoryPressureCoordinator::instance().set_free_memory_probe(nullptr);
         EXPECT_EQ(autosaveCaptures(viewer, uuid), 1) << "Gaussian field write";
         expectAutosavedGaussians(viewer, uuid);
+    }
+
+    TEST_F(PayloadRecaptureTest, CpuAutosaveDoesNotRequireDeviceHeadroom) {
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_NO_FATAL_FAILURE(prepare(viewer));
+        auto& scene = viewer.getScene();
+        const auto id = scene.addSplat("CPU", lfs::test::licht::make_splat(64));
+        ASSERT_NE(id, lfs::core::NULL_NODE);
+        const auto uuid = scene.getNodeById(id)->uuid;
+        auto& empty_cuda = scene.getNodeById(id)->model->shN();
+        empty_cuda = lfs::core::Tensor::empty({0}, lfs::core::Device::CUDA);
+        ASSERT_TRUE(empty_cuda.is_valid());
+        ASSERT_EQ(empty_cuda.bytes(), 0u);
+        lfs::core::MemoryPressureCoordinator::instance().set_free_memory_probe(
+            [](lfs::core::MemoryDomain) -> std::size_t { return 0; });
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 1);
+        expectAutosavedGaussians(viewer, uuid);
+    }
+
+    TEST_F(PayloadRecaptureTest, AutosaveMakesProgressWhenOnlyOneSnapshotFits) {
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_NO_FATAL_FAILURE(prepare(viewer));
+        auto& scene = viewer.getScene();
+        const auto first = scene.addSplat("First", cudaSplat(64));
+        const auto second = scene.addSplat("Second", cudaSplat(128));
+        ASSERT_NE(first, lfs::core::NULL_NODE);
+        ASSERT_NE(second, lfs::core::NULL_NODE);
+        const auto first_uuid = scene.getNodeById(first)->uuid;
+        const auto second_uuid = scene.getNodeById(second)->uuid;
+        // The first snapshot fits; the second must wait for its memory to be released.
+        lfs::core::MemoryPressureCoordinator::instance().set_free_memory_probe(
+            [queries = 0](lfs::core::MemoryDomain) mutable -> std::size_t {
+                return ++queries == 2 ? 0 : std::numeric_limits<std::size_t>::max() / 2;
+            });
+        ASSERT_NO_FATAL_FAILURE(expectPartialCapture(viewer, first_uuid, second_uuid));
+        lfs::core::MemoryPressureCoordinator::instance().set_free_memory_probe(nullptr);
+        EXPECT_EQ(autosaveCaptures(viewer, first_uuid), 0) << "retain the first snapshot";
+        expectAutosavedGaussians(viewer, first_uuid);
+        expectAutosavedGaussians(viewer, second_uuid);
     }
 
     TEST_F(PayloadRecaptureTest, SavedProjectSceneEditsDoNotRecapture) {

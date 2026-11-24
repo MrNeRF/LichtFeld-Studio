@@ -4,6 +4,8 @@
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
+#include "core/image_io.hpp"
+#include "core/native_fs.hpp"
 #include "core/point_cloud.hpp"
 #include "core/services.hpp"
 #include "gui/bounds_gizmo.hpp"
@@ -29,11 +31,13 @@
 #include "gui/scale_gizmo.hpp"
 #include "gui/scene_panel_native.hpp"
 #include "gui/translation_gizmo.hpp"
+#include "gui/ui_texture.hpp"
 #include "gui/viewport_gizmo_geometry.hpp"
 #include "input/frame_input_buffer.hpp"
 #include "input/input_controller.hpp"
 #include "input/key_codes.hpp"
 #include "licht_test_support.hpp"
+#include "media/video_frame_extractor.hpp"
 #include "operation/undo_history.hpp"
 #include "operator/operator_registry.hpp"
 #include "rendering/coordinate_conventions.hpp"
@@ -58,10 +62,13 @@
 #include <future>
 #include <glm/gtc/type_ptr.hpp>
 #include <gtest/gtest.h>
+#include <limits>
 #include <set>
 #include <thread>
 #include <vector>
-#ifndef _WIN32
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <cstdlib>
 #endif
 
@@ -651,6 +658,12 @@ namespace lfs::vis {
         }
         void TearDown() override {
             manager().ui_renderer_ = nullptr;
+            // These entries exercise desktop input/stacking with real SDL windows,
+            // without a GPU renderer. Remove them before normal context teardown.
+            for (auto* context : desktop_contexts_) {
+                manager().context_windows_.erase(context);
+                manager().native_windows_.erase(context);
+            }
             gui::PanelRegistry::instance().unregister_panel("test.input_float");
             for (const char* id : kPropertiesTabs)
                 gui::PanelRegistry::instance().unregister_panel(id);
@@ -684,6 +697,31 @@ namespace lfs::vis {
         void mapContextWindow(Rml::Context* context, SDL_Window* window) {
             manager().context_windows_[context] = window;
         }
+        std::vector<Rml::Context*> desktop_contexts_;
+        bool applyPin(SDL_Window* window, bool pinned) {
+            return manager().applyNativeWindowPin(window, pinned);
+        }
+        std::pair<Rml::Context*, SDL_Window*> attachDesktopContext(const char* name, const char* panel_id) {
+            auto* context = manager().createContext(name, 200, 100);
+            if (!context)
+                return {nullptr, nullptr};
+            auto* window = SDL_CreateWindow("Desktop pin regression", 200, 100, SDL_WINDOW_HIDDEN);
+            if (!window)
+                return {context, nullptr};
+            auto native = std::make_unique<gui::RmlUIManager::NativeWindow>();
+            native->window = window;
+            native->name = name;
+            native->graphics = createGraphicsContext();
+            native->graphics->setAuxiliaryWindow(true);
+            manager().native_windows_[context] = std::move(native);
+            mapContextWindow(context, window);
+            SDL_SetStringProperty(SDL_GetWindowProperties(window), "lfs.panel_id", panel_id);
+            desktop_contexts_.push_back(context);
+            return {context, window};
+        }
+        GraphicsContext* desktopGraphics(Rml::Context* context) {
+            return manager().native_windows_.at(context)->graphics.get();
+        }
         void attachInputHost(gui::RmlPanelHost& host, int width, int height, const char* markup) {
             // Input uses the real host and null geometry renderer, without a GPU frame.
             manager().ui_renderer_ = &input_renderer_;
@@ -702,16 +740,25 @@ namespace lfs::vis {
             host.forwardInput(x, y);
             host.setInput(nullptr);
         }
-        void registerInputFloat(float x = 100.f) {
+        void registerInputFloat(float x = 100.f, std::function<void()> suspend = {}) {
             class Panel final : public gui::IPanel {
+            public:
+                explicit Panel(std::function<void()> suspend) : suspend_(std::move(suspend)) {}
+                void suspendInput() override {
+                    if (suspend_)
+                        suspend_();
+                }
                 void draw(const gui::PanelDrawContext&) override {}
                 gui::PanelRenderCapabilities renderCapabilities() const override { return {.direct = true}; }
+
+            private:
+                std::function<void()> suspend_;
             };
             gui::PanelInfo info;
             info.id = "test.input_float";
             info.label = "Input float";
             info.space = gui::PanelSpace::Floating;
-            info.panel = std::make_shared<Panel>();
+            info.panel = std::make_shared<Panel>(std::move(suspend));
             ASSERT_TRUE(gui::PanelRegistry::instance().register_panel(std::move(info)));
             gui::PanelRegistry::instance().apply_project_state({{
                 .id = "test.input_float",
@@ -1604,6 +1651,231 @@ namespace lfs::vis {
             EXPECT_EQ(context_->GetFocusElement(), field_);
             EXPECT_EQ(field_->GetValue(), "half-typed");
         }
+    }
+
+    TEST_F(WindowInputDispatchTest, UnvalidatedPanelsStayInternalIncludingExplicitDesktopRequests) {
+        int attempts = 0;
+        failExternalGraphics(attempts);
+        for (const auto* name : {"lfs.asset_manager", "lfs.histogram", "plugin.custom", "modal"}) {
+            auto* context = manager().createContext(name, 400, 300, true);
+            ASSERT_NE(context, nullptr);
+            EXPECT_FALSE(hasDesktopHost(context));
+            EXPECT_TRUE(manager().externalWindowsAllowed());
+            manager().destroyContext(name);
+        }
+        EXPECT_EQ(attempts, 0);
+    }
+
+    TEST_F(WindowInputDispatchTest, ValidatedBuiltinWindowsUseTheSharedDesktopFallback) {
+        for (const auto* name : {"native.mesh2splat", "lfs.collision", "lfs.splat_simplify", "lfs.camera_selection",
+                                 "lfs.logging", "lfs.about", "lfs.scripts", "lfs.bug_report", "lfs.getting_started",
+                                 "lfs.export", "lfs.new_project", "lfs.resume_checkpoint", "lfs.gallery_file", "lfs.image_preview"}) {
+            SCOPED_TRACE(name);
+            int attempts = 0;
+            failExternalGraphics(attempts);
+            auto* context = manager().createContext(name, 420, 300, true);
+            ASSERT_NE(context, nullptr);
+            EXPECT_EQ(attempts, 1);
+            EXPECT_FALSE(hasDesktopHost(context));
+            EXPECT_FALSE(manager().externalWindowsAllowed());
+            manager().destroyContext(name);
+        }
+    }
+
+    TEST_F(WindowInputDispatchTest, OnlyFloatingHostsAcceptDesktopGeometryAndFallbackKeepsRequestedSize) {
+        int attempts = 0;
+        failExternalGraphics(attempts);
+        gui::RmlPanelHost host(&manager(), "lfs.collision", "rmlui/collision.rml");
+        EXPECT_FALSE(host.configureExternal(10, 20, 780, 440, true));
+        host.setFloating(true);
+        ASSERT_TRUE(host.configureExternal(10, 20, 780, 440, true));
+        ASSERT_TRUE(host.ensureContext());
+        ASSERT_NE(host.getContext(), nullptr);
+        EXPECT_EQ(host.getContext()->GetDimensions(), Rml::Vector2i(780, 440));
+        EXPECT_EQ(attempts, 1);
+        EXPECT_EQ(host.nativeWindow(), nullptr);
+        EXPECT_FALSE(host.configureExternal(30, 40, 800, 600, true));
+    }
+
+    TEST_F(WindowInputDispatchTest, DesktopPinChangesOnlyTopmostState) {
+        std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window(
+            SDL_CreateWindow("Pin state regression", 200, 100, SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE),
+            SDL_DestroyWindow);
+        ASSERT_NE(window, nullptr);
+        const auto flags = SDL_GetWindowFlags(window.get());
+        const bool pinned = applyPin(window.get(), true);
+        EXPECT_EQ(pinned, bool(SDL_GetWindowFlags(window.get()) & SDL_WINDOW_ALWAYS_ON_TOP));
+        EXPECT_EQ(SDL_GetWindowFlags(window.get()) & ~SDL_WINDOW_ALWAYS_ON_TOP, flags);
+        EXPECT_EQ(applyPin(window.get(), true), pinned);
+        ASSERT_TRUE(applyPin(window.get(), false));
+        EXPECT_EQ(SDL_GetWindowFlags(window.get()), flags);
+        int width = 0, height = 0;
+        ASSERT_TRUE(SDL_GetWindowSize(window.get(), &width, &height));
+        EXPECT_EQ(width, 200);
+        EXPECT_EQ(height, 100);
+    }
+
+    TEST_F(WindowInputDispatchTest, MainExclusiveInputBlocksDesktopPanelUntilDismissed) {
+        auto* external_window = SDL_CreateWindow("Modal input regression", 200, 100, SDL_WINDOW_HIDDEN);
+        ASSERT_NE(external_window, nullptr);
+        auto* external_context = manager().createContext("external-modal-input", 200, 100);
+        ASSERT_NE(external_context, nullptr);
+        mapContextWindow(external_context, external_window);
+        auto* document = external_context->LoadDocumentFromMemory(
+            "<rml><head><style>body {width:200px;height:100px;} input {width:180px;height:80px;}</style></head>"
+            "<body><input id='external-field' type='text'/></body></rml>");
+        ASSERT_NE(document, nullptr);
+        document->Show();
+        external_context->Update();
+        auto* field = document->GetElementById("external-field");
+        ASSERT_NE(field, nullptr);
+        int external_events = 0;
+        int passive_updates = 0;
+        const auto handler = [&](const gui::PanelInputState& input) {
+            external_events += static_cast<int>(input.input_events.size()) + (input.mouse_wheel != 0.0f ? 1 : 0);
+            ++passive_updates;
+        };
+        manager().activateInput(external_context, handler, false);
+        manager().trackContextFrame(external_context, 0, 0);
+        const auto send = [&](Uint32 type) {
+            SDL_Event event{};
+            event.type = type;
+            if (type == SDL_EVENT_KEY_DOWN) {
+                event.key.windowID = SDL_GetWindowID(external_window);
+                event.key.scancode = SDL_SCANCODE_A;
+            } else if (type == SDL_EVENT_MOUSE_WHEEL) {
+                event.wheel.windowID = SDL_GetWindowID(external_window);
+                event.wheel.y = 1;
+                event.wheel.mouse_x = 20;
+                event.wheel.mouse_y = 20;
+            } else {
+                event.button.windowID = SDL_GetWindowID(external_window);
+                event.button.button = SDL_BUTTON_LEFT;
+                event.button.x = 20;
+                event.button.y = 20;
+            }
+            manager().dispatchInputEvent(event);
+        };
+        const auto send_all = [&] {
+            send(SDL_EVENT_MOUSE_BUTTON_DOWN);
+            send(SDL_EVENT_MOUSE_BUTTON_UP);
+            send(SDL_EVENT_MOUSE_WHEEL);
+            send(SDL_EVENT_KEY_DOWN);
+        };
+        EXPECT_TRUE(field->Focus());
+        setKeyboardContext(external_context, true);
+        send_all();
+        EXPECT_GE(external_events, 4);
+        manager().activateInput(context_, [](const gui::PanelInputState&) {});
+        EXPECT_TRUE(field->Focus());
+        setKeyboardContext(external_context, true);
+        const int before_popup = external_events;
+        send_all();
+        EXPECT_GE(external_events - before_popup, 4);
+        manager().activateInput(context_, [](const gui::PanelInputState&) {}, true, {}, true);
+        const int before_modal = external_events;
+        const int before_passive = passive_updates;
+        send_all();
+        manager().routeInput(external_context, {}, handler);
+        EXPECT_EQ(external_events, before_modal);
+        EXPECT_EQ(passive_updates, before_passive);
+        manager().deactivateInput(context_);
+        manager().routeInput(external_context, {}, handler);
+        EXPECT_TRUE(field->Focus());
+        setKeyboardContext(external_context, true);
+        send_all();
+        EXPECT_GE(external_events - before_modal, 4);
+        manager().destroyContext("external-modal-input");
+        SDL_DestroyWindow(external_window);
+    }
+
+    TEST_F(WindowInputDispatchTest, DesktopPinSuspensionRestoresChoiceAndRejectsUnsupportedBackends) {
+        auto main_textures = createGraphicsContext();
+        main_textures->setAuxiliaryWindow(true);
+        const gui::ScopedUiTextureGraphics main_texture_scope(main_textures.get());
+        auto suspensions = std::make_shared<int>(0);
+        registerInputFloat(100.f, [this, suspensions] {
+            ++*suspensions;
+            auto* context = manager().getContext("pin-state");
+            ASSERT_NE(context, nullptr);
+            EXPECT_EQ(gui::uiTextureGraphics(), desktopGraphics(context));
+            manager().deactivateInput(context);
+        });
+        const auto [context, window] = attachDesktopContext("pin-state", "test.input_float");
+        ASSERT_NE(context, nullptr);
+        ASSERT_NE(window, nullptr);
+        const auto topmost = [&] { return bool(SDL_GetWindowFlags(window) & SDL_WINDOW_ALWAYS_ON_TOP); };
+        manager().activateInput(context, [](const gui::PanelInputState&) {}, false);
+        const auto generation = lfs::python::redraw_request_generation();
+        const bool supported = manager().setNativeWindowPinned("test.input_float", true);
+        if (!manager().nativeWindowPinned("test.input_float").has_value()) {
+            EXPECT_FALSE(supported);
+            EXPECT_FALSE(topmost());
+            EXPECT_EQ(lfs::python::redraw_request_generation(), generation);
+            return;
+        }
+        EXPECT_EQ(supported, topmost());
+        EXPECT_EQ(manager().nativeWindowPinned("test.input_float"), supported);
+        EXPECT_EQ(lfs::python::redraw_request_generation() > generation, supported);
+        const auto unchanged = lfs::python::redraw_request_generation();
+        EXPECT_EQ(manager().setNativeWindowPinned("test.input_float", true), supported);
+        EXPECT_EQ(lfs::python::redraw_request_generation(), unchanged);
+        manager().activateInput(context_, [](const gui::PanelInputState&) {}, true, {}, true);
+        EXPECT_FALSE(topmost());
+        EXPECT_EQ(*suspensions, 1);
+        ASSERT_TRUE(manager().setNativeWindowPinned("test.input_float", false));
+        ASSERT_TRUE(manager().setNativeWindowPinned("test.input_float", true));
+        EXPECT_EQ(manager().nativeWindowPinned("test.input_float"), true);
+        EXPECT_FALSE(topmost());
+        auto* second_modal = manager().createContext("second-pin-modal", 200, 100);
+        ASSERT_NE(second_modal, nullptr);
+        manager().activateInput(second_modal, [](const gui::PanelInputState&) {}, true, {}, true);
+        manager().deactivateInput(context_);
+        EXPECT_FALSE(topmost());
+        manager().destroyContext("second-pin-modal");
+        EXPECT_EQ(topmost(), supported);
+        EXPECT_EQ(*suspensions, 1);
+        EXPECT_EQ(manager().nativeWindowPinned("test.input_float"), supported);
+        manager().deactivateInput(context);
+        manager().activateInput(context_, [](const gui::PanelInputState&) {}, true, {}, true);
+        EXPECT_EQ(*suspensions, 2);
+        EXPECT_EQ(gui::uiTextureGraphics(), main_textures.get());
+        manager().deactivateInput(context_);
+        EXPECT_EQ(topmost(), supported);
+        EXPECT_TRUE(manager().setNativeWindowPinned("test.input_float", false));
+        EXPECT_FALSE(topmost());
+    }
+
+    TEST_F(WindowInputDispatchTest, InternalPanelsCannotBePinned) {
+        registerInputFloat();
+        ASSERT_TRUE(gui::PanelRegistry::instance().get_panel("test.input_float").has_value());
+        const auto [context, window] = attachDesktopContext("other-desktop", "test.other_desktop");
+        ASSERT_NE(context, nullptr);
+        ASSERT_NE(window, nullptr);
+        EXPECT_FALSE(manager().nativeWindowPinned("test.input_float").has_value());
+        EXPECT_FALSE(manager().setNativeWindowPinned("test.input_float", true));
+        EXPECT_FALSE(manager().nativeWindowPinned("unknown").has_value());
+        EXPECT_FALSE(manager().setNativeWindowPinned("unknown", true));
+    }
+
+    TEST_F(WindowInputDispatchTest, NativeWaylandDoesNotExposeDesktopPin) {
+        const char* const driver = SDL_GetCurrentVideoDriver();
+        if (!driver || std::string_view(driver) != "wayland")
+            GTEST_SKIP() << "Requires the native Wayland video driver";
+
+        registerInputFloat();
+        const auto [context, window] = attachDesktopContext("wayland-pin", "test.input_float");
+        ASSERT_NE(context, nullptr);
+        ASSERT_NE(window, nullptr);
+        EXPECT_FALSE(manager().nativeWindowPinned("test.input_float").has_value());
+        EXPECT_FALSE(manager().setNativeWindowPinned("test.input_float", true));
+        EXPECT_FALSE(gui::PanelRegistry::instance().native_window_pinned("test.input_float"));
+
+        manager().activateInput(context_, [](const gui::PanelInputState&) {}, true, {}, true);
+        EXPECT_FALSE(manager().setNativeWindowPinned("test.input_float", true));
+        EXPECT_FALSE(manager().nativeWindowPinned("test.input_float").has_value());
+        EXPECT_FALSE(gui::PanelRegistry::instance().native_window_pinned("test.input_float"));
+        manager().deactivateInput(context_);
     }
 
     TEST_F(WindowInputDispatchTest, UnvalidatedPanelsCannotCreateExternalHosts) {
@@ -4106,6 +4378,208 @@ namespace lfs::vis {
         }
     };
 
+    TEST_F(ScenePanelRefreshTest, KeyframeTrashDeletesTimelineEntryAndSupportsUndoRedo) {
+        auto& scene = viewer_->getSceneManager()->getScene();
+        auto& sequencer = gui_->sequencer();
+        std::array<sequencer::KeyframeId, 3> ids;
+        for (size_t i = 0; i < ids.size(); ++i) {
+            sequencer::Keyframe keyframe;
+            keyframe.time = static_cast<float>(i);
+            ids[i] = sequencer.addKeyframe(keyframe);
+        }
+        core::events::state::KeyframeListChanged{.count = ids.size()}.emit();
+        gui::NativeScenePanel panel(&manager());
+        gui::PanelDrawContext ctx;
+        ctx.scene = &scene;
+        panel.preload(ctx);
+        panel.renderDirect({.mode = gui::PanelDirectRenderMode::Preload, .width = 400, .height = 600}, ctx);
+        auto* context = manager().getContext("scene_panel_native");
+        ASSERT_NE(context, nullptr);
+        auto* document = context->GetDocument(0);
+        auto* tree = dynamic_cast<gui::SceneGraphElement*>(document->GetElementById("tree-container"));
+        ASSERT_NE(tree, nullptr);
+        document->Show();
+        tree->SetProperty("height", "500px");
+        context->SetDimensions({400, 600});
+        context->Update();
+        const auto* group = scene.getNode("Keyframes");
+        ASSERT_NE(group, nullptr);
+        auto* group_trash = document->QuerySelector(".trash-icon[data-node-id='" + std::to_string(group->id) + "']");
+        ASSERT_NE(group_trash, nullptr);
+        EXPECT_EQ(group_trash->GetProperty<Rml::Style::Display>("display"), Rml::Style::Display::None);
+        auto& history = op::undoHistory();
+        for (const size_t index : {1u, 0u, 2u}) {
+            history.clear();
+            ctx.scene_generation = python::get_scene_generation();
+            ++ctx.frame_serial;
+            static_cast<void>(tree->syncFromScene(ctx));
+            context->Update();
+            const auto* node = scene.getNode(std::format("Keyframe {}", index + 1));
+            ASSERT_NE(node, nullptr);
+            if (index == 0) {
+                auto* menu_document = openCameraMenu(panel, ctx, node->id);
+                ASSERT_NE(menu_document, nullptr);
+                EXPECT_NE(menu_document->QuerySelector("[data-ctx-action='scene_panel:delete:" + std::to_string(node->id) + "']"), nullptr);
+                menu().request({}, 0, 0);
+            }
+            auto* icon = document->QuerySelector(".trash-icon[data-node-id='" + std::to_string(node->id) + "']");
+            ASSERT_NE(icon, nullptr);
+            EXPECT_EQ(icon->GetProperty<Rml::Style::Display>("display"), Rml::Style::Display::Inline);
+            icon->DispatchEvent("click", {});
+            EXPECT_EQ(sequencer.timeline().getKeyframeById(ids[index]), nullptr);
+            EXPECT_EQ(sequencer.timeline().realKeyframeCount(), 2u);
+            EXPECT_EQ(scene.getNodes().size(), 3u); // Group and two remaining keyframes.
+            ASSERT_EQ(history.undoCount(), 1u);
+            ASSERT_TRUE(history.undo().success);
+            EXPECT_NE(sequencer.timeline().getKeyframeById(ids[index]), nullptr);
+            EXPECT_EQ(scene.getNodes().size(), 4u);
+            ASSERT_TRUE(history.redo().success);
+            EXPECT_EQ(sequencer.timeline().getKeyframeById(ids[index]), nullptr);
+            ASSERT_TRUE(history.undo().success);
+        }
+        history.clear();
+    }
+
+    TEST_F(ScenePanelRefreshTest, KeyframeContextDeleteRespectsLocksAndPreservesOtherSelection) {
+        auto& scene = viewer_->getSceneManager()->getScene();
+        auto& sequencer = gui_->sequencer();
+        std::array<sequencer::KeyframeId, 3> ids;
+        for (size_t i = 0; i < ids.size(); ++i) {
+            sequencer::Keyframe keyframe;
+            keyframe.time = static_cast<float>(i);
+            ids[i] = sequencer.addKeyframe(keyframe);
+        }
+        core::events::state::KeyframeListChanged{.count = ids.size()}.emit();
+        gui::NativeScenePanel panel(&manager());
+        gui::PanelDrawContext ctx;
+        ctx.scene = &scene;
+        auto& history = op::undoHistory();
+        for (const size_t index : {0u, 1u, 2u}) {
+            for (const auto [locked_at_open, locked] : {std::pair{true, true}, {false, true}, {false, false}}) {
+                SCOPED_TRACE(std::format("index={} locked_at_open={} locked_at_click={}", index, locked_at_open, locked));
+                history.clear();
+                const auto name = std::format("Keyframe {}", index + 1);
+                scene.setNodeLocked(name, locked_at_open);
+                const auto* node = scene.getNode(name);
+                ASSERT_NE(node, nullptr);
+                auto* menu_document = openCameraMenu(panel, ctx, node->id);
+                ASSERT_NE(menu_document, nullptr);
+                auto* remove = menu_document->QuerySelector("[data-ctx-action^='scene_panel:delete']");
+                ASSERT_NE(remove, nullptr);
+                EXPECT_EQ(remove->HasAttribute("disabled"), locked_at_open);
+                const auto other = ids[(index + 1) % ids.size()];
+                ASSERT_TRUE(sequencer.selectKeyframeById(other));
+                // Validate the live lock even when it changes after opening the menu.
+                scene.setNodeLocked(name, locked);
+                remove->DispatchEvent("click", {});
+                panel.preload(ctx);
+                EXPECT_EQ(sequencer.selectedKeyframeId(), other);
+                if (locked) {
+                    ASSERT_EQ(sequencer.timeline().realKeyframeCount(), ids.size());
+                    EXPECT_NE(sequencer.timeline().getKeyframeById(ids[index]), nullptr);
+                    EXPECT_EQ(history.undoCount(), 0u);
+                    continue;
+                }
+                EXPECT_EQ(sequencer.timeline().realKeyframeCount(), 2u);
+                for (size_t i = 0; i < ids.size(); ++i)
+                    EXPECT_EQ(sequencer.timeline().getKeyframeById(ids[i]) == nullptr, i == index);
+                ASSERT_EQ(history.undoCount(), 1u);
+                ASSERT_TRUE(history.undo().success);
+                for (const auto id : ids)
+                    EXPECT_NE(sequencer.timeline().getKeyframeById(id), nullptr);
+                ASSERT_TRUE(history.redo().success);
+                for (size_t i = 0; i < ids.size(); ++i)
+                    EXPECT_EQ(sequencer.timeline().getKeyframeById(ids[i]) == nullptr, i == index);
+                ASSERT_TRUE(history.undo().success);
+            }
+        }
+        history.clear();
+    }
+
+    TEST_F(ScenePanelRefreshTest, SelectionBarDeletesKeyframesAsOneUndoableOperation) {
+        auto& scene_manager = *viewer_->getSceneManager();
+        auto& scene = scene_manager.getScene();
+        auto& sequencer = gui_->sequencer();
+        std::array<sequencer::KeyframeId, 3> ids;
+        for (size_t i = 0; i < ids.size(); ++i) {
+            sequencer::Keyframe keyframe;
+            keyframe.time = static_cast<float>(i);
+            ids[i] = sequencer.addKeyframe(keyframe);
+        }
+        core::events::state::KeyframeListChanged{.count = ids.size()}.emit();
+        const auto other = scene.addGroup("Other");
+        gui::NativeScenePanel panel(&manager());
+        gui::PanelDrawContext ctx;
+        ctx.scene = &scene;
+        panel.preload(ctx);
+        auto* context = manager().getContext("scene_panel_native");
+        ASSERT_NE(context, nullptr);
+        auto* document = context->GetDocument(0);
+        document->Show();
+        auto* tree = dynamic_cast<gui::SceneGraphElement*>(document->GetElementById("tree-container"));
+        ASSERT_NE(tree, nullptr);
+        tree->SetProperty("height", "500px");
+        auto* remove = document->GetElementById("selection-delete");
+        ASSERT_NE(remove, nullptr);
+        auto refresh = [&] {
+            ctx.scene_generation = python::get_scene_generation();
+            ++ctx.frame_serial;
+            panel.preload(ctx);
+            panel.renderDirect({.mode = gui::PanelDirectRenderMode::Preload, .width = 400, .height = 600}, ctx);
+            context->Update();
+        };
+        auto& history = op::undoHistory();
+        for (const auto& indices : {std::vector<size_t>{0}, {0, 2}, {0, 1, 2}}) {
+            history.clear();
+            std::vector<core::NodeId> selected;
+            for (const auto index : indices)
+                selected.push_back(scene.getNode(std::format("Keyframe {}", index + 1))->id);
+            scene_manager.selectNodesById(selected);
+            refresh();
+            EXPECT_FALSE(remove->IsClassSet("disabled"));
+            remove->DispatchEvent("click", {});
+            EXPECT_EQ(sequencer.timeline().realKeyframeCount(), ids.size() - indices.size());
+            for (size_t i = 0; i < ids.size(); ++i)
+                EXPECT_EQ(sequencer.timeline().getKeyframeById(ids[i]) == nullptr,
+                          std::ranges::find(indices, i) != indices.end());
+            EXPECT_NE(scene.getNodeById(other), nullptr);
+            refresh();
+            EXPECT_TRUE(scene_manager.getSelectedNodeIds().empty());
+            ASSERT_EQ(history.undoCount(), 1u);
+            ASSERT_TRUE(history.undo().success);
+            for (const auto id : ids)
+                EXPECT_NE(sequencer.timeline().getKeyframeById(id), nullptr);
+            ASSERT_TRUE(history.redo().success);
+            EXPECT_EQ(sequencer.timeline().realKeyframeCount(), ids.size() - indices.size());
+            for (size_t i = 0; i < ids.size(); ++i)
+                EXPECT_EQ(sequencer.timeline().getKeyframeById(ids[i]) == nullptr,
+                          std::ranges::find(indices, i) != indices.end());
+            ASSERT_TRUE(history.undo().success);
+        }
+        history.clear();
+        scene_manager.selectNode(scene.getNode("Keyframe 1")->id);
+        refresh();
+        tree->Blur();
+        EXPECT_FALSE(tree->IsPseudoClassSet("focus"));
+        ASSERT_TRUE(panel.requestDeleteSelectionIfAvailable());
+        EXPECT_EQ(sequencer.timeline().getKeyframeById(ids[0]), nullptr);
+        ASSERT_EQ(history.undoCount(), 1u);
+        ASSERT_TRUE(history.undo().success);
+        history.clear();
+        const auto first = scene.getNode("Keyframe 1")->id;
+        const auto group = scene.getNode("Keyframes")->id;
+        for (const auto& selected : {std::vector<core::NodeId>{first, other}, {group}, {first}}) {
+            scene.setNodeLocked("Keyframe 1", selected.size() == 1 && selected.front() == first);
+            scene_manager.selectNodesById(selected);
+            refresh();
+            EXPECT_TRUE(remove->IsClassSet("disabled"));
+            remove->DispatchEvent("click", {});
+            EXPECT_EQ(sequencer.timeline().realKeyframeCount(), ids.size());
+            EXPECT_NE(scene.getNodeById(other), nullptr);
+            EXPECT_EQ(history.undoCount(), 0u);
+        }
+    }
+
     TEST_F(ScenePanelRefreshTest, UnchangedPanelStaysIdle) {
         auto& scene = viewer_->getSceneManager()->getScene();
         scene.addGroup("Existing");
@@ -4163,29 +4637,18 @@ namespace lfs::vis {
         EXPECT_NE(html.find("scene_panel:go_to_camera:42"), std::string::npos);
         for (const auto id : {empty, empty_nested}) {
             html = open_menu(id);
-            EXPECT_EQ(html.find("scene_panel:enable_all_train:"), std::string::npos);
-            EXPECT_EQ(html.find("scene_panel:disable_all_train:"), std::string::npos);
+            EXPECT_EQ(html.find("scene_panel:enable_group_train:"), std::string::npos);
+            EXPECT_EQ(html.find("scene_panel:disable_group_train:"), std::string::npos);
+            EXPECT_EQ(html.find("scene_panel:camera_selection:blurry:"), std::string::npos);
             EXPECT_EQ(html.find("scene_panel:duplicate:"), std::string::npos);
         }
         html = open_menu(full);
-        EXPECT_NE(html.find("scene_panel:enable_all_train:"), std::string::npos);
-        EXPECT_NE(html.find("scene_panel:disable_all_train:"), std::string::npos);
+        EXPECT_NE(html.find("scene_panel:enable_group_train:"), std::string::npos);
+        EXPECT_NE(html.find("scene_panel:disable_group_train:"), std::string::npos);
+        EXPECT_NE(html.find("scene_panel:camera_selection:blurry:" + std::to_string(full)), std::string::npos);
+        EXPECT_EQ(html.find("scene_panel:enable_all_selected_train"), std::string::npos);
+        EXPECT_EQ(html.find("scene_panel:disable_all_selected_train"), std::string::npos);
         EXPECT_EQ(html.find("scene_panel:duplicate:"), std::string::npos);
-        auto* menu_context = manager().getContext("global_context_menu");
-        ASSERT_NE(menu_context, nullptr);
-        auto* doc = menu_context->GetDocument(0);
-        ASSERT_NE(doc, nullptr);
-        auto* disable = doc->QuerySelector("[data-ctx-action='scene_panel:disable_all_train:" + std::to_string(full) + "']");
-        ASSERT_NE(disable, nullptr);
-        disable->DispatchEvent("click", {});
-        panel.preload(ctx);
-        EXPECT_FALSE(scene.getNodeById(child)->training_enabled);
-        open_menu(full);
-        auto* enable = doc->QuerySelector("[data-ctx-action='scene_panel:enable_all_train:" + std::to_string(full) + "']");
-        ASSERT_NE(enable, nullptr);
-        enable->DispatchEvent("click", {});
-        panel.preload(ctx);
-        EXPECT_TRUE(scene.getNodeById(child)->training_enabled);
 
         scene_manager.selectNodesById({empty, empty_nested});
         html = open_menu(empty);
@@ -4195,6 +4658,265 @@ namespace lfs::vis {
         html = open_menu(empty);
         EXPECT_NE(html.find("scene_panel:enable_all_selected_train"), std::string::npos);
         EXPECT_NE(html.find("scene_panel:disable_all_selected_train"), std::string::npos);
+        EXPECT_TRUE(scene.getNodeById(child)->training_enabled);
+    }
+
+    TEST_F(ScenePanelRefreshTest, CameraGroupMenuPreservesChildSelectionAndTrainingTargets) {
+        auto& scene_manager = *viewer_->getSceneManager();
+        auto& scene = scene_manager.getScene();
+        const auto group = scene.addCameraGroup("Cameras", core::NULL_NODE, 0);
+        const auto first = addCamera(scene, "First", group, {}, 61);
+        const auto second = addCamera(scene, "Second", group, {}, 62);
+        const auto untouched = addCamera(scene, "Untouched", group, {}, 63);
+        const auto other_group = scene.addCameraGroup("Other cameras", core::NULL_NODE, 0);
+        const auto other_camera = addCamera(scene, "Other", other_group, {}, 64);
+        gui::NativeScenePanel panel(&manager());
+        gui::PanelDrawContext ctx;
+        ctx.scene = &scene;
+
+        scene_manager.clearSelection();
+        auto* group_menu = openCameraMenu(panel, ctx, group);
+        ASSERT_NE(group_menu, nullptr);
+        EXPECT_EQ(scene_manager.getSelectedNodeIds(), std::vector<core::NodeId>{group});
+        EXPECT_EQ(group_menu->GetInnerRML().find("scene_panel:disable_all_selected_train"), std::string::npos);
+        EXPECT_NE(group_menu->GetInnerRML().find("scene_panel:disable_group_train:" + std::to_string(group)), std::string::npos);
+        EXPECT_TRUE(scene.getNodeById(first)->training_enabled);
+        EXPECT_TRUE(scene.getNodeById(second)->training_enabled);
+        EXPECT_TRUE(scene.getNodeById(untouched)->training_enabled);
+
+        for (const auto& selection : {std::vector<core::NodeId>{first},
+                                      std::vector<core::NodeId>{first, second}}) {
+            scene_manager.selectNodesById(selection);
+            const auto selected_before = scene_manager.getSelectedNodeIds();
+            auto* document = openCameraMenu(panel, ctx, group);
+            ASSERT_NE(document, nullptr);
+            EXPECT_EQ(scene_manager.getSelectedNodeIds(), selected_before);
+            EXPECT_NE(document->GetInnerRML().find("scene_panel:disable_group_train:" + std::to_string(group)), std::string::npos);
+            for (const bool enabled : {false, true}) {
+                const auto action = enabled ? "enable_all_selected_train" : "disable_all_selected_train";
+                auto* item = document->QuerySelector("[data-ctx-action='scene_panel:" + std::string(action) + "']");
+                ASSERT_NE(item, nullptr);
+                item->DispatchEvent("click", {});
+                panel.preload(ctx);
+                EXPECT_EQ(scene.getNodeById(first)->training_enabled, enabled);
+                EXPECT_EQ(scene.getNodeById(second)->training_enabled, selection.size() == 1 || enabled);
+                EXPECT_TRUE(scene.getNodeById(untouched)->training_enabled);
+                EXPECT_TRUE(scene.getNodeById(other_camera)->training_enabled);
+                EXPECT_EQ(scene_manager.getSelectedNodeIds(), selected_before);
+                document = openCameraMenu(panel, ctx, group);
+                ASSERT_NE(document, nullptr);
+            }
+
+            auto* hierarchy = document->QuerySelector("[data-ctx-action='scene_panel:select_hierarchy']");
+            ASSERT_NE(hierarchy, nullptr);
+            hierarchy->DispatchEvent("click", {});
+            panel.preload(ctx);
+            const auto selected = scene_manager.getSelectedNodeIds();
+            EXPECT_EQ(std::set<core::NodeId>(selected.begin(), selected.end()),
+                      (std::set<core::NodeId>{group, first, second, untouched}));
+        }
+
+        // A different group's menu must retain normal right-click selection semantics.
+        auto* document = openCameraMenu(panel, ctx, other_group);
+        ASSERT_NE(document, nullptr);
+        EXPECT_EQ(scene_manager.getSelectedNodeIds(), std::vector<core::NodeId>{other_group});
+        EXPECT_EQ(document->GetInnerRML().find("scene_panel:disable_all_selected_train"), std::string::npos);
+        EXPECT_TRUE(scene.getNodeById(first)->training_enabled);
+        EXPECT_TRUE(scene.getNodeById(second)->training_enabled);
+
+        scene_manager.selectNodesById({first, other_camera});
+        document = openCameraMenu(panel, ctx, group);
+        ASSERT_NE(document, nullptr);
+        EXPECT_EQ(scene_manager.getSelectedNodeIds(), std::vector<core::NodeId>{group});
+        EXPECT_EQ(document->GetInnerRML().find("scene_panel:disable_all_selected_train"), std::string::npos);
+
+        // Group-wide actions remain available and operate independently of tree selection.
+        scene_manager.selectNodesById({first, second});
+        for (const bool enabled : {false, true}) {
+            document = openCameraMenu(panel, ctx, group);
+            ASSERT_NE(document, nullptr);
+            const auto action = enabled ? "enable_group_train:" : "disable_group_train:";
+            auto* item = document->QuerySelector("[data-ctx-action='scene_panel:" + std::string(action) + std::to_string(group) + "']");
+            ASSERT_NE(item, nullptr);
+            item->DispatchEvent("click", {});
+            panel.preload(ctx);
+            auto& tasks = viewer_->getGuiManager()->asyncTasks();
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            auto status = tasks.cameraSelectionStatus();
+            ASSERT_TRUE(status.has_value());
+            while (status->running() && std::chrono::steady_clock::now() < deadline) {
+                tasks.pollCameraSelectionCompletion();
+                std::this_thread::yield();
+                status = tasks.cameraSelectionStatus();
+                ASSERT_TRUE(status.has_value());
+            }
+            ASSERT_EQ(status->status, JobStatus::Completed) << status->error;
+            EXPECT_EQ(scene.getNodeById(first)->training_enabled, enabled);
+            EXPECT_EQ(scene.getNodeById(second)->training_enabled, enabled);
+            EXPECT_EQ(scene.getNodeById(untouched)->training_enabled, enabled);
+            EXPECT_TRUE(scene.getNodeById(other_camera)->training_enabled);
+            const auto selected = scene_manager.getSelectedNodeIds();
+            EXPECT_EQ(std::set<core::NodeId>(selected.begin(), selected.end()), (std::set<core::NodeId>{first, second}));
+        }
+    }
+
+    TEST_F(ScenePanelRefreshTest, BlurryCameraSelectionOnlySelectsEnabledImagesAndCommitsOnSuccess) {
+        lfs::test::licht::TemporaryDirectory temp("blurry-cameras");
+        std::filesystem::create_directories(temp.path / "sharp");
+        std::filesystem::create_directories(temp.path / "blurred");
+        const auto sharp_path = temp.path / "sharp" / "image.png";
+        const auto blurred_path = temp.path / "blurred" / "image.png";
+        std::vector<uint8_t> pixels(64 * 48 * 3, 128);
+        ASSERT_TRUE(core::save_png(blurred_path, pixels.data(), 64, 48, 3, 8, 1));
+        for (int y = 0; y < 48; ++y)
+            for (int x = 0; x < 64; ++x)
+                for (int channel = 0; channel < 3; ++channel)
+                    pixels[(y * 64 + x) * 3 + channel] = (x / 4 + y / 4) % 2 ? 255 : 0;
+        ASSERT_TRUE(core::save_png(sharp_path, pixels.data(), 64, 48, 3, 8, 1));
+        const auto sharp_score = io::computeSharpnessScore(pixels.data(), 64, 48, io::SharpnessAlgorithm::COMBINED);
+        ASSERT_GT(sharp_score, 10.0);
+        auto& manager = *viewer_->getSceneManager();
+        auto& scene = manager.getScene();
+        const auto group = scene.addCameraGroup("Cameras", core::NULL_NODE, 0);
+        const auto sharp = addCamera(scene, "Sharp", group, sharp_path, 71);
+        const auto blurred = addCamera(scene, "Blurred", group, blurred_path, 72);
+        const auto disabled = addCamera(scene, "Disabled", group, temp.path / "missing.png", 73);
+        const auto other = addCamera(scene, "Other", core::NULL_NODE, {}, 74);
+        const auto unavailable = addCamera(scene, "Unavailable image", group, {}, 76);
+        scene.getNodeById(unavailable)->camera->set_has_image(false);
+        scene.setCameraTrainingEnabled(disabled, false);
+        auto& tasks = viewer_->getGuiManager()->asyncTasks();
+        const auto start = [&](double threshold) {
+            return tasks.startCameraSelection({.operation = gui::AsyncTaskManager::CameraSelectionOperation::Blurry,
+                                               .sharpness_threshold = threshold,
+                                               .camera_group_id = group});
+        };
+        const auto finish = [&] {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            auto state = tasks.cameraSelectionStatus();
+            while (state && state->running() && std::chrono::steady_clock::now() < deadline) {
+                tasks.pollCameraSelectionCompletion();
+                std::this_thread::yield();
+                state = tasks.cameraSelectionStatus();
+            }
+            return state;
+        };
+        manager.selectNodesById({other});
+        const auto generation = scene.renderGeneration();
+        ASSERT_TRUE(start(sharp_score));
+        scene.syncTrainingModelTopology(42);
+        const auto refined_generation = scene.renderGeneration();
+        ASSERT_NE(refined_generation, generation);
+        auto state = finish();
+        ASSERT_TRUE(state);
+        ASSERT_EQ(state->status, JobStatus::Completed) << state->error;
+        EXPECT_EQ(manager.getSelectedNodeIds(), (std::vector<core::NodeId>{blurred}));
+        EXPECT_EQ(scene.renderGeneration(), refined_generation);
+        EXPECT_TRUE(scene.getNodeById(sharp)->training_enabled);
+        EXPECT_TRUE(scene.getNodeById(blurred)->training_enabled);
+        EXPECT_FALSE(scene.getNodeById(disabled)->training_enabled);
+        EXPECT_TRUE(scene.getNodeById(other)->training_enabled);
+        EXPECT_TRUE(scene.getNodeById(unavailable)->training_enabled);
+
+        ASSERT_TRUE(start(0.0));
+        state = finish();
+        ASSERT_TRUE(state);
+        ASSERT_EQ(state->status, JobStatus::Completed) << state->error;
+        EXPECT_TRUE(manager.getSelectedNodeIds().empty());
+        manager.selectNodesById({sharp});
+        scene.setCameraTrainingEnabled(disabled, true);
+        ASSERT_TRUE(start(10.0));
+        state = finish();
+        ASSERT_TRUE(state);
+        ASSERT_EQ(state->status, JobStatus::Completed) << state->error;
+        EXPECT_FALSE(state->stage.empty());
+        EXPECT_EQ(manager.getSelectedNodeIds(), (std::vector<core::NodeId>{blurred}));
+        scene.setCameraTrainingEnabled(disabled, false);
+
+        manager.selectNodesById({sharp});
+        scene.setCameraTrainingEnabled(sharp, false);
+        scene.setCameraTrainingEnabled(blurred, false);
+        scene.setCameraTrainingEnabled(unavailable, false);
+        ASSERT_TRUE(start(10.0));
+        state = finish();
+        ASSERT_TRUE(state);
+        ASSERT_EQ(state->status, JobStatus::Completed) << state->error;
+        EXPECT_TRUE(state->stage.empty());
+        EXPECT_EQ(manager.getSelectedNodeIds(), (std::vector<core::NodeId>{sharp}));
+        scene.setCameraTrainingEnabled(sharp, true);
+        scene.setCameraTrainingEnabled(blurred, true);
+        scene.setCameraTrainingEnabled(unavailable, true);
+
+        ASSERT_TRUE(start(10.0));
+        tasks.cancelCameraSelection();
+        state = finish();
+        ASSERT_TRUE(state);
+        EXPECT_EQ(state->status, JobStatus::Canceled);
+        EXPECT_EQ(manager.getSelectedNodeIds(), (std::vector<core::NodeId>{sharp}));
+        ASSERT_TRUE(start(10.0));
+        scene.setCameraTrainingEnabled(blurred, false);
+        state = finish();
+        ASSERT_TRUE(state);
+        EXPECT_EQ(state->status, JobStatus::Failed);
+        EXPECT_EQ(manager.getSelectedNodeIds(), (std::vector<core::NodeId>{sharp}));
+        scene.setCameraTrainingEnabled(blurred, true);
+
+        auto& blurred_camera = *scene.getNodeById(blurred)->camera;
+        ASSERT_TRUE(start(10.0));
+        blurred_camera.set_has_image(false);
+        state = finish();
+        ASSERT_TRUE(state);
+        EXPECT_EQ(state->status, JobStatus::Failed);
+        EXPECT_EQ(manager.getSelectedNodeIds(), (std::vector<core::NodeId>{sharp}));
+        blurred_camera.set_has_image(true);
+
+        ASSERT_TRUE(start(10.0));
+        blurred_camera.rebase_asset_paths(temp.path, temp.path / "relocated");
+        ASSERT_NE(blurred_camera.image_path(), blurred_path);
+        state = finish();
+        ASSERT_TRUE(state);
+        EXPECT_EQ(state->status, JobStatus::Failed);
+        EXPECT_EQ(manager.getSelectedNodeIds(), (std::vector<core::NodeId>{sharp}));
+        blurred_camera.rebase_asset_paths(temp.path / "relocated", temp.path);
+
+        ASSERT_TRUE(start(10.0));
+        addCamera(scene, "New camera", group, sharp_path, 75);
+        state = finish();
+        ASSERT_TRUE(state);
+        EXPECT_EQ(state->status, JobStatus::Failed);
+        EXPECT_EQ(manager.getSelectedNodeIds(), (std::vector<core::NodeId>{sharp}));
+        EXPECT_FALSE(start(-1.0));
+        EXPECT_FALSE(start(101.0));
+        EXPECT_FALSE(start(std::numeric_limits<double>::quiet_NaN()));
+
+#ifdef _WIN32
+        // Deny payload reads while leaving the path and its metadata untouched.
+        {
+            const auto native_path = core::native_fs::native_path(blurred_path);
+            const HANDLE handle = CreateFileW(native_path.c_str(), GENERIC_READ, FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                              nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            ASSERT_NE(handle, INVALID_HANDLE_VALUE);
+            const std::unique_ptr<void, decltype(&CloseHandle)> held(handle, &CloseHandle);
+            EXPECT_THROW(static_cast<void>(core::load_image(blurred_path)), std::runtime_error);
+            ASSERT_TRUE(start(10.0));
+            state = finish();
+            ASSERT_TRUE(state);
+            ASSERT_EQ(state->status, JobStatus::Completed) << state->error;
+            EXPECT_EQ(manager.getSelectedNodeIds(), (std::vector<core::NodeId>{blurred}));
+        }
+#endif
+
+        // A replacement with a preserved timestamp must still invalidate a different file size.
+        const auto old_write_time = std::filesystem::last_write_time(blurred_path);
+        const auto old_size = std::filesystem::file_size(blurred_path);
+        ASSERT_TRUE(core::save_png(blurred_path, pixels.data(), 64, 48, 3, 8, 1));
+        ASSERT_NE(std::filesystem::file_size(blurred_path), old_size);
+        std::filesystem::last_write_time(blurred_path, old_write_time);
+        ASSERT_TRUE(start(10.0));
+        state = finish();
+        ASSERT_TRUE(state);
+        ASSERT_EQ(state->status, JobStatus::Completed) << state->error;
+        EXPECT_TRUE(manager.getSelectedNodeIds().empty());
     }
 
     TEST_F(ScenePanelRefreshTest, CameraMenuRemovesDisabledCameras) {
@@ -4224,8 +4946,10 @@ namespace lfs::vis {
         EXPECT_NE(scene.getNodeById(disabled_camera), nullptr);
 
         scene.setCameraTrainingEnabled(disabled_camera, false);
+        scene_manager.selectNodesById({disabled_camera});
         menu_document = openCameraMenu(panel, ctx, group);
         ASSERT_NE(menu_document, nullptr);
+        EXPECT_EQ(scene_manager.getSelectedNodeIds(), std::vector<core::NodeId>{disabled_camera});
         remove_disabled = menu_document->QuerySelector("[data-ctx-action='" + action + "']");
         ASSERT_NE(remove_disabled, nullptr);
         EXPECT_FALSE(remove_disabled->HasAttribute("disabled"));
@@ -4233,6 +4957,7 @@ namespace lfs::vis {
         panel.preload(ctx);
         EXPECT_NE(scene.getNodeById(enabled_camera), nullptr);
         EXPECT_EQ(scene.getNodeById(disabled_camera), nullptr);
+        EXPECT_TRUE(scene_manager.getSelectedNodeIds().empty());
 
         const auto undo = op::undoHistory().undo();
         ASSERT_TRUE(undo.success) << undo.error;

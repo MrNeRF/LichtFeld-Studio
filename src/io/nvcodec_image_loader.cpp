@@ -1189,7 +1189,7 @@ namespace lfs::io {
             extensions_path_ptr = extensions_path_str.c_str();
             LOG_DEBUG("[NvCodecImageLoader] Extensions: {}", extensions_path_str);
         } else {
-            const auto exe_dir = lfs::core::getExecutableDir();
+            const auto exe_dir = lfs::core::getRuntimeDir();
             const auto lib_dir = lfs::core::getLibDir();
             LOG_WARN("[NvCodecImageLoader] GPU decode extensions unavailable: directory empty or missing. "
                      "Searched exe_dir/../extensions ({}), lib_dir/extensions ({}), exe_dir/extensions ({}). "
@@ -2086,8 +2086,11 @@ namespace lfs::io {
             throw std::runtime_error("Expected 3D tensor, got " + std::to_string(shape.rank()) + "D");
         }
 
-        if (image.dtype() != DataType::Float32 || image.device() != Device::GPU) {
-            throw std::runtime_error("encode_to_jpeg2k expects a Float32 CUDA tensor");
+        // Float32 [0,1] is scaled to uint16 samples; uint16 samples (Float16 is only
+        // their 2-byte container, there is no UInt16 dtype) are written as they are.
+        const bool uint16_samples = image.dtype() == DataType::Float16;
+        if ((image.dtype() != DataType::Float32 && !uint16_samples) || image.device() != Device::GPU) {
+            throw std::runtime_error("encode_to_jpeg2k expects a Float32 or uint16 (Float16 container) CUDA tensor");
         }
 
         const bool chw = layout == RgbLayout::CHW;
@@ -2098,14 +2101,15 @@ namespace lfs::io {
         const uint32_t width = static_cast<uint32_t>(chw ? shape[2] : shape[1]);
         const uint32_t channels = 3;
 
-        // Scale float [0,1] -> uint16 [0, 65535] in HWC layout.
-        // Float16 is only a 2-byte container for the uint16 samples (no UInt16 dtype).
         // Permute only when the caller named CHW. Contiguous HWC shares its storage.
-        const Tensor hwc_float = chw ? image.permute({1, 2, 0}).contiguous()
-                                     : image.contiguous();
-        Tensor hwc_uint16 = Tensor::empty(
-            TensorShape({height, width, channels}), Device::GPU, DataType::Float16);
-        lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(hwc_float, hwc_uint16, lfs::gpu_ops::ImageConversion::F32HWCToU16HWC, height, width, channels, {});
+        const Tensor hwc = chw ? image.permute({1, 2, 0}).contiguous()
+                               : image.contiguous();
+        Tensor hwc_samples = hwc;
+        if (!uint16_samples) {
+            hwc_samples = Tensor::empty(
+                TensorShape({height, width, channels}), Device::GPU, DataType::Float16);
+            lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(hwc, hwc_samples, lfs::gpu_ops::ImageConversion::F32HWCToU16HWC, height, width, channels, {});
+        }
 
         nvimgcodecImageInfo_t image_info{};
         image_info.struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
@@ -2120,7 +2124,7 @@ namespace lfs::io {
         image_info.plane_info[0].row_stride = static_cast<size_t>(width) * 3 * sizeof(uint16_t);
         image_info.plane_info[0].sample_type = NVIMGCODEC_SAMPLE_DATA_TYPE_UINT16;
         image_info.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
-        image_info.buffer = hwc_uint16.data_ptr();
+        image_info.buffer = hwc_samples.data_ptr();
         image_info.cuda_stream = static_cast<cudaStream_t>(cuda_stream);
 
         nvimgcodecImage_t nv_image = nullptr;
@@ -2223,20 +2227,23 @@ namespace lfs::io {
         if (shape.rank() != 2) {
             throw std::runtime_error("Expected 2D tensor, got " + std::to_string(shape.rank()) + "D");
         }
-        if (image.dtype() != DataType::Float32 || image.device() != Device::GPU) {
-            throw std::runtime_error("encode_grayscale_to_jpeg2k expects a Float32 CUDA tensor");
-        }
+        const bool byte_input = eight_bit && image.dtype() == DataType::UInt8;
+        if ((!byte_input && image.dtype() != DataType::Float32) || image.device() != Device::GPU)
+            throw std::runtime_error("Grayscale JPEG2000 requires a float tensor or eight-bit samples on the device");
 
         const uint32_t height = static_cast<uint32_t>(shape[0]);
         const uint32_t width = static_cast<uint32_t>(shape[1]);
         constexpr uint32_t channels = 1;
 
-        const Tensor hw_float = image.contiguous();
-        Tensor encoded = eight_bit
-                             ? (hw_float * 255.0f).clamp(0.0f, 255.0f).to(DataType::UInt8)
-                             : Tensor::empty(TensorShape({height, width}), Device::GPU, DataType::Float16);
-        if (!eight_bit) {
-            lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(hw_float, encoded, lfs::gpu_ops::ImageConversion::F32HWCToU16HWC, height, width, channels, {});
+        const Tensor samples = image.contiguous();
+        Tensor encoded;
+        if (byte_input) {
+            encoded = samples;
+        } else if (eight_bit) {
+            encoded = (samples * 255.0f).clamp(0.0f, 255.0f).to(DataType::UInt8);
+        } else {
+            encoded = Tensor::empty(TensorShape({height, width}), Device::GPU, DataType::Float16);
+            shared_image_ops(GpuBackend::CUDA)->convert(samples, encoded, lfs::gpu_ops::ImageConversion::F32HWCToU16HWC, height, width, channels, {});
         }
         encoded = encoded.contiguous();
         if (const auto err = cudaStreamSynchronize(static_cast<cudaStream_t>(cuda_stream));

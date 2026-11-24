@@ -6,6 +6,7 @@
 #include "lfs/training/ops/types.hpp"
 
 #include <cstddef>
+#include <functional>
 
 namespace lfs::gpu_ops {
 
@@ -23,12 +24,15 @@ namespace lfs::gpu_ops {
         float ssim_weight = 0.f;
         bool valid_padding = true;
         float denominator = 0.f;
+        float blur_sigma = 0.f;
+        bool calibration_fit = false;
     };
 
     struct PhotoSaved {
         Tensor ssim_map, cs_map;
         // Diagnostic from an already available host normalization, without a new readback.
         bool empty_mask = false;
+        float mask_denominator = 0.f;
         State backend;
     };
 
@@ -68,6 +72,7 @@ namespace lfs::gpu_ops {
         // raw-render gradient of the last evaluate into grad_image after the appearance backward, then releases it;
         // an empty grad_image only releases it.
         void (*add_raw_gradient)(PhotoSaved&, Out grad_image) = nullptr;
+        void (*bind_step_scratch)(PhotoSaved&, const StepScratchAllocator&) = nullptr;
     };
 
 } // namespace lfs::gpu_ops

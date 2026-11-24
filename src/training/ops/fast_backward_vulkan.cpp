@@ -26,8 +26,10 @@ namespace lfs::training::vulkan {
             uint32_t log_scale;
             float scale_normalizer, erank_weight, dc_weight, sh_weight;
             uint64_t impact_sum, impact_peak, grad_w2c, grad_position;
+            uint32_t reg_rendered_only;
+            uint64_t blend_peak;
         };
-        static_assert(sizeof(BackPush) == 592);
+        static_assert(sizeof(BackPush) == 608);
         static_assert(offsetof(BackPush, impact_sum) == 560);
         static_assert(offsetof(BackPush, image_gradient) == 344);
         static_assert(offsetof(BackPush, densify) == 464);
@@ -103,6 +105,10 @@ namespace lfs::training::vulkan {
                                    adam.impact_sum.numel() >= p.count && adam.impact_peak.numel() >= p.count),
                        std::format("Fast impact outputs need {} contiguous float values, got {} and {}", p.count,
                                    adam.impact_sum.numel(), adam.impact_peak.numel()));
+        const bool peak = adam.blend_peak.is_valid();
+        LFS_ASSERT_MSG(!peak || (adam.blend_peak.dtype() == core::DataType::Float32 &&
+                                 adam.blend_peak.is_contiguous() && adam.blend_peak.numel() >= p.count),
+                       "Fast blend peak requires one contiguous float per splat");
         s.mark(14);
         std::array<Tensor, 6> gradients;
         constexpr std::array<size_t, 5> widths{3, 3, 4, 1, 3};
@@ -133,6 +139,8 @@ namespace lfs::training::vulkan {
             b.impact_sum = address(adam.impact_sum);
             b.impact_peak = address(adam.impact_peak);
         }
+        b.blend_peak = address(adam.blend_peak);
+        b.reg_rendered_only = adam.reg_rendered_only;
         // Match the blend dispatch contract: pixel errors request weighted
         // statistics even when the strategy supplies None (as IGS+ does).
         const auto blend_type = type == DensificationType::MRNF && b.densification != 0
@@ -178,7 +186,7 @@ namespace lfs::training::vulkan {
                 writes.push_back(ref(t));
         for (const Tensor* t : std::initializer_list<const Tensor*>{&screen_gradient, &stats, &scores, &grad_w2c, &grad_position,
                                                                     impact ? &adam.impact_sum : &no_densification,
-                                                                    impact ? &adam.impact_peak : &no_densification})
+                                                                    impact ? &adam.impact_peak : &no_densification, &adam.blend_peak})
             if (t->is_valid() && t->numel()) {
                 reads.push_back(ref(*t));
                 writes.push_back(ref(*t));
@@ -195,7 +203,7 @@ namespace lfs::training::vulkan {
         const uint32_t variant = s.variant(0) |
                                  (uint32_t(b.depth_gradient != 0) << 18) | (uint32_t(b.normal_gradient != 0) << 19) |
                                  (uint32_t(b.densify != 0 && b.densification != 0) << 20) | (uint32_t(b.scores != 0) << 21) |
-                                 (uint32_t(count_visible) << 22) | (uint32_t(impact) << 23);
+                                 (uint32_t(count_visible) << 22) | (uint32_t(impact) << 23) | (uint32_t(peak) << 26);
         if (p.visible) {
             b.stage = 2;
             dispatch(shader, b, reads, writes,
@@ -339,7 +347,19 @@ namespace lfs::training {
                 s.timer = timer;
             }
         }
-        const FastRasterOps ops{.create = create, .camera_gradient = true, .forward = vulkan::fast_forward, .backward = vulkan::fast_backward, .release = release, .warmup = warmup, .record_vram = record_vram, .release_caches = release_caches, .pop_scores = vulkan::fast_pop_scores};
+        StepScratchAllocator begin_loss_phase(FastSaved& saved) {
+            auto& state = static_cast<vulkan::FastState&>(*saved.backend);
+            // Sorting keys have no readers after forward. Values, ranges, counts and
+            // contributors still describe the order used in backward.
+            return [buffers = std::array{state.keys_a, state.keys_b}](size_t bytes) mutable {
+                for (auto& buffer : buffers) {
+                    if (buffer.is_valid() && buffer.bytes() >= bytes)
+                        return StepScratch{.storage = std::exchange(buffer, Tensor{})};
+                }
+                return StepScratch{.storage = Tensor::empty({bytes}, core::Device::GPU, core::DataType::UInt8)};
+            };
+        }
+        const FastRasterOps ops{.create = create, .camera_gradient = true, .forward = vulkan::fast_forward, .backward = vulkan::fast_backward, .release = release, .warmup = warmup, .record_vram = record_vram, .release_caches = release_caches, .pop_scores = vulkan::fast_pop_scores, .begin_loss_phase = begin_loss_phase};
     } // namespace
     void vulkan_fast_set_timer(gpu_ops::FastSaved& saved, core::GpuElapsed* timer) {
         LFS_ASSERT_MSG(saved.backend != nullptr, "Fast timing requires a created state");

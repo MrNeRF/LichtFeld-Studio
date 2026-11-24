@@ -1278,7 +1278,7 @@ namespace lfs::vis {
                 return false;
             settings_ = settings.scene();
             if (scene_changed)
-                markDirty(dirty_flags, lfs::vis::FrameReason::SceneChange);
+                markDirty(dirty_flags, lfs::vis::FrameReason::SettingsChange);
             else
                 markViewDirty(target_view, dirty_flags, FrameReason::SettingsChange);
             break;

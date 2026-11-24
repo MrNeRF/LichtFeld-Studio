@@ -12,6 +12,7 @@
 #include "training_shader_table.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -183,7 +184,19 @@ namespace lfs::training {
             std::vector<StorageRef> reads{ref(grid), ref(rgb), ref(grad_output)};
             append(reads, offset);
             append(reads, grad_grid);
-            launch(acquire_vulkan_context(), p, 2, reads, {ref(grad_rgb), ref(grad_grid)}, vk::dispatch_groups(*acquire_vulkan_context(), pixels));
+            const auto footprint = [](int tile, int pixels, int cells) {
+                if (pixels < 2 || cells < 2)
+                    return 1;
+                return std::min(cells, static_cast<int>(double(tile - 1) * (cells - 1) / (pixels - 1)) + 3);
+            };
+            p.norm_n = footprint(128, p.w, p.W);
+            p.partial_count = footprint(8, p.h, p.H);
+            if (int64_t(p.C) * p.L * p.norm_n * p.partial_count > 4096)
+                p.norm_n = p.partial_count = 0;
+            const auto ctx = acquire_vulkan_context();
+            const auto tiles = uint32_t((p.w + 127) / 128) * uint32_t((p.h + 7) / 8);
+            launch(ctx, p, 10, reads, {ref(grad_grid)}, std::min(tiles, 65535u));
+            launch(ctx, p, 1, reads, {ref(grad_rgb)}, vk::dispatch_groups(*ctx, pixels));
         }
 
         void tv_forward(In grids, Out loss, Out reduction_temp, int norm_n) {

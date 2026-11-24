@@ -1,3 +1,58 @@
+/* Shared border roles and shape scale. */
+
+.backend-chip {
+    border-radius: @{radius.control}dp;
+}
+
+#upscaler-popup {
+    border-radius: @{radius.control}dp;
+}
+
+#safe-mode-badge {
+    border-radius: 2dp;
+}
+
+#mcp-chip {
+    border-radius: 2dp;
+}
+
+#mcp-popup {
+    border-radius: 3dp;
+}
+
+.mcp-switch-track {
+    border-radius: 6dp;
+}
+
+.mcp-switch-knob {
+    border-radius: 4dp;
+}
+
+.mcp-edit-button {
+    border-radius: 2dp;
+}
+
+#progress-container {
+    border-radius: 2dp;
+}
+
+.progress-marker {
+    border-radius: 2dp;
+}
+
+#progress-container.miner .progress-marker {
+    border-radius: 0;
+}
+
+#progress-container.tessle {
+    border-radius: 2dp;
+    border-bottom: 1dp @{border};
+}
+
+#progress-container.tessle .progress-marker {
+    border-radius: 0;
+}
+
 /* Theme-dependent status bar styles. */
 
 body,
@@ -20,7 +75,7 @@ body,
 
 #mcp-chip {
     background-color: @{alpha(surface_bright,0.35)};
-    border-color: @{alpha(text_dim,0.55)};
+    border-color: @{border};
 }
 
 .input-device {
@@ -34,7 +89,7 @@ body,
 #mcp-chip:hover,
 #mcp-chip.expanded {
     background-color: @{alpha(surface_bright,0.45)};
-    border-color: @{text_dim};
+    border-color: @{border};
 }
 
 #mcp-popup {
@@ -71,12 +126,12 @@ body,
 .mcp-edit-button {
     color: @{text};
     background-color: @{blend(surface,primary,button.tint_normal)};
-    border-color: @{blend(surface,primary,button.tint_normal)};
+    border-color: @{primary};
 }
 
 .mcp-edit-button:hover {
     background-color: @{blend(surface,primary,button.tint_hover)};
-    border-color: @{blend(surface,primary,button.tint_hover)};
+    border-color: @{primary};
 }
 
 .dim,
@@ -112,7 +167,7 @@ body,
 .backend-chip {
     color: @{text};
     background-color: @{alpha(surface_bright,0.30)};
-    border-color: @{alpha(text_dim,0.35)};
+    border-color: @{border};
 }
 
 .backend-label {

@@ -43,7 +43,7 @@ namespace lfs::vis::op {
         [[nodiscard]] std::optional<PanelView> resolvePanel(const glm::vec2 screen_point) {
             auto* const rm = services().renderingOrNull();
             auto* const gm = services().guiOrNull();
-            if (!rm || !gm || !gm->getViewer())
+            if (!rm || !gm || !gm->getViewer() || rm->isGTComparisonActive())
                 return std::nullopt;
             // The 3D view under the pointer.
             const auto target = gm->getViewer()->viewAt(screen_point.x, screen_point.y);

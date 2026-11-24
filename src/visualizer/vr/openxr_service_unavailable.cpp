@@ -20,6 +20,9 @@ namespace lfs::vis::vr {
     OpenXrService::~OpenXrService() = default;
 
     bool OpenXrService::prepare() { return false; }
+    bool OpenXrService::prepareOn(GraphicsContext&) { return false; }
+    const VulkanDeviceHooks* OpenXrService::lateJoinHooks() { return nullptr; }
+    void OpenXrService::setShowHands(bool) {}
     const VulkanDeviceHooks* OpenXrService::deviceHooks() const { return nullptr; }
     void OpenXrService::setUnavailable(std::string reason) { impl_->status_detail = std::move(reason); }
     bool OpenXrService::available() const { return false; }

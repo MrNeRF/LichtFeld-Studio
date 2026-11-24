@@ -1571,6 +1571,7 @@ namespace lfs::vis {
             : frame_settings.scene_upscaler_preset == "quality"
                 ? SceneTemporalQuality::Quality
                 : SceneTemporalQuality::Balanced;
+        std::optional<GTPresentedView> rendered_gt_camera;
         std::optional<SplitViewInfo> rendered_split_info;
         VulkanSplitViewParams pending_split_view{};
         // Mesh shown on each PLY-comparison side; null where that side is a splat node.
@@ -2724,6 +2725,9 @@ namespace lfs::vis {
                                     make_split_panel(compare_panel, frame_settings.split_position, 1.0f, false);
                                 rendered_metadata = compare_panel.metadata;
                                 rendered_image_contains_ground_truth = true;
+                                if (render_camera) {
+                                    rendered_gt_camera = GTPresentedView{*render_camera, render_gt_size};
+                                }
                                 rendered_gt_content_size = gt_size;
                                 if (render_camera && gtComparisonUsesRGBReference(gt_mode)) {
                                     // Synchronous production only (RGB and, post-#1857, Loss â€” the
@@ -3267,6 +3271,11 @@ namespace lfs::vis {
                                     view_state.vulkan_viewport_image_size_ = render_result.size;
                                     view_state.vulkan_viewport_image_alloc_size_ = render_result.size;
                                     view_state.vulkan_viewport_image_flip_y_ = render_result.flip_y;
+                                    view_state.gt_guide_camera = rendered_gt_camera;
+                                    view_state.gt_composite_extent = rendered_image_contains_ground_truth && pending_split_view.enabled
+                                                                         ? pending_split_view.coordinate_extent
+                                                                         : glm::ivec2{};
+                                    view_state.gt_composite_rect = pending_split_view.content_rect;
                                     view_state.vulkan_gt_comparison_content_size_ = {0, 0};
                                     view_state.vulkan_gt_comparison_selection_view_.reset();
                                     view_state.viewport_artifact_service_.updateFromImageOutput(
@@ -3606,6 +3615,11 @@ namespace lfs::vis {
         if (!rendered_image && publish_gpu_pass) {
             view_state.vksplat_stale_frame_guard_.onSuccess();
             clearViewportImageState(view_state, render_size, false);
+            view_state.gt_guide_camera = rendered_gt_camera;
+            view_state.gt_composite_extent = rendered_image_contains_ground_truth && pending_split_view.enabled
+                                                 ? pending_split_view.coordinate_extent
+                                                 : glm::ivec2{};
+            view_state.gt_composite_rect = pending_split_view.content_rect;
             view_state.vulkan_gt_comparison_content_size_ =
                 rendered_image_contains_ground_truth ? rendered_gt_content_size : glm::ivec2{0, 0};
             if (rendered_image_contains_ground_truth) {
@@ -3664,33 +3678,7 @@ namespace lfs::vis {
                         if (!capture_params.left.image || !capture_params.right.image) {
                             return {};
                         }
-                        // content_rect is authored in coordinate_extent
-                        // space; the capture tensor is current_size. Match
-                        // recordScenePass: per-edge rounding into output pixels.
-                        // Capture has no on-screen viewport offset.
-                        if (capture_params.coordinate_extent.x > 0 &&
-                            capture_params.coordinate_extent.y > 0 &&
-                            capture_params.coordinate_extent != current_size) {
-                            const float scale_x =
-                                static_cast<float>(current_size.x) /
-                                static_cast<float>(capture_params.coordinate_extent.x);
-                            const float scale_y =
-                                static_cast<float>(current_size.y) /
-                                static_cast<float>(capture_params.coordinate_extent.y);
-                            const int left = static_cast<int>(
-                                std::lround(capture_params.content_rect.x * scale_x));
-                            const int top = static_cast<int>(
-                                std::lround(capture_params.content_rect.y * scale_y));
-                            const int right = static_cast<int>(std::lround(
-                                (capture_params.content_rect.x + capture_params.content_rect.z) *
-                                scale_x));
-                            const int bottom = static_cast<int>(std::lround(
-                                (capture_params.content_rect.y + capture_params.content_rect.w) *
-                                scale_y));
-                            capture_params.content_rect = {
-                                left, top, std::max(right - left, 1), std::max(bottom - top, 1)};
-                            capture_params.coordinate_extent = current_size;
-                        }
+                        capture_params.content_rect = capture_params.contentRectAt(current_size);
                         return composeSplitViewCpuImage(cpuSplitViewDesc(capture_params), current_size);
                     },
                     rendered_metadata,
@@ -3872,6 +3860,11 @@ namespace lfs::vis {
         view_state.vulkan_viewport_image_alloc_size_ = render_size;
         view_state.vulkan_viewport_coordinate_size_ = current_size;
         view_state.vulkan_viewport_image_flip_y_ = !rendered_metadata.flip_y;
+        view_state.gt_guide_camera = rendered_gt_camera;
+        view_state.gt_composite_extent = rendered_image_contains_ground_truth && pending_split_view.enabled
+                                             ? pending_split_view.coordinate_extent
+                                             : glm::ivec2{};
+        view_state.gt_composite_rect = pending_split_view.content_rect;
         view_state.vulkan_gt_comparison_content_size_ =
             rendered_image_contains_ground_truth ? rendered_gt_content_size : glm::ivec2{0, 0};
         if (rendered_image_contains_ground_truth) {

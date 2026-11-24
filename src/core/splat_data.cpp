@@ -588,6 +588,8 @@ namespace {
             Tensor grown = Tensor::zeros_direct(TensorShape({need}), need_cap, Device::GPU,
                                                 DataType::Float16);
             if (shN.numel() > 0) {
+                // The copy runs on the grown buffer's home stream, after its zero fill
+                // there, once that stream has waited for the old buffer's writers.
                 const size_t copy_n = std::min(static_cast<size_t>(shN.numel()), need);
                 grown.slice(0, 0, copy_n).copy_from(shN.slice(0, 0, copy_n));
             }

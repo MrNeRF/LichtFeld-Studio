@@ -14,6 +14,8 @@ struct BackPush {
     uint logScale;
     float scaleNormalizer, erankWeight, dcWeight, shWeight;
     uint64_t impactSum, impactPeak, gradW2c, gradPosition;
+    uint regRenderedOnly;
+    uint64_t blendPeak;
 };
 struct Push {
     uint64_t parameters;
@@ -49,7 +51,7 @@ struct PixelWalk {
     float3 gc, gn, behind;
 };
 struct SplatSums {
-    float h, hDy, u[12], peak;
+    float h, hDy, u[12], peak, blendPeak;
     bool contributed;
 };
 SplatSums walkSplat(BackPush b, uint slot, float2 center, inout PixelWalk state[2]) {
@@ -94,6 +96,8 @@ SplatSums walkSplat(BackPush b, uint slot, float2 center, inout PixelWalk state[
             sums.peak = max(sums.peak, removal);
             state[k].behind = alpha * color + oneMinus * state[k].behind;
         }
+        if ((fastStage & (1u << 26)) != 0)
+            sums.blendPeak = max(sums.blendPeak, weight);
         state[k].T = before;
         state[k].gT = alpha * (dot(color, state[k].gc) + o.depth * state[k].gd + normalDot) + state[k].gT * oneMinus;
         sums.contributed = true;
@@ -188,6 +192,13 @@ void reduceSingle(BackPush b, uint slot, SplatSums sums, float centerX, int fiel
         float peak = WaveActiveMax(sums.peak);
         if (lane == 0)
             storePeak(b, slot, peak);
+    }
+    if ((fastStage & (1u << 26)) != 0) {
+        float peak = WaveActiveMax(sums.blendPeak);
+        if (lane == 0 && peak > 0) {
+            uint original = loadUint(b.forward.workToOriginal, backwardWork[slot]), previous;
+            InterlockedMax(((Ptr<uint, Access.ReadWrite>)b.blendPeak)[original], asuint(peak), previous);
+        }
     }
 }
 // Back-to-front walk of one tile by four independent 32-lane subgroups
@@ -367,7 +378,7 @@ result:
                 float accum[16];
                 [unroll] for (uint f = 0; f < 16; ++f)
                     accum[f] = 0;
-                float impactSum = 0, impactPeak = 0;
+                float impactSum = 0, impactPeak = 0, blendPeak = 0;
                 [unroll] for (uint k = 0; k < 2; ++k) {
                     if (((k == 0 ? mask0 : mask1) & (1u << selected)) == 0 || pixel[k] == 0xffffffffu || ordinal >= last[k])
                         continue;
@@ -406,6 +417,8 @@ result:
                         impactPeak = max(impactPeak, removal);
                         behind[k] = alpha * color + oneMinus * behind[k];
                     }
+                    if ((fastStage & (1u << 26)) != 0)
+                        blendPeak = max(blendPeak, weight);
                     T[k] = Tbefore;
                     gT[k] = dot(gc[k], alpha * color) + alpha * o.depth * gd[k] + alpha * normalDot + gT[k] * oneMinus;
                 }
@@ -423,6 +436,13 @@ result:
                             uint previous;
                             InterlockedMax(((Ptr<uint, Access.ReadWrite>)b.impactPeak)[original], asuint(impactPeak), previous);
                         }
+                    }
+                }
+                if ((fastStage & (1u << 26)) != 0) {
+                    float peak = WaveActiveMax(blendPeak);
+                    if (WaveGetLaneIndex() == 0 && peak > 0) {
+                        uint previous;
+                        InterlockedMax(((Ptr<uint, Access.ReadWrite>)b.blendPeak)[original], asuint(peak), previous);
                     }
                 }
                 if (pop)

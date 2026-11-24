@@ -25,6 +25,7 @@ namespace lfs::gpu_ops {
         void (*oversize_scores)(In error, In shares, In frozen, Out scores, float limit);
         void (*dead_mask)(In opacity, In rotations, Out mask, float minimum_opacity);
         void (*rotation_mask)(In rotations, Out mask);
+        void (*conserving_split)(const RefineOutputs& parents, const RefineOutputs& children, In indices, float scale) = nullptr;
     };
 
 } // namespace lfs::gpu_ops

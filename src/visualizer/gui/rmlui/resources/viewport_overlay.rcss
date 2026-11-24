@@ -84,7 +84,7 @@ body {
     justify-content: center;
     box-sizing: border-box;
     border-width: 2dp;
-    border-radius: 8dp;
+
     pointer-events: none;
     z-index: 30;
 }
@@ -97,7 +97,7 @@ body {
     max-width: 420dp;
     padding: 14dp 20dp;
     border-width: 1dp;
-    border-radius: 8dp;
+
     text-align: center;
 }
 
@@ -183,8 +183,7 @@ body {
     margin: 1dp 0;
     padding: 3dp;
     border-width: 1dp;
-    border-color: transparent;
-    border-radius: 6dp;
+
     box-sizing: border-box;
     flex-shrink: 0;
     transition: background-color border-color 0.12s quadratic-out;
@@ -288,8 +287,7 @@ body {
     margin: 0;
     padding: 3dp;
     border-width: 1dp;
-    border-color: transparent;
-    border-radius: 5dp;
+
     box-sizing: border-box;
     flex-shrink: 0;
     opacity: 0.88;
@@ -322,7 +320,7 @@ body {
 .toolbar-hcenter .toolbar-container {
     align-items: center;
     padding: 5dp 6dp;
-    border-radius: 6dp;
+
     box-sizing: border-box;
 }
 
@@ -336,8 +334,7 @@ body {
     min-height: 30dp;
     padding: 3dp;
     border-width: 1dp;
-    border-color: transparent;
-    border-radius: 6dp;
+
     box-sizing: border-box;
     flex-shrink: 0;
     transition: background-color border-color 0.12s quadratic-out;
@@ -363,7 +360,7 @@ body {
     flex-direction: column;
     gap: 3dp;
     border-width: 1dp;
-    border-radius: 6dp;
+
     box-sizing: border-box;
     pointer-events: auto;
     z-index: 10;
@@ -377,7 +374,7 @@ body {
     height: 20dp;
     line-height: 20dp;
     font-size: 12dp;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .crop-roi-setting-row > .setting-row__label-col {
@@ -798,7 +795,7 @@ body {
     padding: 0 0 1dp 0;
     margin-left: 0;
     font-size: 12dp;
-    border-radius: 4dp;
+
     box-sizing: border-box;
     flex-shrink: 0;
 }
@@ -822,7 +819,7 @@ body {
     max-width: 100%;
     padding: 7dp 8dp;
     border-width: 1dp;
-    border-radius: 8dp;
+
     display: flex;
     flex-direction: column;
     align-items: stretch;
@@ -840,7 +837,7 @@ body {
     width: 65%;
     max-width: 1500dp;
     padding: 5dp 6dp;
-    border-radius: 6dp;
+
     gap: 4dp;
 }
 
@@ -850,7 +847,7 @@ body {
 
 #depth-view-block .viewport-depth-panel {
     padding: 5dp 6dp;
-    border-radius: 6dp;
+
     gap: 0;
     min-width: 0;
 }
@@ -858,7 +855,7 @@ body {
 #gt-compare-mode-block .viewport-gt-compare-panel {
     position: relative;
     padding: 5dp 6dp;
-    border-radius: 6dp;
+
     gap: 0;
     min-width: 0;
 }
@@ -884,8 +881,6 @@ body {
     display: flex;
     overflow: hidden;
     border-width: 1dp;
-    border-color: #585b70;
-    border-radius: 3dp;
 }
 
 .viewport-gt-color-scale__segment {
@@ -963,7 +958,6 @@ body {
     min-height: 22dp;
     margin-left: 4dp;
     padding: 0 3dp;
-    border-radius: 4dp;
     font-size: 11dp;
     line-height: 20dp;
     box-sizing: border-box;
@@ -978,7 +972,6 @@ body {
     width: 10dp;
     height: 10dp;
     border-width: 2dp;
-    border-radius: 5dp;
     box-sizing: border-box;
     visibility: hidden;
 }
@@ -1009,13 +1002,11 @@ body {
     line-height: 13dp;
     text-align: center;
     border-width: 1dp;
-    border-radius: 8dp;
 }
 
 .viewport-gt-compare-retry {
     padding: 2dp 5dp;
     border-width: 1dp;
-    border-radius: 3dp;
 }
 
 #gt-compare-mode-block .viewport-gt-compare-actual-size:disabled {
@@ -1028,7 +1019,7 @@ body {
     min-width: 0;
     max-width: 100%;
     padding: 5dp 6dp;
-    border-radius: 6dp;
+
     gap: 4dp;
     box-sizing: border-box;
     flex-shrink: 0;
@@ -1053,7 +1044,7 @@ body {
 #transform-block .viewport-transform-panel {
     min-width: 0;
     padding: 5dp 6dp;
-    border-radius: 6dp;
+
     gap: 0;
 }
 
@@ -1074,7 +1065,7 @@ body {
     gap: 0;
     padding: 0;
     border-width: 1dp;
-    border-radius: 5dp;
+
     flex-shrink: 0;
 }
 
@@ -1112,7 +1103,7 @@ body {
 
 .viewport-transform-meta__tool {
     font-size: 12dp;
-    font-weight: bold;
+    font-weight: 600;
 }
 .viewport-transform-context {
     display: flex;
@@ -1127,7 +1118,6 @@ body {
     gap: 0;
     padding: 0;
     border-width: 1dp;
-    border-radius: 5dp;
 }
 
 .viewport-transform-option-group.hidden {
@@ -1143,7 +1133,7 @@ body {
     min-width: 24dp;
     min-height: 24dp;
     padding: 3dp;
-    border-radius: 4dp;
+
     box-sizing: border-box;
 }
 
@@ -1177,7 +1167,6 @@ body {
 .icon-btn.disabled:hover,
 .icon-btn.disabled:active {
     background-color: transparent;
-    border-color: transparent;
 }
 
 .icon-btn.disabled img {
@@ -1397,7 +1386,7 @@ body {
     min-height: 22dp;
     padding: 4dp 10dp;
     border-width: 1dp;
-    border-radius: 6dp;
+
     font-size: 11dp;
     line-height: 14dp;
     white-space: nowrap;
@@ -1536,7 +1525,7 @@ body {
     min-width: 24dp;
     min-height: 24dp;
     padding: 3dp;
-    border-radius: 5dp;
+
     box-sizing: border-box;
 }
 
@@ -1575,7 +1564,7 @@ body {
     gap: 8dp;
     padding: 8dp;
     border-width: 1dp;
-    border-radius: 8dp;
+
     pointer-events: auto;
     z-index: 22;
 }
@@ -1587,16 +1576,16 @@ body {
     gap: 8dp;
     flex-shrink: 0;
 }
-.viewport-transfer-heading { flex: 1; font-size: 13dp; font-weight: bold; }
+.viewport-transfer-heading { flex: 1; font-size: 13dp; font-weight: 600; }
 .viewport-transfer-toggle { width: 24dp; min-width: 24dp; padding: 0; }
 .viewport-transfer-summary { font-size: 11dp; flex-shrink: 0; }
 .viewport-transfer-list { min-height: 0; max-height: 320dp; overflow-y: auto; }
 .viewport-transfer-row { display: flex; flex-direction: column; gap: 8dp; padding: 8dp 0; border-top-width: 1dp; }
-.viewport-transfer-title { font-size: 12dp; font-weight: bold; }
+.viewport-transfer-title { font-size: 12dp; font-weight: 600; }
 .viewport-transfer-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .viewport-transfer-status { flex-wrap: wrap; justify-content: space-between; font-size: 11dp; }
 .viewport-transfer-detail { font-size: 11dp; }
-.viewport-transfer-progress { height: 8dp; flex-shrink: 0; width: 100%; border-radius: 2dp; overflow: hidden; }
+.viewport-transfer-progress { height: 8dp; flex-shrink: 0; width: 100%;  overflow: hidden; }
 .viewport-transfer-fill { height: 100%; }
 .viewport-transfer-footer { padding-top: 8dp; border-top-width: 1dp; flex-wrap: wrap; }
 .viewport-transfer-queue .btn { box-sizing: border-box; height: 24dp; min-height: 24dp; max-height: 24dp; padding: 0 8dp; line-height: 22dp; font-size: 11dp; white-space: nowrap; }
@@ -1621,7 +1610,7 @@ body {
     width: 356dp;
     padding: 8dp 10dp;
     border-width: 1dp;
-    border-radius: 8dp;
+
     display: flex;
     flex-direction: column;
     gap: 4dp;
@@ -1630,7 +1619,7 @@ body {
 
 .viewport-lod-stats-title {
     font-size: 12dp;
-    font-weight: bold;
+    font-weight: 600;
     line-height: 16dp;
     margin-bottom: 2dp;
 }
@@ -1665,7 +1654,7 @@ body {
     min-width: 152dp;
     padding: 10dp 12dp;
     border-width: 1dp;
-    border-radius: 8dp;
+
     display: flex;
     flex-direction: column;
     gap: 6dp;
@@ -1685,7 +1674,7 @@ body {
 
 .viewport-metrics-value {
     font-size: 15dp;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .viewport-metrics-reason {
@@ -1711,7 +1700,7 @@ body {
     box-sizing: border-box;
     padding: 10dp 12dp;
     border-width: 1dp;
-    border-radius: 8dp;
+
     display: flex;
     flex-direction: column;
     gap: 8dp;
@@ -1741,8 +1730,7 @@ body {
     font-size: 11dp;
     text-align: center;
     cursor: pointer;
-    border-width: 0dp;
-    border-radius: 0dp;
+    border-width: 0;
 }
 
 .vram-hud-panel {
@@ -1760,7 +1748,7 @@ body {
 
 .vram-hud-counters-header {
     font-size: 11dp;
-    font-weight: bold;
+    font-weight: 600;
     padding-top: 4dp;
 }
 
@@ -1771,7 +1759,7 @@ body {
     gap: 12dp;
     padding: 10dp;
     border-width: 1dp;
-    border-radius: 5dp;
+
     font-size: 11dp;
 }
 
@@ -1783,7 +1771,7 @@ body {
     height: 24dp;
     padding: 2dp 9dp;
     border-width: 1dp;
-    border-radius: 4dp;
+
     font-size: 11dp;
     cursor: pointer;
 }
@@ -1794,7 +1782,6 @@ body {
     gap: 3dp;
     padding: 5dp 7dp;
     border-width: 1dp;
-    border-radius: 5dp;
 }
 
 .perf-hud-ledger-header-line {
@@ -1811,7 +1798,7 @@ body {
 
 .perf-hud-ledger-process {
     font-size: 12dp;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .perf-hud-ledger-header-detail span {
@@ -1821,16 +1808,16 @@ body {
 .perf-hud-ledger-closure {
     padding: 1dp 5dp;
     border-width: 1dp;
-    border-radius: 8dp;
+
     font-size: 10dp;
 }
 
 .perf-hud-ledger-over-banner {
     padding: 5dp 8dp;
     border-width: 1dp;
-    border-radius: 4dp;
+
     font-size: 11dp;
-    font-weight: bold;
+    font-weight: 600;
     text-align: center;
 }
 
@@ -1853,7 +1840,6 @@ body {
     gap: 6dp;
     min-height: 30dp;
     padding: 2dp 3dp;
-    border-radius: 3dp;
 }
 
 .perf-hud-ledger-row.root {
@@ -1869,7 +1855,7 @@ body {
     min-height: 18dp;
     max-height: 18dp;
     font-size: 9dp;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .perf-hud-ledger-name-cell {
@@ -1909,14 +1895,13 @@ body {
     width: 64dp;
     min-width: 64dp;
     height: 5dp;
-    border-radius: 3dp;
+
     overflow: hidden;
 }
 
 .perf-hud-ledger-share-fill {
     display: block;
     height: 5dp;
-    border-radius: 3dp;
 }
 
 .perf-hud-ledger-disclosure {
@@ -1944,7 +1929,7 @@ body {
     flex-shrink: 0;
     padding: 1dp 2dp;
     border-width: 1dp;
-    border-radius: 7dp;
+
     font-size: 9dp;
     text-align: center;
 }
@@ -1958,7 +1943,7 @@ body {
     justify-content: space-between;
     padding: 2dp 3dp;
     font-size: 11dp;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .vram-hud-allocs-rows {
@@ -1987,7 +1972,7 @@ body {
 
 .vram-hud-allocs-bytes {
     font-size: 11dp;
-    font-weight: bold;
+    font-weight: 600;
     width: 90dp;
     text-align: right;
 }
@@ -2003,7 +1988,7 @@ body {
     justify-content: space-between;
     padding: 2dp 3dp;
     font-size: 11dp;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .vram-hud-anno-row {
@@ -2017,7 +2002,7 @@ body {
     height: 18dp;
     min-height: 18dp;
     max-height: 18dp;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .vram-hud-anno-row-header span {
@@ -2043,7 +2028,7 @@ body {
 .vram-hud-anno-peak {
     width: 72dp;
     font-size: 11dp;
-    font-weight: bold;
+    font-weight: 600;
     text-align: right;
 }
 
@@ -2081,7 +2066,6 @@ body {
     font-size: 11dp;
     padding: 2dp 6dp;
     border-width: 1dp;
-    border-radius: 4dp;
 }
 
 .vram-hud-filter-clear {
@@ -2090,7 +2074,7 @@ body {
     font-size: 10dp;
     text-align: center;
     border-width: 1dp;
-    border-radius: 4dp;
+
     cursor: pointer;
 }
 
@@ -2110,7 +2094,7 @@ body {
 
 .vram-hud-title {
     font-size: 13dp;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .vram-hud-iteration {
@@ -2138,7 +2122,7 @@ body {
 
 .vram-hud-summary-value {
     font-size: 12dp;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .vram-hud-device {
@@ -2251,7 +2235,7 @@ body {
 
 .vram-hud-counter-value {
     font-size: 12dp;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .vram-hud-node-label {
@@ -2263,7 +2247,7 @@ body {
 
 .vram-hud-row-header span {
     font-size: 10dp;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .vram-hud-row-header {
@@ -2314,7 +2298,7 @@ body {
     flex-direction: column;
     gap: 5dp;
     border-width: 1dp;
-    border-radius: 7dp;
+
     z-index: 30;
 }
 
@@ -2328,10 +2312,10 @@ body {
 }
 
 .perf-hud-strip-title { flex-grow: 1; }
-.perf-hud-strip-rate, .perf-hud-strip-value, .perf-hud-strip-badge { font-weight: normal; }
+.perf-hud-strip-rate, .perf-hud-strip-value, .perf-hud-strip-badge { font-weight: 400; }
 .perf-hud-strip-meter { display: flex; align-items: center; gap: 5dp; height: 18dp; cursor: pointer; }
 .perf-hud-strip-label { width: 34dp; }
-.perf-hud-meter-track { flex-grow: 1; display: flex; height: 7dp; overflow: hidden; border-radius: 3dp; }
+.perf-hud-meter-track { flex-grow: 1; display: flex; height: 7dp; overflow: hidden;  }
 .perf-hud-meter-fill { display: block; height: 100%; width: 0%; }
 /* Fits "23.51 GiB / 23.51 GiB" on one line (mono 10dp). */
 .perf-hud-strip-value { width: 128dp; min-width: 128dp; text-align: right; font-size: 10dp; white-space: nowrap; }
@@ -2407,9 +2391,9 @@ body {
 .vram-hud-timeline-tooltip { min-height: 16dp; font-size: 10dp; white-space: normal; }
 .vram-hud-timeline-legend button { display: flex; align-items: center; gap: 4dp; }
 .vram-hud-timeline-legend button.muted { opacity: .42; }
-.vram-hud-legend-swatch { display: inline-block; width: 8dp; height: 8dp; border-radius: 2dp; }
-.vram-hud-legend-chip b { font-weight: normal; margin-left: 3dp; }
-.vram-hud-section-title { font-size: 11dp; font-weight: bold; cursor: pointer; margin-top: 7dp; }
+.vram-hud-legend-swatch { display: inline-block; width: 8dp; height: 8dp;  }
+.vram-hud-legend-chip b { font-weight: 400; margin-left: 3dp; }
+.vram-hud-section-title { font-size: 11dp; font-weight: 600; cursor: pointer; margin-top: 7dp; }
 .vram-hud-peak { display: flex; flex-direction: column; gap: 3dp; }
 .vram-hud-peak-bar { display: flex; width: 100%; height: 11dp; overflow: hidden; }
 .vram-hud-peak-segment { height: 100%; }
@@ -2442,7 +2426,7 @@ body {
 .vram-hud-allocs-summary-value,
 .vram-hud-breakdown-bytes,
 .vram-hud-breakdown-pct {
-    font-weight: normal;
+    font-weight: 400;
 }
 
 /* Leave room for the tool strip and corner axis control in each pane. */
@@ -2490,7 +2474,6 @@ body {
     max-width: 100%;
     box-sizing: border-box;
     padding: 5dp 11dp;
-    border-radius: 12dp;
     border-width: 0;
     font-size: 11dp;
     line-height: 16dp;
@@ -2515,7 +2498,7 @@ body {
 
 .scale-distance-title,
 .scale-distance-value {
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .scale-distance-value {
@@ -2553,7 +2536,7 @@ body {
     position: absolute;
     box-sizing: border-box;
     padding: 4dp 8dp;
-    border-radius: 4dp;
+
     background-color: rgba(20, 23, 28, 160);
     color: rgba(255, 255, 255, 210);
     font-size: 12dp;
@@ -2573,9 +2556,9 @@ body {
     white-space: normal;
 }
 .gamepad-indicator-heading { display: flex; align-items: center; gap: 7dp; }
-.gamepad-indicator-dot { width: 6dp; height: 6dp; border-radius: 3dp; flex-shrink: 0; }
+.gamepad-indicator-dot { width: 6dp; height: 6dp;  flex-shrink: 0; }
 .gamepad-indicator-label { font-size: 11dp; }
-.gamepad-indicator-mode { font-weight: bold; font-size: 12dp; }
+.gamepad-indicator-mode { font-weight: 600; font-size: 12dp; }
 .gamepad-indicator-panel { font-size: 11dp; }
 .gamepad-indicator-status { margin-left: 13dp; font-size: 11dp; max-width: 280dp; }
 
@@ -2599,14 +2582,13 @@ body {
     min-width: 0;
     padding: 0;
     font-size: 12dp;
-    border-radius: 3dp;
     z-index: 15;
 }
 .side-dock-toggle.hidden { display: none; }
 /* Keep targets beyond the 4 dp dock resize bands. */
 .side-dock-toggle.left { left: 6dp; }
 .side-dock-toggle.right { right: 6dp; }
-.side-dock-grip { width: 2dp; height: 16dp; border-radius: 1dp; }
+.side-dock-grip { width: 2dp; height: 16dp; }
 .side-dock-toggle .dock-collapse-arrow,
 .side-dock-toggle .dock-expand-arrow { display: none; }
 .side-dock-toggle:hover .side-dock-grip,

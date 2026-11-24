@@ -98,9 +98,128 @@ void atomicFloatAdd(uint64_t address, uint index, float value) {
         atomicFloatAddScalar(address, index, value);
 }
 
+// Eight rows per workgroup, four adjacent 32-pixel segments per row.
+// Each coefficient and z corner has one accumulator for its current x/z run.
+groupshared float staged[8 * 14 * 33];
+groupshared uint histogram[4096];
+
+float gridCoordinate(int pixel, int extent, int cells) {
+    return extent > 1 ? float(pixel) / float(extent - 1) * float(cells - 1) : 0;
+}
+
+void addCorner(Parameters p, int slots, int xmin, int ymin, int width,
+               int channel, int z, int y, int x, float value) {
+    if (slots == 0) {
+        atomicFloatAddScalar(p.gradGrid, ((channel * p.L + z) * p.H + y) * p.W + x, value);
+        return;
+    }
+    uint at = (((y - ymin) * width + x - xmin) * p.L + z) * p.C + channel;
+    uint expected = histogram[at], observed;
+    for (;;) {
+        InterlockedCompareExchange(histogram[at], expected, asuint(asfloat(expected) + value), observed);
+        if (observed == expected)
+            return;
+        expected = observed;
+    }
+}
+
+void flushRun(Parameters p, int slots, int xmin, int ymin, int width, int key,
+              int channel, int zCorner, int y0, float fy, float2 sums) {
+    int x0 = key >> 16, x1 = min(x0 + 1, p.W - 1);
+    int y1 = min(y0 + 1, p.H - 1), z = min((key & 65535) + zCorner, p.L - 1);
+    addCorner(p, slots, xmin, ymin, width, channel, z, y0, x0, sums.x * (1 - fy));
+    addCorner(p, slots, xmin, ymin, width, channel, z, y0, x1, sums.y * (1 - fy));
+    addCorner(p, slots, xmin, ymin, width, channel, z, y1, x0, sums.x * fy);
+    addCorner(p, slots, xmin, ymin, width, channel, z, y1, x1, sums.y * fy);
+}
+
+void tiledGridGradient(Parameters p, uint tile, uint thread) {
+    int tilesX = (p.w + 127) / 128;
+    int startX = (tile % tilesX) * 128, startY = (tile / tilesX) * 8;
+    int endX = min(startX + 128, p.w), endY = min(startY + 8, p.h);
+    int xmin = int(gridCoordinate(startX, p.w, p.W)), ymin = int(gridCoordinate(startY, p.h, p.H));
+    int xmax = min(int(gridCoordinate(endX - 1, p.w, p.W)) + 1, p.W - 1);
+    int ymax = min(int(gridCoordinate(endY - 1, p.h, p.H)) + 1, p.H - 1);
+    int width = xmax - xmin + 1, height = ymax - ymin + 1;
+    int slots = width <= p.normN && height <= p.partialCount ? p.C * p.L * width * height : 0;
+    for (int i = thread; i < slots; i += 256)
+        histogram[i] = 0;
+    GroupMemoryBarrierWithGroupSync();
+
+    int lane = thread % 32, row = thread / 32, y = startY + row;
+    float gy = gridCoordinate(y, p.h, p.H);
+    int y0 = int(gy), channel = lane / 2, zCorner = lane % 2, base = row * 14 * 33;
+    int runKey = -1;
+    float2 sums = 0;
+    for (int start = startX; start < endX; start += 32) {
+        int x = start + lane;
+        if (x < endX && y < endY) {
+            uint pixel = y * p.w + x;
+            float3 rgb = finiteRgb(p, pixel, p.rgb, .5f);
+            float3 grad = finiteRgb(p, pixel, p.gradOutput, 0);
+            Cell c = cellAt(p, pixel, rgb);
+            if (p.exposureChroma != 0) {
+                float sampled[9], dc[8] = {0, 0, 0, 0, 0, 0, 0, 0}, exposure = 0;
+                for (int i = 0; i < 9; ++i)
+                    sampled[i] = sampleGrid(p, c, i);
+                PpColor color;
+                color.b = float2(sampled[1], sampled[2]);
+                color.r = float2(sampled[3], sampled[4]);
+                color.g = float2(sampled[5], sampled[6]);
+                color.n = float2(sampled[7], sampled[8]);
+                float3 g = ppApplyColorBwd(ppApplyExposure(rgb, sampled[0]), color, grad, dc);
+                ppApplyExposureBwd(rgb, sampled[0], g, exposure);
+                staged[base + lane] = exposure;
+                for (int i = 0; i < 8; ++i)
+                    staged[base + (i + 1) * 33 + lane] = dc[i];
+            } else {
+                for (int i = 0; i < 12; ++i)
+                    staged[base + i * 33 + lane] = (i % 4 == 3 ? 1.f : rgb[i % 4]) * grad[i / 4];
+            }
+            staged[base + p.C * 33 + lane] = c.fx;
+            staged[base + (p.C + 1) * 33 + lane] = c.fz;
+            reduction[thread] = asfloat((c.x0 << 16) | c.z0);
+        }
+        GroupMemoryBarrierWithGroupSync();
+        if (y < endY && channel < p.C) {
+            for (int j = 0; j < min(32, endX - start); ++j) {
+                int key = asint(reduction[row * 32 + j]);
+                if (key != runKey) {
+                    if (runKey >= 0)
+                        flushRun(p, slots, xmin, ymin, width, runKey, channel, zCorner, y0, gy - y0, sums);
+                    sums = 0;
+                    runKey = key;
+                }
+                float fx = staged[base + p.C * 33 + j], fz = staged[base + (p.C + 1) * 33 + j];
+                float v = (zCorner != 0 ? fz : 1 - fz) * staged[base + channel * 33 + j];
+                sums += float2(1 - fx, fx) * v;
+            }
+        }
+        GroupMemoryBarrierWithGroupSync();
+    }
+    if (runKey >= 0)
+        flushRun(p, slots, xmin, ymin, width, runKey, channel, zCorner, y0, gy - y0, sums);
+    GroupMemoryBarrierWithGroupSync();
+    for (int i = thread; i < slots; i += 256) {
+        float value = asfloat(histogram[i]);
+        if (value != 0) {
+            int ci = i % p.C, rest = i / p.C, z = rest % p.L;
+            rest /= p.L;
+            atomicFloatAddScalar(p.gradGrid, ((ci * p.L + z) * p.H + ymin + rest / width) * p.W + xmin + rest % width, value);
+        }
+    }
+    GroupMemoryBarrierWithGroupSync();
+}
+
 [numthreads(256,1,1)]
 void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uint3 tid : SV_DispatchThreadID, uniform Parameters p) {
     uint3 groups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
+    if (operation == 10) {
+        uint tiles = uint((p.w + 127) / 128) * uint((p.h + 7) / 8);
+        for (uint tile = groupId.x; tile < tiles; tile += groups.x)
+            tiledGridGradient(p, tile, lane);
+        return;
+    }
     if (operation == 0 || operation == 1 || operation == 2) {
         const uint pixels = uint(p.h * p.w);
         for (uint pixel = tid.x; pixel < pixels; pixel += groups.x * 256) {

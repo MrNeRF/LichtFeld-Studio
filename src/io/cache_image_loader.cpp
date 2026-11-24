@@ -301,8 +301,11 @@ namespace lfs::io {
             return output;
         }
 
+        // Every tensor here, the result included, lives on the caller's stream, which the kernels run on.
         lfs::core::Tensor undistort_cached_rgb(lfs::core::Tensor tensor, const LoadParams& params) {
             using namespace lfs::core;
+            const auto stream = static_cast<cudaStream_t>(params.cuda_stream);
+            const CUDAStreamGuard guard(stream);
             if (tensor.dtype() == DataType::UInt8) {
                 tensor = tensor.to(DataType::Float32) / 255.0f;
             }
@@ -875,6 +878,9 @@ namespace lfs::io {
 
                 if (from_cache) {
                     if (is_jpeg2k) {
+                        // An undistorted image cached losslessly: the decode and the conversions all run on the
+                        // caller's stream, which the result carries.
+                        const CUDAStreamGuard guard(static_cast<cudaStream_t>(params.cuda_stream));
                         auto tensor = nvcodec.decode_jpeg2k_16bit_from_memory_gpu(
                             jpeg_bytes, params.cuda_stream);
                         tensor = tensor.permute({2, 0, 1}).contiguous();
@@ -918,6 +924,8 @@ namespace lfs::io {
                         std::vector<uint8_t> cache_bytes;
                         if (params.undistort) {
                             try {
+                                // The encoder reads its input on the caller's stream, where the conversion runs too.
+                                const CUDAStreamGuard guard(static_cast<cudaStream_t>(params.cuda_stream));
                                 const auto encode_tensor = tensor.dtype() == DataType::UInt8
                                                                ? tensor.to(DataType::Float32) / 255.0f
                                                                : tensor;

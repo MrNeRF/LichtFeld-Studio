@@ -283,6 +283,7 @@ set(CORE_SOURCES
         cuda_diagnostic_modes.cpp
         cuda_error.cpp
         cuda_error_typed.cpp
+        gpu_device_info.cpp
         device_fault.cpp
         exif.cpp
         host_metrics.cpp

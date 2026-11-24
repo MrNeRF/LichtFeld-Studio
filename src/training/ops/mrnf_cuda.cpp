@@ -63,7 +63,8 @@ namespace lfs::training {
                 params.train_t,
                 log_scales.shape()[0],
                 lfs::core::getCurrentCUDAStream(),
-                params.rendered_count.is_valid() ? params.rendered_count.ptr<float>() : nullptr);
+                params.rendered_count.is_valid() ? params.rendered_count.ptr<float>() : nullptr,
+                params.reach.is_valid() ? params.reach.ptr<float>() : nullptr);
         }
 
         Bounds percentile_bounds(const Tensor& means, const float percentile) {
@@ -135,6 +136,38 @@ namespace lfs::training {
                 primary.ptr<float>(), secondary.is_valid() ? secondary.ptr<float>() : nullptr, eligible.ptr<bool>(),
                 primary.numel(), rows.numel(), rows.ptr<int64_t>(), lfs::core::getCurrentCUDAStream());
         }
+        using gpu_ops::In;
+        using gpu_ops::Out;
+        void fold_view(Out error, Out info, Out views) {
+            mrnf_strategy::launch_fold_densification_error_view_sum_and_zero(error.ptr<float>(), info.ptr<float>(), error.numel(), views.is_valid() ? views.ptr<float>() : nullptr, core::getCurrentCUDAStream());
+        }
+        void mean_view(Out error, In info) {
+            mrnf_strategy::launch_refine_error_view_mean(error.ptr<float>(), info.ptr<float>(), error.numel(), core::getCurrentCUDAStream());
+        }
+        void fold_need(Out error, float scale, float maximum, float power) {
+            mrnf_strategy::launch_fold_need(error.ptr<float>(), scale, maximum, power, error.numel(), core::getCurrentCUDAStream());
+        }
+        void blend_peak(Out step, Out peak, Out renders, float decay) {
+            mrnf_strategy::launch_blend_peak_update(step.ptr<float>(), peak.ptr<float>(), renders.ptr<float>(), decay, peak.numel(), core::getCurrentCUDAStream());
+        }
+        void covered_factor(In peak, In renders, In opacity, In scales, float grace, float keep, float floor, Out factor) {
+            mrnf_strategy::launch_mrnf_covered_factor(peak.ptr<float>(), renders.ptr<float>(), opacity.ptr<float>(), scales.ptr<float>(), grace, keep, floor, peak.numel(), factor.ptr<float>(), core::getCurrentCUDAStream());
+        }
+        void retire_key(In peak, In opacity, float dead_peak, Out key) {
+            mrnf_strategy::launch_mrnf_retire_key(peak.ptr<float>(), opacity.ptr<float>(), dead_peak, peak.numel(), key.ptr<float>(), core::getCurrentCUDAStream());
+        }
+        void lowest_rows(In score, In eligible, Out rows) {
+            mrnf_strategy::launch_lowest_eligible_rows(score.ptr<float>(), eligible.ptr<bool>(), score.numel(), rows.numel(), rows.ptr<int64_t>(), core::getCurrentCUDAStream());
+        }
+        const gpu_ops::MrnfGrowthOps growth_ops{
+            .fold_view = fold_view,
+            .mean_view = mean_view,
+            .fold_need = fold_need,
+            .blend_peak = blend_peak,
+            .covered_factor = covered_factor,
+            .retire_key = retire_key,
+            .lowest_rows = lowest_rows,
+        };
         const lfs::gpu_ops::MrnfOps kCudaMrnfOps{
             .noise = noise,
             .decay = decay,
@@ -146,6 +179,7 @@ namespace lfs::training {
             .replace_parent_weights = replace_parent_weights,
             .kth_largest = kth_largest,
             .rank_exchange_rows = rank_exchange_rows,
+            .growth = &growth_ops,
         };
 
     } // namespace

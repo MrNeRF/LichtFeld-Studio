@@ -665,6 +665,7 @@ namespace lfs::vis::gui {
         if (!host_ || nativeWindow() || !ops.external_allowed || !ops.external_allowed(host_) ||
             !ops.configure_external || !lfs::python::can_acquire_gil())
             return false;
+        LOG_TIMER_THRESHOLD(context_name_ + ".detach_host", 2.0);
         const lfs::python::GilAcquire gil;
         auto* document = static_cast<Rml::ElementDocument*>(ops.get_document(host_));
         float scroll = 0;

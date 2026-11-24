@@ -119,94 +119,122 @@ namespace lfs::training {
             saved.empty_mask = false;
             grad_raw = {};
 
-            switch (params.path) {
-            case lfs::gpu_ops::PhotoPath::L1: {
-                auto [rendered_4d, gt_4d] = kernels::prepare_loss_images(corrected, target);
-                const size_t count = rendered_4d.numel();
-                const size_t num_blocks = std::min((count + 255) / 256, size_t{1024});
-                state.ensure_l1(rendered_4d.shape(), num_blocks);
-                lfs::core::pin_operands({&rendered_4d, &gt_4d});
-                dispatch_target_ptr(gt_4d, [&](auto* gt_ptr) {
-                    kernels::launch_fused_l1_loss(
-                        rendered_4d.ptr<float>(),
-                        gt_ptr,
-                        state.grad_buffer.ptr<float>(),
-                        state.loss_scalar.ptr<float>(),
-                        state.l1_reduction.ptr<float>(),
-                        count,
-                        nullptr);
-                });
-                grad_corrected = state.grad_buffer;
-                loss = state.loss_scalar;
+            if (params.blur_sigma > 0) {
+                const bool decoupled = params.path == gpu_ops::PhotoPath::Decoupled || params.path == gpu_ops::PhotoPath::MaskedDecoupled;
+                const bool masked = params.path == gpu_ops::PhotoPath::MaskedFused || params.path == gpu_ops::PhotoPath::MaskedDecoupled;
+                auto result = kernels::blur_tolerant_loss(corrected, decoupled ? raw : core::Tensor{}, target, masked ? mask : core::Tensor{},
+                                                          params.ssim_weight, params.blur_sigma, state.arena, params.denominator);
+                saved.mask_denominator = result.mask_sum_value;
+                saved.empty_mask = masked && saved.mask_denominator <= kernels::SSIM_EPSILON;
+                loss = result.loss;
+                grad_corrected = result.grad_corrected;
                 squeeze_batch(grad_corrected, corrected);
-                break;
-            }
-            case lfs::gpu_ops::PhotoPath::SSIM: {
-                // ssim_forward prepares the images and sizes the workspace.
-                auto& workspace = state.arena.pure_ssim();
-                auto [ssim_value, ssim_ctx] = kernels::ssim_forward(
-                    corrected, target, workspace, params.valid_padding);
-                auto loss_tensor =
-                    lfs::core::Tensor::full({1}, 1.0f, lfs::core::Device::GPU) - ssim_value;
-                loss = loss_tensor;
-                grad_corrected = kernels::ssim_backward(ssim_ctx, workspace, -1.0f);
-                squeeze_batch(grad_corrected, corrected);
-                publish_maps(saved, workspace.ssim_map, workspace.cs_map);
-                break;
-            }
-            case lfs::gpu_ops::PhotoPath::Fused: {
-                // fused_l1_ssim_* prepares the images and sizes the workspace.
-                auto& workspace = state.arena.fused();
-                auto [loss_tensor, fused_ctx] = kernels::fused_l1_ssim_forward(
-                    corrected, target, params.ssim_weight, workspace, params.valid_padding);
-                grad_corrected = kernels::fused_l1_ssim_backward(fused_ctx, workspace);
-                loss = loss_tensor;
-                squeeze_batch(grad_corrected, corrected);
-                publish_maps(saved, workspace.ssim_map, workspace.cs_map);
-                break;
-            }
-            case lfs::gpu_ops::PhotoPath::Decoupled: {
-                auto& workspace = state.arena.decoupled();
-                auto [loss_tensor, ctx] = kernels::decoupled_fused_l1_ssim_forward(
-                    corrected, raw, target, params.ssim_weight, workspace, params.valid_padding);
-                auto grads = kernels::decoupled_fused_l1_ssim_backward(ctx, workspace);
-                loss = loss_tensor;
-                grad_corrected = grads.grad_corrected;
-                state.raw_gradient = kernels::decoupled_raw_gradient(ctx);
-                if (corrected.ndim() == 3) {
-                    grad_corrected = grad_corrected.squeeze(0);
+                state.raw_gradient = std::move(result.raw);
+                if (masked)
+                    publish_maps(saved, state.arena.masked_decoupled().ssim_map, state.arena.masked_decoupled().cs_map);
+                else
+                    publish_maps(saved, state.arena.decoupled().ssim_map, state.arena.decoupled().cs_map);
+            } else
+                switch (params.path) {
+                case lfs::gpu_ops::PhotoPath::L1: {
+                    auto [rendered_4d, gt_4d] = kernels::prepare_loss_images(corrected, target);
+                    const size_t count = rendered_4d.numel();
+                    const size_t num_blocks = std::min((count + 255) / 256, size_t{1024});
+                    state.ensure_l1(rendered_4d.shape(), num_blocks);
+                    lfs::core::pin_operands({&rendered_4d, &gt_4d});
+                    dispatch_target_ptr(gt_4d, [&](auto* gt_ptr) {
+                        kernels::launch_fused_l1_loss(
+                            rendered_4d.ptr<float>(),
+                            gt_ptr,
+                            state.grad_buffer.ptr<float>(),
+                            state.loss_scalar.ptr<float>(),
+                            state.l1_reduction.ptr<float>(),
+                            count,
+                            nullptr);
+                    });
+                    grad_corrected = state.grad_buffer;
+                    loss = state.loss_scalar;
+                    squeeze_batch(grad_corrected, corrected);
+                    break;
                 }
-                publish_maps(saved, workspace.ssim_map, workspace.cs_map);
-                break;
-            }
-            case lfs::gpu_ops::PhotoPath::MaskedFused: {
-                auto& workspace = state.arena.masked_fused();
-                auto [loss_tensor, ctx] = kernels::masked_fused_l1_ssim_forward(
-                    corrected, target, mask, params.ssim_weight, workspace, params.denominator);
-                saved.empty_mask = ctx.mask_sum_value <= kernels::SSIM_EPSILON;
-                grad_corrected = kernels::masked_fused_l1_ssim_backward(ctx, workspace);
-                loss = loss_tensor;
-                if (grad_corrected.ndim() == 4 && corrected.ndim() == 3) {
-                    grad_corrected = grad_corrected.squeeze(0);
+                case lfs::gpu_ops::PhotoPath::SSIM: {
+                    // ssim_forward prepares the images and sizes the workspace.
+                    auto& workspace = state.arena.pure_ssim();
+                    auto [ssim_value, ssim_ctx] = kernels::ssim_forward(
+                        corrected, target, workspace, params.valid_padding);
+                    auto loss_tensor =
+                        lfs::core::Tensor::full({1}, 1.0f, lfs::core::Device::GPU) - ssim_value;
+                    loss = loss_tensor;
+                    grad_corrected = kernels::ssim_backward(ssim_ctx, workspace, -1.0f);
+                    squeeze_batch(grad_corrected, corrected);
+                    publish_maps(saved, workspace.ssim_map, workspace.cs_map);
+                    break;
                 }
-                publish_maps(saved, workspace.ssim_map, workspace.cs_map);
-                break;
-            }
-            case lfs::gpu_ops::PhotoPath::MaskedDecoupled: {
-                auto& workspace = state.arena.masked_decoupled();
-                auto [loss_tensor, ctx] = kernels::masked_decoupled_fused_l1_ssim_forward(
-                    corrected, raw, target, mask, params.ssim_weight, workspace, params.denominator);
-                saved.empty_mask = ctx.mask_sum_value <= kernels::SSIM_EPSILON;
-                auto grads = kernels::masked_decoupled_fused_l1_ssim_backward(ctx, workspace);
-                loss = loss_tensor;
-                grad_corrected = grads.grad_corrected;
-                state.raw_gradient = kernels::decoupled_raw_gradient(ctx);
-                if (grad_corrected.ndim() == 4 && corrected.ndim() == 3) {
-                    grad_corrected = grad_corrected.squeeze(0);
+                case lfs::gpu_ops::PhotoPath::Fused: {
+                    // fused_l1_ssim_* prepares the images and sizes the workspace.
+                    auto& workspace = state.arena.fused();
+                    auto [loss_tensor, fused_ctx] = kernels::fused_l1_ssim_forward(
+                        corrected, target, params.ssim_weight, workspace, params.valid_padding);
+                    grad_corrected = kernels::fused_l1_ssim_backward(fused_ctx, workspace);
+                    loss = loss_tensor;
+                    squeeze_batch(grad_corrected, corrected);
+                    publish_maps(saved, workspace.ssim_map, workspace.cs_map);
+                    break;
                 }
-                publish_maps(saved, workspace.ssim_map, workspace.cs_map);
-                break;
-            }
+                case lfs::gpu_ops::PhotoPath::Decoupled: {
+                    auto& workspace = state.arena.decoupled();
+                    auto [loss_tensor, ctx] = kernels::decoupled_fused_l1_ssim_forward(
+                        corrected, raw, target, params.ssim_weight, workspace, params.valid_padding);
+                    auto grads = kernels::decoupled_fused_l1_ssim_backward(ctx, workspace);
+                    loss = loss_tensor;
+                    grad_corrected = grads.grad_corrected;
+                    state.raw_gradient = kernels::decoupled_raw_gradient(ctx);
+                    if (corrected.ndim() == 3) {
+                        grad_corrected = grad_corrected.squeeze(0);
+                    }
+                    publish_maps(saved, workspace.ssim_map, workspace.cs_map);
+                    break;
+                }
+                case lfs::gpu_ops::PhotoPath::MaskedFused: {
+                    auto& workspace = state.arena.masked_fused();
+                    auto [loss_tensor, ctx] = kernels::masked_fused_l1_ssim_forward(
+                        corrected, target, mask, params.ssim_weight, workspace, params.denominator);
+                    saved.mask_denominator = ctx.mask_sum_value;
+                    saved.empty_mask = ctx.mask_sum_value <= kernels::SSIM_EPSILON;
+                    grad_corrected = kernels::masked_fused_l1_ssim_backward(ctx, workspace);
+                    loss = loss_tensor;
+                    if (grad_corrected.ndim() == 4 && corrected.ndim() == 3) {
+                        grad_corrected = grad_corrected.squeeze(0);
+                    }
+                    publish_maps(saved, workspace.ssim_map, workspace.cs_map);
+                    break;
+                }
+                case lfs::gpu_ops::PhotoPath::MaskedDecoupled: {
+                    auto& workspace = state.arena.masked_decoupled();
+                    auto [loss_tensor, ctx] = kernels::masked_decoupled_fused_l1_ssim_forward(
+                        corrected, raw, target, mask, params.ssim_weight, workspace, params.denominator);
+                    saved.mask_denominator = ctx.mask_sum_value;
+                    saved.empty_mask = ctx.mask_sum_value <= kernels::SSIM_EPSILON;
+                    auto grads = kernels::masked_decoupled_fused_l1_ssim_backward(ctx, workspace);
+                    loss = loss_tensor;
+                    grad_corrected = grads.grad_corrected;
+                    state.raw_gradient = kernels::decoupled_raw_gradient(ctx);
+                    if (grad_corrected.ndim() == 4 && corrected.ndim() == 3) {
+                        grad_corrected = grad_corrected.squeeze(0);
+                    }
+                    publish_maps(saved, workspace.ssim_map, workspace.cs_map);
+                    break;
+                }
+                }
+            if (params.calibration_fit && state.raw_gradient) {
+                if (state.raw_gradient->precomputed.is_valid())
+                    grad_raw = state.raw_gradient->precomputed;
+                else {
+                    grad_raw = core::Tensor::zeros(grad_corrected.shape(), corrected.device());
+                    kernels::accumulate_decoupled_raw_gradient(*state.raw_gradient, grad_raw);
+                }
+                squeeze_batch(grad_raw, corrected);
+                state.raw_gradient.reset();
             }
         }
 
@@ -316,6 +344,12 @@ namespace lfs::training {
             .shrink_to_required = photo_shrink_to_required,
             .reset = photo_reset,
             .add_raw_gradient = photo_add_raw_gradient,
+            .bind_step_scratch = [](gpu_ops::PhotoSaved& saved, const gpu_ops::StepScratchAllocator& alloc) {
+                if (alloc)
+                    state_of(saved).arena.bind_step_scratch([alloc](size_t bytes) { return alloc(bytes).native; });
+                else
+                    state_of(saved).arena.release_step_scratch();
+            },
         };
 
     } // namespace

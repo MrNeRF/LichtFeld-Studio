@@ -327,6 +327,9 @@ namespace lfs::training {
         lfs::core::Device device,
         size_t reserve_capacity = 0);
 
+    // [n] Float32 zeros; on CUDA an exact allocation without spare capacity.
+    [[nodiscard]] lfs::core::Tensor zero_splat_vector(size_t n, lfs::core::Device device);
+
     inline void ensure_max_screen_share_shape(
         lfs::core::SplatData& splat,
         const size_t n,

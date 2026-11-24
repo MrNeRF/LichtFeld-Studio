@@ -10,6 +10,10 @@ float sigmoid(float x) { return 1.0f / (1.0f + exp(-x)); }
 uint longestAxis(float3 v) {
     float m=max(v.x,max(v.y,v.z)); return m==v.x ? 0u : (m==v.y ? 1u : 2u);
 }
+float logOnePlus(float x) {
+    precise float y = 1.0f + x;
+    return y == 1.0f ? x : log(y) * (x / (y - 1.0f));
+}
 [numthreads(256,1,1)]
 void main(uint3 groupId:SV_GroupID,uint lane:SV_GroupIndex,uniform Parameters p) {
     uint3 groups=spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
@@ -89,9 +93,24 @@ void main(uint3 groupId:SV_GroupID,uint lane:SV_GroupIndex,uniform Parameters p)
                         float3(2*(x*y-w*z),1-2*(x*x+z*z),2*(y*z+w*x)),
                         float3(2*(x*z+w*y),2*(y*z-w*x),1-2*(x*x+y*y))};
         uint axis=longestAxis(s); uint other0=(axis+1)%3, other1=(axis+2)%3;
-        float3 ns=s; ns[axis]+=log(0.5f); ns[other0]+=log(0.85f); ns[other1]+=log(0.85f);
-        float probability=clamp(sigmoid(opacity[src])*0.6f,1e-7f,1.0f-1e-7f);
-        float newOpacity=log(probability/(1.0f-probability));
+        float3 ns = s;
+        float newOpacity;
+        if (p.limit > 0) {
+            uint first = axis == 0 ? 1 : 0, second = axis == 2 ? 1 : 2;
+            uint smallest = s[first] <= s[second] ? first : second;
+            ns[axis] += log(p.limit);
+            ns[smallest] += log(p.limit);
+            float value = opacity[src];
+            float tail = logOnePlus(exp(-abs(value)));
+            float logS = -0.5f * (max(value, 0.0f) + tail);
+            newOpacity = -max(-value, 0.0f) - tail - logOnePlus(exp(logS)) - logS;
+        } else {
+            ns[axis] += log(0.5f);
+            ns[other0] += log(0.85f);
+            ns[other1] += log(0.85f);
+            float probability = clamp(sigmoid(opacity[src]) * 0.6f, 1e-7f, 1.0f - 1e-7f);
+            newOpacity = log(probability / (1.0f - probability));
+        }
         float3 offset=cols[axis]*(0.5f*exp(s[axis]));
         for(uint j=0;j<3;++j){means[src*3+j]=pos[j]+offset[j]; childMeans[index*3+j]=pos[j]-offset[j]; scales[src*3+j]=ns[j]; childScales[index*3+j]=ns[j]; childSh0[index*3+j]=sh0[src*3+j];}
         for(uint j=0;j<4;++j)childRotations[index*4+j]=q[j];

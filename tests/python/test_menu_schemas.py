@@ -115,6 +115,9 @@ def _install_lichtfeld_stub(monkeypatch):
         set_panel_enabled=lambda panel_id, enabled: state["panel_enabled"].append((panel_id, enabled)),
         is_panel_enabled=lambda panel_id: (panel_id, True) in state["panel_enabled"],
         get_panel_object=lambda panel_id: state["panels"].get(panel_id),
+        get_panel_names=lambda: list(state["panels"]),
+        get_panel=lambda panel_id: state["panels"].get(panel_id),
+        get_panel_always_on_top=lambda panel_id: None,
         set_main_panel_active_tab=lambda panel_id: state.__setitem__("main_panel_active_tab", panel_id),
         is_windows_platform=lambda: False,
         are_file_associations_registered=lambda: False,
@@ -123,6 +126,7 @@ def _install_lichtfeld_stub(monkeypatch):
         has_gaussian_clipboard=lambda: state["has_gaussian_clipboard"],
         get_split_view_mode=lambda: "independent_dual",
         get_vr_state=lambda: dict(state["vr"]),
+        get_vr_preferences=lambda: {"enabled": state.get("vr_support", False)},
         get_active_tool=lambda: state["active_tool"],
         copy_gaussian_selection=lambda: state.__setitem__("copy_called", True),
         cut_gaussian_selection=lambda: state.__setitem__("cut_called", True),
@@ -185,6 +189,7 @@ def _install_lichtfeld_stub(monkeypatch):
     lf_stub.get_tiles_mode = lambda: state["tiles_mode"]
     lf_stub.toggle_side_dock = lambda side: state.__setitem__("dock_toggled", side)
     lf_stub.set_vr_active = lambda active: state["vr_calls"].append(("active", active))
+    lf_stub.detect_vr = lambda: state["vr_calls"].append(("detect",))
     lf_stub.recenter_vr = lambda: state["vr_calls"].append(("recenter",))
     lf_stub.undo = SimpleNamespace(
         can_undo=lambda: True,
@@ -430,18 +435,40 @@ def test_view_menu_vr_entries_follow_runtime_state(monkeypatch):
         monkeypatch.delitem(sys.modules, name, raising=False)
     view_mod = import_module("lfs_plugins.view_menu")
 
-    enter, recenter = view_mod.ViewMenu().menu_items()[11:13]
+    def vr_items(count):
+        entries = view_mod.ViewMenu().menu_items()
+        index = next(i for i, entry in enumerate(entries)
+                     if entry.get("label") in {"tr:menu.view.enter_vr", "tr:input_settings.action.exit_vr"})
+        return entries[index:index + count]
+
+    enter, recenter = vr_items(2)
     assert (enter["label"], enter["enabled"], enter["tooltip"], enter["shortcut"]) == (
         "tr:menu.view.enter_vr", False, "No OpenXR runtime", "")
     assert (recenter["enabled"], recenter["shortcut"]) == (False, "R")
 
+    # With VR support on and no headset found, detecting it again is offered
+    # right under the unavailable Enter VR.
+    state["vr_support"] = True
+    enter, detect, recenter = vr_items(3)
+    assert (enter["enabled"], enter["tooltip"]) == (False, "No OpenXR runtime")
+    assert (detect["label"], detect["enabled"]) == ("tr:menu.view.detect_vr", True)
+    assert recenter["shortcut"] == "R"
+    detect["callback"]()
+    assert state["vr_calls"] == [("detect",)]
+    state["vr_calls"].clear()
+    # Once a headset is found, the offer goes away.
     state["vr"] = {"available": True, "active": False, "status": "Ready"}
-    enter = view_mod.ViewMenu().menu_items()[11]
+    assert vr_items(2)[1]["shortcut"] == "R"
+    state["vr"] = {"available": False, "active": False, "status": "No OpenXR runtime"}
+    state["vr_support"] = False
+
+    state["vr"] = {"available": True, "active": False, "status": "Ready"}
+    enter, = vr_items(1)
     assert enter["enabled"] and "tooltip" not in enter
     enter["callback"]()
 
     state["vr"]["active"] = True
-    exit_vr, recenter = view_mod.ViewMenu().menu_items()[11:13]
+    exit_vr, recenter = vr_items(2)
     assert (exit_vr["label"], exit_vr["shortcut"]) == ("tr:input_settings.action.exit_vr", "Escape")
     assert recenter["enabled"]
     exit_vr["callback"]()
@@ -540,3 +567,29 @@ def test_tools_menu_gallery_skips_missing_select_gallery_scope(monkeypatch):
     items = tools_mod.ToolsMenu().menu_items()
     tools_mod._open_gallery_scope()
     assert state["panel_enabled"] == [("lfs.asset_manager", True)]
+
+
+def test_view_menu_pin_lists_only_desktop_panels_and_toggles_the_selected_one(monkeypatch):
+    state = _install_lichtfeld_stub(monkeypatch)
+    lf = sys.modules["lichtfeld"]
+    state["panels"] = {
+        "preferences": SimpleNamespace(label="Preferences"),
+        "extractor": SimpleNamespace(label="Extract Frames"),
+        "internal": SimpleNamespace(label="Internal"),
+    }
+    pins = {"preferences": False, "extractor": True}
+    lf.ui.get_panel_always_on_top = pins.get
+    lf.ui.set_panel_always_on_top = lambda panel_id, enabled: pins.__setitem__(panel_id, enabled)
+    for name in ("lfs_plugins.layouts", "lfs_plugins.layouts.menus", "lfs_plugins.view_menu"):
+        sys.modules.pop(name, None)
+    view_mod = import_module("lfs_plugins.view_menu")
+    items = view_mod.ViewMenu().menu_items()
+    submenu = next(item for item in items if item.get("label") == "tr:ui.always_on_top")
+    assert [item["label"] for item in submenu["items"]] == ["Preferences", "Extract Frames"]
+    assert [item["selected"] for item in submenu["items"]] == [False, True]
+    submenu["items"][0]["callback"]()
+    assert pins == {"preferences": True, "extractor": True}
+    submenu["items"][1]["callback"]()
+    assert pins == {"preferences": True, "extractor": False}
+    pins.clear()
+    assert all(item.get("label") != "tr:ui.always_on_top" for item in view_mod.ViewMenu().menu_items())

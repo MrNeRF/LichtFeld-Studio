@@ -7,9 +7,9 @@
 
 **The modular workstation for 3D Gaussian Splatting**
 
-Train, inspect, edit, automate, and export 3D Gaussian Splatting scenes from a single native application.
+Train and edit 3D Gaussian Splatting scenes, then inspect, automate, and export them, from a single native application.
 
-LichtFeld Studio lets you train new scenes from COLMAP datasets, resume checkpoints, inspect reconstructions in real time, edit gaussian selections, extend the app with Python plugins, and automate workflows through MCP and embedded Python.
+LichtFeld Studio trains new scenes from COLMAP datasets and resumes checkpoints. It is also a full Gaussian Splat editor for splats from any tool: open a `PLY`, `SOG` or `SPZ` file, select and delete splats, remove floaters, crop and align, then export. Python plugins, embedded Python, and MCP automate the same work.
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20Us-7289DA?logo=discord&logoColor=white)](https://discord.gg/TbxJST2BbC)
 [![Website](https://img.shields.io/badge/Website-LichtFeld%20Studio-blue)](https://lichtfeld.io)
@@ -23,6 +23,7 @@ LichtFeld Studio lets you train new scenes from COLMAP datasets, resume checkpoi
 
 [**Download Windows (Portal)**](https://portal.lichtfeld.io/) •
 [**Build From Source**](docs/building_and_distribution.md) •
+[**Gaussian Splat Editor**](https://lichtfeld.io/gaussian-splat-editor/) •
 [**Python API and Plugins**](docs/plugins/README.md) •
 [**MCP Guide**](docs/docs/development/mcp/index.md) •
 [**Support Development**](#support-development) •
@@ -31,6 +32,7 @@ LichtFeld Studio lets you train new scenes from COLMAP datasets, resume checkpoi
 <img src="docs/viewer_demo.gif" alt="LichtFeld Studio viewer" width="85%"/>
 
 [**See It in Action**](#see-it-in-action) •
+[**Edit Gaussian Splats**](#edit-gaussian-splats) •
 [**Why LichtFeld**](#why-lichtfeld-studio) •
 [**Who It Is For**](#who-it-is-for) •
 [**Capabilities**](#capabilities) •
@@ -54,6 +56,19 @@ LichtFeld Studio lets you train new scenes from COLMAP datasets, resume checkpoi
 
 </div>
 
+## Edit Gaussian Splats
+
+LichtFeld Studio edits splats from any tool, not only scenes it trained. **File > Import**, or dropping a file onto the window, opens `PLY`, `SOG`, `SSOG`, `SPZ`, `GLB`, `RAD`, and `USD`.
+
+To delete splats, pick a selection tool, paint over the splats, press **Delete**, and save the result with **File > Export**. **Ctrl+Z** undoes each step.
+
+- **Selection**: brush, rectangle, polygon, lasso, ring, color, box, and sphere. **Shift** adds, **Ctrl** removes, **Alt** intersects
+- **Floaters**: the ring selection and the histogram (opacity, scale) find large, transparent Gaussians; the depth box limits any tool to a depth range
+- **Scene**: crop boxes and spheres, three-point alignment, mirror, transform, groups, and merge
+- **Export**: `PLY`, `SOG`, `SSOG`, `SPZ`, `GLB`, `RAD`, OpenUSD, NuRec `USDZ`, COLMAP sparse, and a standalone HTML viewer
+
+Step by step with screenshots: [Gaussian Splat Editor guide](https://lichtfeld.io/gaussian-splat-editor/). Seven short videos: [editing tutorial series](https://www.youtube.com/playlist?list=PLHGFphDuz1bk).
+
 ## Why LichtFeld Studio
 
 LichtFeld Studio is built for users who need more than a training script or a standalone viewer. It combines model training, real-time visualization, gaussian editing, export, plugins, and automation in one toolchain.
@@ -61,7 +76,7 @@ LichtFeld Studio is built for users who need more than a training script or a st
 - Train new 3D Gaussian Splatting scenes and continue experiments from checkpoints
 - Inspect reconstructions interactively while training or after convergence
 - Select, transform, and edit gaussian subsets and scene nodes with undo/redo support
-- Export results to `PLY`, `SOG`, `SPZ`, or a standalone HTML viewer
+- Open and edit splats from other tools, and export to `PLY`, `SOG`, `SPZ`, `GLB`, `USD`, or a standalone HTML viewer
 - Extend the application with Python plugins and plugin-local dependencies
 - Automate workflows through MCP resources, MCP tools, and embedded Python
 

@@ -124,6 +124,19 @@ target_include_directories(lichtfeld_camera_selection_tests PRIVATE ${CMAKE_SOUR
 target_link_libraries(lichtfeld_camera_selection_tests PRIVATE GTest::gtest_main glm::glm)
 add_test(NAME lichtfeld.camera_selection COMMAND lichtfeld_camera_selection_tests)
 set_tests_properties(lichtfeld.camera_selection PROPERTIES LABELS "cpu;camera" TIMEOUT 30)
+# A worker observer must use the same scheduler as the scorer. The media
+# module and the test runner can each carry a private statically linked TBB.
+add_executable(lichtfeld_sharpness_parallel_tests
+    test_sharpness_parallel.cpp
+    ${CMAKE_SOURCE_DIR}/src/media/sharpness_score.cpp)
+target_compile_features(lichtfeld_sharpness_parallel_tests PRIVATE cxx_std_23)
+target_compile_definitions(lichtfeld_sharpness_parallel_tests PRIVATE LFS_STATIC_BUILD)
+target_include_directories(lichtfeld_sharpness_parallel_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/media/include ${CMAKE_SOURCE_DIR}/src/core/include)
+target_link_libraries(lichtfeld_sharpness_parallel_tests PRIVATE GTest::gtest_main TBB::tbb)
+add_test(NAME lichtfeld.sharpness_parallel COMMAND lichtfeld_sharpness_parallel_tests)
+set_tests_properties(lichtfeld.sharpness_parallel PROPERTIES LABELS "cpu;media" TIMEOUT 60)
+
 add_executable(lichtfeld_camera_pose_math_tests test_camera_pose_math.cpp)
 target_compile_features(lichtfeld_camera_pose_math_tests PRIVATE cxx_std_23)
 target_include_directories(lichtfeld_camera_pose_math_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/training/include)
@@ -1590,6 +1603,7 @@ set(TEST_FILES
     test_expanded_tensor_ops.cpp
     test_bool_any_all.cpp
     test_fused_l1_ssim.cpp
+    test_blur_tolerant_ssim.cpp
     test_masked_ssim_window.cpp
     test_densify_error_map.cpp
     test_screen_share.cpp
@@ -1608,6 +1622,7 @@ set(TEST_FILES
     test_tensor_kernels_6c_elem.cpp
     test_tensor_lazy_stateful_ops.cpp
     test_fastgs_kernels.cpp
+    test_calibration_correction.cpp
     test_camera_pose_gradient.cpp
     test_ray_depth_step.cpp
     test_color_variance.cpp
@@ -1681,6 +1696,7 @@ set(TEST_FILES
     test_operator_registry_props.cpp
     test_fastgs_analytical_gradients.cpp
     test_normal_prior_decode.cpp
+    test_prior_own_size.cpp
     test_normal_auto_generate.cpp
     test_lens_priors.cpp
     test_metrics_evaluator.cpp
@@ -1738,6 +1754,7 @@ set(TEST_FILES
     test_ppisp_sidecar.cpp
     test_ppisp_checkpoint_roundtrip.cpp
     test_bilateral_grid_projection.cpp
+    test_bilateral_grid_backward_tiled.cpp
     test_bilateral_grid_exposure_chroma.cpp
     test_appearance_in_place.cpp
     test_ppisp_projection.cpp
@@ -2055,6 +2072,7 @@ target_link_libraries(lichtfeld_tests PRIVATE
     Zep::Zep
     vterm
     GTest::gtest
+    TBB::tbb
     nanobind-static
     ZLIB::ZLIB
     ${TORCH_LIBRARIES}

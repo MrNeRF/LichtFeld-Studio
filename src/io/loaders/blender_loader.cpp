@@ -40,29 +40,6 @@ namespace lfs::io {
                 relative = relative.lexically_relative(*relative.begin());
             return lfs::core::path_to_utf8(relative);
         }
-
-        FileLookupResult lookup_sidecar(const SidecarDirCache& cache,
-                                        const std::filesystem::path& image_path,
-                                        const std::string& image_name,
-                                        const std::filesystem::path& absolute_dataset_path) {
-            auto original = cache.lookup(image_name);
-            if (!original.ambiguous())
-                return original;
-
-            auto relative = std::filesystem::absolute(image_path).lexically_normal().lexically_relative(absolute_dataset_path);
-            if (relative.empty() || *relative.begin() == "..")
-                return original;
-
-            // Preserve existing matches; use the frame's directories only to resolve ambiguity.
-            if (auto result = cache.lookup(lfs::core::path_to_utf8(relative)); result.found())
-                return result;
-
-            // Sidecars can mirror either the dataset root or the leading image folder.
-            relative = relative.lexically_relative(*relative.begin());
-            if (auto result = cache.lookup(lfs::core::path_to_utf8(relative)); result.found())
-                return result;
-            return original;
-        }
     } // namespace
 
     // Import types from lfs::core for convenience
@@ -249,7 +226,7 @@ namespace lfs::io {
                 LOG_INFO("mask maps present but unused (mask usage disabled)");
             }
 
-            const auto absolute_base_path = std::filesystem::absolute(transforms_file).parent_path().lexically_normal();
+            const auto absolute_base_path = normalize_absolute_dir_path(transforms_file.parent_path());
             std::optional<MaskDirCache> mask_cache;
             DepthDirCache depth_cache(base_path, options.cancel_requested);
             NormalDirCache normal_cache(base_path, options.cancel_requested);
@@ -292,7 +269,7 @@ namespace lfs::io {
                     }
 
                     std::filesystem::path depth_path;
-                    if (auto depth_lookup = lookup_sidecar(depth_cache, info._image_path, info._image_name, absolute_base_path); depth_lookup.found()) {
+                    if (auto depth_lookup = lookup_sidecar_normalized(depth_cache, info._image_path, info._image_name, absolute_base_path); depth_lookup.found()) {
                         depth_path = std::move(depth_lookup.path);
                     } else if (depth_lookup.ambiguous()) {
                         if (options.load_depths) {
@@ -308,7 +285,7 @@ namespace lfs::io {
                     }
 
                     std::filesystem::path normal_path;
-                    if (auto normal_lookup = lookup_sidecar(normal_cache, info._image_path, info._image_name, absolute_base_path); normal_lookup.found()) {
+                    if (auto normal_lookup = lookup_sidecar_normalized(normal_cache, info._image_path, info._image_name, absolute_base_path); normal_lookup.found()) {
                         normal_path = std::move(normal_lookup.path);
                     } else if (normal_lookup.ambiguous()) {
                         if (options.load_normals) {
@@ -331,6 +308,8 @@ namespace lfs::io {
                         }
                         return *image_info;
                     };
+                    lfs::core::Camera::PriorSize depth_size;
+                    lfs::core::Camera::PriorSize normal_size;
                     if (info._has_image && options.load_masks && !mask_path.empty()) {
                         auto [img_w, img_h, img_c] = get_image_info_cached();
                         auto [mask_w, mask_h, mask_c] = lfs::core::get_image_info(mask_path);
@@ -360,6 +339,7 @@ namespace lfs::io {
                             depth_path.clear();
                         } else {
                             prior_resolutions.add({depth_w, depth_h, img_w, img_h}, false);
+                            depth_size = {depth_w, depth_h};
                         }
                     }
                     if (info._has_image && options.load_normals && !normal_path.empty()) {
@@ -380,8 +360,10 @@ namespace lfs::io {
                                                   normal_path);
                             }
                         }
-                        if (!normal_path.empty())
+                        if (!normal_path.empty()) {
                             prior_resolutions.add({normal_w, normal_h, img_w, img_h}, true);
+                            normal_size = {normal_w, normal_h};
+                        }
                     }
 
                     auto cam = std::make_shared<lfs::core::Camera>(
@@ -403,6 +385,8 @@ namespace lfs::io {
                         0,
                         depth_path,
                         normal_path);
+                    // The probed prior sizes decide whether the priors travel at their own size, and size the loader's slots.
+                    cam->set_prior_sizes(depth_size, normal_size);
 
                     cam->set_has_image(info._has_image);
                     cam->precompute_undistortion();

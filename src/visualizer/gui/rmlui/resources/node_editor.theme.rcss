@@ -1,3 +1,81 @@
+
+
+#node-editor-breadcrumb {
+    border-radius: @{radius.surface}dp;
+}
+
+.node-box {
+    border-radius: @{radius.surface}dp;
+}
+
+.node-box.node-reroute {
+    border-radius: 9dp;
+}
+
+#node-editor-canvas .node-scrub {
+    border-radius: @{radius.control}dp;
+}
+
+.node-swatch {
+    border-radius: @{radius.control}dp;
+}
+
+#node-canvas-notice.training-suspended {
+    border-radius: 5dp;
+}
+
+.node-empty-templates > div button {
+    border-radius: @{radius.surface}dp;
+}
+
+.browse-templates {
+    border-radius: 5dp;
+}
+
+.interface-type {
+    border-radius: @{radius.control}dp;
+}
+
+.modifier-row {
+    border-radius: 5dp;
+}
+
+.modifier-status {
+    border-radius: @{radius.control}dp;
+}
+
+#node-add-preview {
+    border-radius: @{radius.surface}dp;
+}
+
+.node-error {
+    border-radius: @{radius.control}dp;
+}
+
+.node-colour-popup {
+    border-radius: @{radius.surface}dp;
+}
+
+#node-add-menu {
+    border-radius: @{radius.surface}dp;
+}
+
+.node-add-category {
+    border-radius: @{radius.control}dp;
+}
+
+#node-add-menu .node-add-item, #node-add-menu .node-add-heading {
+    border-radius: @{radius.control}dp;
+}
+
+node-curve {
+    border-radius: @{radius.control}dp;
+}
+
+.node-capture-view {
+    border-radius: @{radius.control}dp;
+}
+
 #node-editor-canvas {
     background-color: @{background};
     color: @{text};
@@ -48,7 +126,7 @@
 }
 .node-box.node-note {
     background-color: @{alpha(warning,0.14)};
-    border-color: @{alpha(warning,0.22)};
+    border-color: @{warning};
     box-shadow: 0 2dp 5dp @{alpha(background,0.22)};
 }
 .node-title, .socket-row, .socket-input {
@@ -91,7 +169,7 @@
 }
 .modifier-row.active {
     background-color: @{alpha(primary,0.10)};
-    border-color: @{alpha(primary,0.30)};
+    border-color: @{primary};
 }
 .modifier-row:hover {
     background-color: @{alpha(primary,0.07)};
@@ -123,7 +201,7 @@
 }
 #node-editor-canvas .node-scrub {
     background-color: @{surface_bright};
-    border-color: @{alpha(border,0.65)};
+    border-color: @{border};
     decorator: none;
 }
 .node-step {
@@ -167,7 +245,7 @@
     border-color: @{primary};
 }
 .node-box.queued {
-    border-color: @{alpha(primary,0.45)};
+    border-color: @{primary};
 }
 #node-add-menu, .node-add-category {
     background-color: @{surface};

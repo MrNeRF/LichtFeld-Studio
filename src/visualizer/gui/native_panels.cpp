@@ -28,6 +28,11 @@ namespace lfs::vis::gui::native_panels {
     VideoExtractorPanel::VideoExtractorPanel(lfs::gui::IVideoExtractorWidget* widget)
         : widget_(widget) {}
 
+    void VideoExtractorPanel::suspendInput() {
+        if (widget_)
+            widget_->suspendInput();
+    }
+
     void VideoExtractorPanel::draw(const PanelDrawContext& ctx) {
         (void)ctx;
         if (!widget_)

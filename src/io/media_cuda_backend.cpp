@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/logger.hpp"
 #include "core/tensor_backend.hpp"
+#include "cuda/sharpness_score.cuh"
 #include "media/media_backends.hpp"
 #include "nvcodec_image_loader.hpp"
 #include "video/color_convert.cuh"
@@ -32,6 +33,7 @@ namespace lfs::io {
             buffer = nullptr;
         }
         class CudaJpegEncoder final : public media::detail::GpuJpegEncoder {
+            SharpnessScorer scorer;
             std::unique_ptr<NvCodecImageLoader> nvcodec;
             std::unique_ptr<video::CudaFrameHandoff> handoff;
             std::uint8_t* gpu_batch_buffer = nullptr;
@@ -148,7 +150,7 @@ namespace lfs::io {
             bool canConvertHardware() const noexcept override {
                 return gpu_rgb_buffer && (rotation == 0 || gpu_rotated_buffer);
             }
-            void convertHardware(const media::detail::CudaVideoFrame& frame, std::uint8_t* readback) override {
+            void convertHardware(const media::detail::CudaVideoFrame& frame) override {
                 handoff = std::make_unique<video::CudaFrameHandoff>(frame.decoder);
                 if (frame.legacy_bt601)
                     video::nv12ToRgbCuda(frame.planes[0], frame.planes[1], gpu_rgb_buffer,
@@ -158,10 +160,14 @@ namespace lfs::io {
                                                src_width, src_height, frame.row_stride[0], frame.row_stride[1],
                                                frame.layout == media::detail::CudaVideoLayout::P010, frame.color);
                 requireCudaSuccess(cudaGetLastError(), "CUDA video-to-RGB conversion failed");
-                if (readback)
-                    requireCudaSuccess(cudaMemcpy(readback, gpu_rgb_buffer, frame_size,
-                                                  cudaMemcpyDeviceToHost),
-                                       "CUDA sharpness readback failed");
+            }
+            std::optional<double> scoreHardware(SharpnessAlgorithm algorithm) override {
+                return scorer.scoreDevice(gpu_rgb_buffer, out_width, out_height, algorithm);
+            }
+            void readHardware(std::uint8_t* readback) override {
+                requireCudaSuccess(cudaMemcpy(readback, gpu_rgb_buffer, frame_size,
+                                              cudaMemcpyDeviceToHost),
+                                   "CUDA sharpness readback failed");
             }
             void finishHardware() override {
                 if (handoff)

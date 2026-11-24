@@ -193,3 +193,26 @@ TEST(LensPriors, FullResolutionImageUsesItsPanoramaLens) {
     ASSERT_TRUE(fs::remove(full / "a/b.png"));
     EXPECT_FALSE(lookup_lens_source(params, full / "a/b.png"));
 }
+
+// Fails if a lens without a single valid ray is handed to the face estimate, which then throws and ends the
+// batch for every image. Such an image is estimated as it is.
+TEST(LensPriors, LensWithoutValidRayIsEstimatedRaw) {
+    namespace fs = std::filesystem;
+    using namespace lfs::preprocessing;
+    lfs::test::licht::TemporaryDirectory dataset;
+    fs::create_directories(dataset.path / "images");
+    const std::vector<uint8_t> pixels(56 * 28 * 3, 128);
+    ASSERT_TRUE(lfs::core::save_png(dataset.path / "images/frame.png", pixels.data(), 56, 28, 3, 8, 1));
+    // Every pixel lies further than pi off the axis of this equidistant lens.
+    std::ofstream(dataset.path / "transforms.json") << R"({
+        "camera_model":"OPENCV_FISHEYE","w":56,"h":28,"fl_x":0.1,"fl_y":0.1,"cx":28,"cy":14,
+        "k1":0,"k2":0,"k3":0,"k4":0,
+        "frames":[{"file_path":"images/frame.png","transform_matrix":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]}]
+    })";
+    lfs::core::param::PreprocessParameters params;
+    params.dataset_path = dataset.path;
+    const auto lens = lookup_lens_source(params, dataset.path / "images/frame.png");
+    EXPECT_FALSE(lens);
+    if (lens)
+        EXPECT_THROW((void)plan_lens_faces(*lens, 64), std::runtime_error);
+}

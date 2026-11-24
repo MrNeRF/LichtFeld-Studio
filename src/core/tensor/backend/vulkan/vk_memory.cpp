@@ -414,6 +414,8 @@ namespace lfs::core::internal {
         LFS_ASSERT_MSG(bytes > 0, "Vulkan allocation requires a non-zero byte count");
         LFS_ASSERT_MSG(alignment == 0 || (alignment & (alignment - 1)) == 0,
                        "Vulkan allocation alignment must be zero or a power of two");
+        if (MemoryPressureCoordinator::instance().probe_should_fail(MemoryDomain::VulkanDevice, bytes))
+            throw_storage_allocation_error(bytes, alignment, context, VK_ERROR_OUT_OF_DEVICE_MEMORY);
         // Rounding a near-max direct-range size up to a uint32 word can wrap
         // VkDeviceSize; refuse before vmaCreateBuffer sees a truncated size.
         if (bytes >= kDirectLimit &&

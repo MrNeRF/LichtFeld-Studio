@@ -79,9 +79,11 @@ float2 source_position(float pixel_x, float pixel_y, UndistortParams p) {
             y = y < 0 ? -1 - y : height - 1 - (y - height);
             x += width / 2;
         }
-        x %= width;
+        // Wrap the Lanczos halo using nonnegative operands on both sides of the seam.
         if (x < 0)
-            x += width;
+            x = width - 1 - int(uint(-(x + 1)) % uint(width));
+        else if (x >= width)
+            x = int(uint(x) % uint(width));
         return true;
     }
 
@@ -498,15 +500,31 @@ void undistort_area_kernel(
     if (ox >= params.dst_width || oy >= params.dst_height)
         return;
 
+    const bool panorama = params.view != 0 && params.model_type == 3;
+    int samples = quadrature;
+    if (panorama) {
+        // A face pixel spans 1 / cos(latitude) as many panorama columns as rows, so it takes that many more
+        // samples per axis to keep one per column it covers.
+        const float nx = (float(ox) + 0.5f - params.dst_cx) / params.dst_fx;
+        const float ny = (float(oy) + 0.5f - params.dst_cy) / params.dst_fy;
+
+        const float x = params.view_rotation[0] * nx + params.view_rotation[1] * ny + params.view_rotation[2];
+        const float y = params.view_rotation[3] * nx + params.view_rotation[4] * ny + params.view_rotation[5];
+        const float z = params.view_rotation[6] * nx + params.view_rotation[7] * ny + params.view_rotation[8];
+        const float cos_latitude = length(float2(x, z)) / sqrt(x * x + y * y + z * z);
+        const float columns = max(params.src_fx / params.dst_fx, params.src_fy / params.dst_fy) /
+                              max(cos_latitude, 1.0f / 64);
+        samples = max(quadrature, min(64, int(ceil(columns))));
+    }
     float result[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     float valid_samples = 0.0f;
     const int input_plane = params.src_width * params.src_height;
-    for (int qy = 0; qy < quadrature; ++qy) {
-        for (int qx = 0; qx < quadrature; ++qx) {
+    for (int qy = 0; qy < samples; ++qy) {
+        for (int qx = 0; qx < samples; ++qx) {
             const float pixel_x = float(ox) +
-                                  (float(qx) + 0.5f) / quadrature;
+                                  (float(qx) + 0.5f) / samples;
             const float pixel_y = float(oy) +
-                                  (float(qy) + 0.5f) / quadrature;
+                                  (float(qy) + 0.5f) / samples;
             const float2 source = source_position(pixel_x, pixel_y, params);
             const float sx = source.x, sy = source.y;
             if (mode == 1) {

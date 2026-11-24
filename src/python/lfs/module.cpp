@@ -433,7 +433,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -2687,7 +2687,7 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("camera_group_id"), "Remove disabled direct camera children and return their count");
 
     m.def(
-        "camera_selection_start", [](const std::string& operation, const int camera_group_id, const double percentage, const int every_n, const double overlap, const double coverage, const int cropbox_id) -> nb::dict {
+        "camera_selection_start", [](const std::string& operation, const int camera_group_id, const double percentage, const int every_n, const double overlap, const double coverage, const int cropbox_id, const double sharpness_threshold) -> nb::dict {
             using Task = lfs::vis::gui::AsyncTaskManager;
             const auto type = [&]() -> Task::CameraSelectionOperation {
                 if (operation == "enable_all")
@@ -2704,12 +2704,14 @@ NB_MODULE(lichtfeld, m) {
                     return Task::CameraSelectionOperation::Distinct;
                 if (operation == "cropbox_visibility")
                     return Task::CameraSelectionOperation::CropBoxVisibility;
+                if (operation == "blurry")
+                    return Task::CameraSelectionOperation::Blurry;
                 throw std::invalid_argument("Unknown camera selection operation: " + operation);
             }();
             auto* viewer = lfs::python::get_visualizer();
             if (!viewer)
                 throw std::runtime_error("Viewer not available");
-            const Task::CameraSelectionOptions options{.operation = type, .percentage = static_cast<float>(percentage), .every_n = every_n, .overlap = static_cast<float>(overlap), .coverage = static_cast<float>(coverage), .camera_group_id = static_cast<lfs::core::NodeId>(camera_group_id), .cropbox_id = static_cast<lfs::core::NodeId>(cropbox_id)};
+            const Task::CameraSelectionOptions options{.operation = type, .percentage = static_cast<float>(percentage), .every_n = every_n, .overlap = static_cast<float>(overlap), .coverage = static_cast<float>(coverage), .sharpness_threshold = sharpness_threshold, .camera_group_id = static_cast<lfs::core::NodeId>(camera_group_id), .cropbox_id = static_cast<lfs::core::NodeId>(cropbox_id)};
             const auto start = [&]() -> std::expected<lfs::vis::JobHandle, lfs::Error> {
                 auto* gui = lfs::python::get_gui_manager();
                 if (!gui)
@@ -2739,7 +2741,7 @@ NB_MODULE(lichtfeld, m) {
             result["operation"] = operation;
             return result;
         },
-        nb::arg("operation"), nb::arg("camera_group_id"), nb::arg("percentage") = 25.0, nb::arg("every_n") = 2, nb::arg("overlap") = 65.0, nb::arg("coverage") = 40.0, nb::arg("cropbox_id") = 0, "Start a cancellable camera-group selection job. Returns its runtime id and opaque handle; no training selection changes until it finishes.");
+        nb::arg("operation"), nb::arg("camera_group_id"), nb::arg("percentage") = 25.0, nb::arg("every_n") = 2, nb::arg("overlap") = 65.0, nb::arg("coverage") = 40.0, nb::arg("cropbox_id") = 0, nb::arg("sharpness_threshold") = 10.0, "Start a cancellable camera-group selection job. Blurry selects enabled cameras visually without changing training flags; other operations update training selection on completion.");
 
     m.def(
         "camera_selection_status", []() -> nb::dict {
@@ -3308,6 +3310,9 @@ NB_MODULE(lichtfeld, m) {
             lfs::core::events::cmd::SetVrActive{.active = active}.emit();
         },
         nb::arg("active"), "Enter or exit VR viewing; raises RuntimeError with the VR status when VR is unavailable");
+    m.def(
+        "detect_vr", []() { lfs::core::events::cmd::DetectVr{}.emit(); },
+        "Look again for a VR headset that was connected after startup");
     m.def(
         "recenter_vr", []() { lfs::core::events::cmd::RecenterVr{}.emit(); },
         "Put the VR view back at the desktop camera");

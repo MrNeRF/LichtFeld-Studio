@@ -28,6 +28,13 @@ namespace lfs::training {
         using namespace lfs::core::internal;
         using namespace lfs::gpu_ops;
         constexpr uint32_t kNoise = 0, kDecay = 1, kFoldError = 3, kPrune = 11, kParent = 12, kGumbel = 13, kGatherIndices = 14;
+        constexpr uint32_t kFoldView = 15;
+        constexpr uint32_t kMeanView = 16;
+        constexpr uint32_t kFoldNeed = 17;
+        constexpr uint32_t kBlendPeak = 18;
+        constexpr uint32_t kCoveredFactor = 19;
+        constexpr uint32_t kRetireKey = 20;
+        constexpr uint32_t kLowestRows = 21;
         struct Push {
             uint64_t a, b, c, d, e, f, g, h, i, j, k, l, seed;
             uint32_t count, count_a, count_b, count_c, count_d, width, height, channels;
@@ -144,6 +151,7 @@ namespace lfs::training {
             p.count = n32(n);
             p.count_a = opt_count(frozen);
             p.d = args.rendered_count.is_valid() ? vk::address(ref(args.rendered_count)) : 0;
+            p.e = args.reach.is_valid() ? vk::address(ref(args.reach)) : 0;
             p.x = args.opacity_decay;
             p.y = args.scale_decay;
             p.w = args.train_t;
@@ -152,6 +160,8 @@ namespace lfs::training {
                 reads.push_back(ref(frozen));
             if (args.rendered_count.is_valid())
                 reads.push_back(ref(args.rendered_count));
+            if (args.reach.is_valid())
+                reads.push_back(ref(args.reach));
             reads.insert(reads.end(), rw.begin(), rw.end());
             launch(p, kDecay, reads, rw, groups(n));
         }
@@ -294,7 +304,111 @@ namespace lfs::training {
                 reads.push_back(ref(edge));
             launch(p, kParent, reads, writes, groups(n));
         }
-        const MrnfOps kOps{.noise = noise, .decay = decay, .percentile_bounds = percentile_bounds, .gumbel = gumbel, .fold_error = fold_error, .compact_bool_indices = compact_bool, .prune_bounds = prune, .replace_parent_weights = parent_weights, .kth_largest = portable_mrnf_kth_largest, .rank_exchange_rows = portable_mrnf_rank_exchange_rows};
+        void fold_view(Out error, Out info, Out views) {
+            Push p{};
+            p.count = n32(error.numel());
+            p.a = vk::address(ref(error));
+            p.b = vk::address(ref(info));
+            p.c = views.is_valid() ? vk::address(ref(views)) : 0;
+            std::vector<StorageRef> reads{ref(error), ref(info)};
+            if (views.is_valid())
+                reads.push_back(ref(views));
+            std::vector<StorageRef> writes{ref(error), ref(info)};
+            if (views.is_valid())
+                writes.push_back(ref(views));
+            launch(p, kFoldView, reads, writes, groups(p.count));
+        }
+        void mean_view(Out error, In info) {
+            Push p{};
+            p.count = n32(error.numel());
+            p.a = vk::address(ref(error));
+            p.b = vk::address(ref(info));
+            const std::array reads{ref(error), ref(info)};
+            const std::array writes{ref(error)};
+            launch(p, kMeanView, reads, writes, groups(p.count));
+        }
+        void fold_need(Out error, float scale, float maximum, float power) {
+            Push p{};
+            p.count = n32(error.numel());
+            p.a = vk::address(ref(error));
+            p.x = scale;
+            p.y = maximum;
+            p.z = power;
+            const std::array reads{ref(error)};
+            const std::array writes{ref(error)};
+            launch(p, kFoldNeed, reads, writes, groups(p.count));
+        }
+        void blend_peak(Out step, Out peak, Out renders, float decay) {
+            Push p{};
+            p.count = n32(peak.numel());
+            p.a = vk::address(ref(step));
+            p.b = vk::address(ref(peak));
+            p.c = vk::address(ref(renders));
+            p.x = decay;
+            const std::array reads{ref(step), ref(peak), ref(renders)};
+            const std::array writes{ref(step), ref(peak), ref(renders)};
+            launch(p, kBlendPeak, reads, writes, groups(p.count));
+        }
+        void covered_factor(In peak, In renders, In opacity, In scales, float grace, float keep, float floor, Out factor) {
+            Push p{};
+            p.count = n32(peak.numel());
+            p.a = vk::address(ref(peak));
+            p.b = vk::address(ref(renders));
+            p.c = vk::address(ref(opacity));
+            p.d = vk::address(ref(scales));
+            p.e = vk::address(ref(factor));
+            p.x = grace;
+            p.y = keep;
+            p.z = floor;
+            const std::array reads{ref(peak), ref(renders), ref(opacity), ref(scales)};
+            const std::array writes{ref(factor)};
+            launch(p, kCoveredFactor, reads, writes, groups(p.count));
+        }
+        void retire_key(In peak, In opacity, float dead_peak, Out key) {
+            Push p{};
+            p.count = n32(peak.numel());
+            p.a = vk::address(ref(peak));
+            p.b = vk::address(ref(opacity));
+            p.c = vk::address(ref(key));
+            p.x = dead_peak;
+            const std::array reads{ref(peak), ref(opacity)};
+            const std::array writes{ref(key)};
+            launch(p, kRetireKey, reads, writes, groups(p.count));
+        }
+        void lowest_rows(In score, In eligible, Out rows) {
+            if (!rows.numel())
+                return;
+            const size_t n = score.numel();
+            LFS_ASSERT_MSG(rows.numel() <= n && n <= INT_MAX, "Invalid MRNF selection size");
+            auto buffer = [n] { return Tensor::empty({n}, core::Device::GPU, core::DataType::UInt32); };
+            auto keys = buffer(), sorted_keys = buffer(), indices = buffer(), sorted_indices = buffer();
+            Push p{};
+            p.a = vk::address(ref(score));
+            p.b = vk::address(ref(eligible));
+            p.c = vk::address(ref(keys));
+            p.d = vk::address(ref(indices));
+            p.count = n32(n);
+            const std::array reads{ref(score), ref(eligible)}, writes{ref(keys), ref(indices)};
+            launch(p, kLowestRows, reads, writes, groups(n));
+            const bool original = vulkan_pair_sort({&keys, &sorted_keys, &indices, &sorted_indices}, n32(n), 0, 32, false);
+            const auto sorted = ref(original ? indices : sorted_indices);
+            const auto output = ref(rows);
+            p = {};
+            p.a = vk::address(sorted);
+            p.c = vk::address(output);
+            p.count = n32(rows.numel());
+            launch(p, kGatherIndices, std::array{sorted}, std::array{output}, groups(p.count));
+        }
+        const MrnfGrowthOps growth_ops{
+            .fold_view = fold_view,
+            .mean_view = mean_view,
+            .fold_need = fold_need,
+            .blend_peak = blend_peak,
+            .covered_factor = covered_factor,
+            .retire_key = retire_key,
+            .lowest_rows = lowest_rows,
+        };
+        const MrnfOps kOps{.noise = noise, .decay = decay, .percentile_bounds = percentile_bounds, .gumbel = gumbel, .fold_error = fold_error, .compact_bool_indices = compact_bool, .prune_bounds = prune, .replace_parent_weights = parent_weights, .kth_largest = portable_mrnf_kth_largest, .rank_exchange_rows = portable_mrnf_rank_exchange_rows, .growth = &growth_ops};
     } // namespace
     const MrnfOps& vulkan_mrnf_ops() { return kOps; }
 } // namespace lfs::training

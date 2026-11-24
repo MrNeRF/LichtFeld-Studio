@@ -676,14 +676,6 @@ namespace lfs::training {
             fused_adam.enabled = true;
         const float* edge_weight = edge_map.is_valid() && edge_map.numel() > 0 ? edge_map.ptr<float>() : nullptr;
         float* edge_score = edge_scores.is_valid() && edge_scores.numel() > 0 ? edge_scores.ptr<float>() : nullptr;
-        const bool impact_requested = adam.impact_sum.is_valid() && adam.impact_peak.is_valid();
-        if (impact_requested &&
-            (adam.impact_sum.dtype() != core::DataType::Float32 || adam.impact_peak.dtype() != core::DataType::Float32 ||
-             adam.impact_sum.numel() != adam.impact_peak.numel() || !adam.impact_sum.is_contiguous() || !adam.impact_peak.is_contiguous()))
-            throw std::invalid_argument(std::format("FastGS impact outputs need matching contiguous float32 vectors, got {} and {} elements",
-                                                    adam.impact_sum.numel(), adam.impact_peak.numel()));
-        float* impact_sum = impact_requested ? core::Tensor(adam.impact_sum).ptr<float>() : nullptr;
-        float* impact_peak = impact_requested ? core::Tensor(adam.impact_peak).ptr<float>() : nullptr;
         auto& caches = state.caches;
         auto& ctx = state.frame;
         const auto& grad_image = gradients.image;
@@ -701,7 +693,7 @@ namespace lfs::training {
         for (const auto* input : std::initializer_list<const core::Tensor*>{&grad_image, &grad_alpha_extra, &grad_depth, &grad_normal,
                                                                             &ctx.bg_image, &ctx.bg_color, &ctx.image, &ctx.alpha, &error_map,
                                                                             &adam.rendered_count, &adam.erank_reg_loss, &adam.dc_reg_loss, &adam.sh_rest_reg_loss,
-                                                                            &adam.scale_reg_loss, &adam.opacity_reg_loss, &adam.mean_step_far_mask, &adam.grad_w2c, &adam.grad_cam_position, &adam.ray_depth_state}) {
+                                                                            &adam.scale_reg_loss, &adam.opacity_reg_loss, &adam.mean_step_far_mask, &adam.impact_sum, &adam.impact_peak, &adam.blend_peak, &adam.grad_w2c, &adam.grad_cam_position, &adam.ray_depth_state}) {
             if (input->is_valid())
                 input->sync_to_stream(stream);
         }
@@ -914,12 +906,10 @@ namespace lfs::training {
             bwd_shN_bits,
             edge_weight,
             edge_score,
-            impact_sum,
-            impact_peak,
             variance);
         for (const core::Tensor* output : std::initializer_list<const core::Tensor*>{
                  &adam.rendered_count, &adam.erank_reg_loss, &adam.dc_reg_loss, &adam.sh_rest_reg_loss,
-                 &adam.impact_sum, &adam.impact_peak, &adam.color_variance_loss, &adam.grad_w2c, &adam.grad_cam_position, &adam.ray_depth_state}) {
+                 &adam.impact_sum, &adam.impact_peak, &adam.blend_peak, &adam.color_variance_loss, &adam.grad_w2c, &adam.grad_cam_position, &adam.ray_depth_state}) {
             if (output->is_valid()) {
                 output->record_stream(stream);
                 core::bridgeStreams(stream, output->stream());
@@ -988,6 +978,21 @@ namespace lfs::training {
 
     fast_lfs::rasterization::FusedAdamSettings fast_adam_settings(const lfs::gpu_ops::BackwardAdam& adam) {
         fast_lfs::rasterization::FusedAdamSettings fused;
+        if (adam.impact_sum.is_valid() && adam.impact_peak.is_valid()) {
+            for (const auto* output : {&adam.impact_sum, &adam.impact_peak})
+                if (output->dtype() != core::DataType::Float32 || !output->is_contiguous() ||
+                    output->numel() < adam.groups[0].parameter.shape()[0])
+                    throw std::invalid_argument("Fast removal impact requires one contiguous float per splat");
+            fused.impact_sum = core::Tensor(adam.impact_sum).ptr<float>();
+            fused.impact_peak = core::Tensor(adam.impact_peak).ptr<float>();
+        }
+        if (adam.blend_peak.is_valid()) {
+            if (adam.blend_peak.dtype() != core::DataType::Float32 || !adam.blend_peak.is_contiguous() ||
+                adam.blend_peak.numel() < adam.groups[0].parameter.shape()[0])
+                throw std::invalid_argument("Fast blend peak requires one contiguous float per splat");
+            fused.blend_peak = core::Tensor(adam.blend_peak).ptr<float>();
+        }
+        fused.reg_rendered_only = adam.reg_rendered_only;
         fused.beta1 = adam.beta1;
         fused.beta2 = adam.beta2;
         fused.eps = adam.eps;
@@ -1072,10 +1077,10 @@ namespace lfs::training {
         record_vram_current(scope, "backward.grad_mean2d_helper", num_primitives * 2 * sizeof(float));
         record_vram_current(scope, "backward.grad_conic_helper", num_primitives * 3 * sizeof(float));
         record_vram_current(scope, "backward.fused_grad_opacity_helper",
-                            run_gaussian_backward && ctx.grad_opacity_helper ? num_primitives * sizeof(float) : 0,
+                            run_gaussian_backward && ctx.phase_allocator ? num_primitives * sizeof(float) : 0,
                             true);
         record_vram_current(scope, "backward.fused_grad_color_helper",
-                            run_gaussian_backward && ctx.grad_color_helper ? num_primitives * 3 * sizeof(float) : 0,
+                            run_gaussian_backward && ctx.phase_allocator ? num_primitives * 3 * sizeof(float) : 0,
                             true);
         record_vram_tensor(scope, "output.image", image);
         record_vram_tensor(scope, "output.alpha", alpha);
@@ -1112,6 +1117,12 @@ namespace lfs::training {
             .record_vram = fast_record_vram,
             .release_caches = fast_release_caches,
             .pop_scores = fast_pop_scores,
+            .begin_loss_phase = [](gpu_ops::FastSaved& saved) -> gpu_ops::StepScratchAllocator {
+                auto allocate = fast_lfs::rasterization::begin_loss_phase(state_of(saved).frame.forward_ctx);
+                return [allocate = std::move(allocate)](size_t bytes) {
+                    return gpu_ops::StepScratch{.native = allocate(bytes)};
+                };
+            },
         };
         return ops;
     }

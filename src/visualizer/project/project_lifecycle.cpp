@@ -402,20 +402,16 @@ namespace lfs::vis::project {
                 operation);
         }
 
-        void publishAutosaveMemoryWarning(
-            std::string shortfall,
-            std::string detail) {
+        void publishAutosaveMemoryWarning(std::string detail) {
             auto warning = lfs::make_error(
                 lfs::ErrorInit{
                     .code = lfs::ErrorCode::ResourceExhausted,
-                    .domain = lfs::ErrorDomain::Training,
+                    .domain = lfs::ErrorDomain::IO,
                     .severity = lfs::Severity::Warning,
                     .retryability =
                         lfs::Retryability::RetryableWithBackoff,
                     .operation_id = {},
-                    .user_message = LOCF(
-                        "runtime.autosave_deferred_no_memory",
-                        shortfall),
+                    .user_message = LOC("runtime.autosave_deferred_no_memory"),
                     .detail = std::move(detail),
                     .detection = LFS_SOURCE_SITE_CURRENT(),
                     .fields = {},
@@ -426,12 +422,7 @@ namespace lfs::vis::project {
 
         void publishAutosaveMemoryWarning(
             const lfs::Error& cause) {
-            const auto shortfall =
-                cause.user_message().empty()
-                    ? developerError(cause)
-                    : std::string(cause.user_message());
-            publishAutosaveMemoryWarning(
-                shortfall, developerError(cause));
+            publishAutosaveMemoryWarning(developerError(cause));
         }
 
         void notifyTrainerRestoreFailure(
@@ -467,14 +458,13 @@ namespace lfs::vis::project {
             std::filesystem::path>
         resolveDatasetRootForTrainer(
             const ProjectDocument& document,
-            const std::filesystem::path& dataset_hint) {
+            const std::filesystem::path& dataset_hint,
+            std::filesystem::path* rebase_from = nullptr) {
             const auto project_root =
                 projectRootFor(document);
             std::optional<std::filesystem::path> missing_external;
-            if (const auto dataset_ref =
-                    document.project()
-                        .dataset_reference();
-                dataset_ref && *dataset_ref) {
+            const auto dataset_ref = document.project().dataset_reference();
+            if (dataset_ref && *dataset_ref) {
                 if (auto resolved =
                         lfs::io::project::
                             resolve_path_reference(
@@ -483,6 +473,15 @@ namespace lfs::vis::project {
                                 project_root,
                                 **dataset_ref,
                                 dataset_hint)) {
+                    if (rebase_from) {
+                        *rebase_from = *resolved;
+                        // Camera paths are saved against the original dataset root.
+                        const auto record = document.references().find(**dataset_ref);
+                        if (record && *record && (*record)->locator.absolute_fallback &&
+                            !(*record)->locator.absolute_fallback->empty()) {
+                            *rebase_from = lfs::core::utf8_to_path(*(*record)->locator.absolute_fallback);
+                        }
+                    }
                     if (lfs::core::native_fs::exists(*resolved)) {
                         return *resolved;
                     }
@@ -1091,16 +1090,18 @@ namespace lfs::vis::project {
                 return;
             }
 
+            std::filesystem::path rebase_from;
             auto dataset_root =
                 resolveDatasetRootForTrainer(
-                    document, std::filesystem::path{});
+                    document, {}, &rebase_from);
             if (!dataset_root || dataset_root->empty() ||
                 !lfs::core::native_fs::exists(*dataset_root)) {
                 if (dataset_root && !dataset_root->empty()) {
                     armMissingDatasetReload(
                         *dataset_root,
                         report.pending_parameters.dataset
-                            .output_path);
+                            .output_path,
+                        rebase_from);
                 } else {
                     report_failure(
                         "Project dataset reference could not be resolved");
@@ -1111,7 +1112,8 @@ namespace lfs::vis::project {
             installTrainerFromHydratedDatasetScene(
                 viewer_, scene_manager, document, *dataset_root,
                 report.pending_parameters.dataset
-                    .output_path);
+                    .output_path,
+                rebase_from);
             return;
         }
         if (report.checkpoint_header->iteration < 0) {
@@ -1371,15 +1373,17 @@ namespace lfs::vis::project {
         if (!dataset || !*dataset) {
             return false;
         }
+        std::filesystem::path rebase_from;
         auto dataset_root = resolveDatasetRootForTrainer(
-            *document_, std::filesystem::path{});
+            *document_, {}, &rebase_from);
         if (!dataset_root || dataset_root->empty() ||
             !lfs::core::native_fs::exists(*dataset_root)) {
             if (dataset_root && !dataset_root->empty()) {
                 armMissingDatasetReload(
                     *dataset_root,
                     report.pending_parameters.dataset
-                        .output_path);
+                        .output_path,
+                    rebase_from);
             }
             return false;
         }
@@ -2840,10 +2844,10 @@ namespace lfs::vis::project {
         clearPendingExplicitPreview();
         document_.reset();
         cleanupRecoverySession();
-        // The user explicitly discarded unsaved changes at exit; delete
-        // the autosave overlay only after the write thread has joined and
-        // the document/recovery locks are released. Emergency ForceExit
-        // paths (X11 error, interrupt) never set
+        // The user discarded unsaved changes at exit, or closed a clean
+        // session; delete the autosave overlay only after the write thread
+        // has joined and the document/recovery locks are released.
+        // Emergency ForceExit paths (X11 error, interrupt) never set
         // close_discard_requested_, so crash recovery survives.
         if (discard_master) {
             removeDiscardedAutosaveArtifacts(
@@ -3073,15 +3077,18 @@ namespace lfs::vis::project {
 
     void ProjectLifecycle::armMissingDatasetReload(
         std::filesystem::path missing_path,
-        std::filesystem::path output_path) {
+        std::filesystem::path output_path,
+        std::filesystem::path rebase_from) {
         const auto epoch =
             epoch_.load(std::memory_order_acquire);
-        const auto old_root = missing_path;
+        if (rebase_from.empty()) {
+            rebase_from = missing_path;
+        }
         beginPendingDatasetRelocation(
             std::move(missing_path),
             [this, epoch,
              output_path = std::move(output_path),
-             old_root](
+             old_root = std::move(rebase_from)](
                 const std::filesystem::path& new_root) {
                 if (!viewer_.postWork({
                         .run =
@@ -3494,6 +3501,7 @@ namespace lfs::vis::project {
     void ProjectLifecycle::clearAutosaveFailureBackoff() {
         autosave_failure_backoff_seconds_ = 0;
         autosave_retry_not_before_ = {};
+        autosave_memory_warning_published_ = false;
     }
 
     void ProjectLifecycle::scheduleAutosaveFailureBackoff() {
@@ -6117,7 +6125,6 @@ namespace lfs::vis::project {
                     std::chrono::steady_clock::
                         now();
                 autosave_quiesce_logged_ = false;
-                autosave_memory_warning_published_ = false;
                 autosave_disk_full_destination_.reset();
             } else if (
                 !dest_is_scratch &&
@@ -6195,23 +6202,20 @@ namespace lfs::vis::project {
                 const bool memory_deferred =
                     was_autosave && !disk_full &&
                     last_project_write_error_code_ ==
-                        lfs::ErrorCode::ResourceExhausted &&
-                    viewer_.getTrainerManager() &&
-                    viewer_.getTrainerManager()
-                        ->isTrainingActive() &&
-                    !autosave_memory_warning_published_;
+                        lfs::ErrorCode::ResourceExhausted;
                 if (memory_deferred) {
                     LOG_WARN(
                         "Autosave deferred: {}",
                         error);
-                    if (last_project_write_typed_error_) {
-                        publishAutosaveMemoryWarning(
-                            *last_project_write_typed_error_);
-                    } else {
-                        publishAutosaveMemoryWarning(
-                            error, error);
+                    if (!autosave_memory_warning_published_) {
+                        if (last_project_write_typed_error_) {
+                            publishAutosaveMemoryWarning(
+                                *last_project_write_typed_error_);
+                        } else {
+                            publishAutosaveMemoryWarning(error);
+                        }
+                        autosave_memory_warning_published_ = true;
                     }
-                    autosave_memory_warning_published_ = true;
                 } else if (!was_autosave && disk_full) {
                     LOG_ERROR(
                         "Project background write failed: {}",
@@ -6376,9 +6380,6 @@ namespace lfs::vis::project {
             viewer_.getTrainerManager() &&
             viewer_.getTrainerManager()
                 ->isTrainingActive();
-        if (!training) {
-            autosave_memory_warning_published_ = false;
-        }
         const bool training_write_window =
             isTrainingWriteWindowOpen();
         const auto scene_serial =
@@ -6475,8 +6476,7 @@ namespace lfs::vis::project {
             last_project_write_error_ =
                 developerError(
                     cause);
-            if (training &&
-                cause.code() ==
+            if (cause.code() ==
                     lfs::ErrorCode::ResourceExhausted &&
                 !autosave_memory_warning_published_) {
                 const auto message =
@@ -7225,8 +7225,17 @@ namespace lfs::vis::project {
                     start_async_capture(
                         *model,
                         lfs::io::project::SplatSourceKind::Generated,
-                        false);
+                        false,
+                        mode == DocumentSyncMode::Autosave || mode == DocumentSyncMode::LightTrainingAutosave
+                            ? lfs::io::project::SplatCaptureFallback::Defer
+                            : lfs::io::project::SplatCaptureFallback::Synchronous);
                 if (!async) {
+                    // Keep snapshots already queued: the existing worker installs
+                    // this partial batch before the next autosave retries the rest.
+                    if (!async_captures.empty() &&
+                        async.error().retryability() == lfs::Retryability::RetryableWithBackoff) {
+                        break;
+                    }
                     return lfs::Status::failure(std::move(async).error());
                 } else if (*async) {
                     async_captures.push_back({
@@ -10141,8 +10150,10 @@ namespace lfs::vis::project {
         if (!hasDirtyProject()) {
             // Window-close X / File-Exit of a clean session: Skip any
             // unanswered recovery offer and drop the untitled scratch.
-            // Emergency ForceExit never reaches this function, so crash
-            // files survive an X11/interrupt teardown.
+            // Otherwise the session's own autosave holds nothing unsaved,
+            // so teardown removes it like a Discard exit. Emergency
+            // ForceExit never reaches this function, so crash files
+            // survive an X11/interrupt teardown.
             if (recovery_prompt_pending_ &&
                 pending_recovery_candidate_) {
                 ++recovery_prompt_generation_;
@@ -10150,6 +10161,8 @@ namespace lfs::vis::project {
                     *pending_recovery_candidate_;
                 handleRecoverySkip(candidate);
                 recovery_prompt_pending_ = false;
+            } else {
+                markCloseDiscardRequested();
             }
             removeScratchAutosave();
             return CloseSaveStatus::NotDirty;

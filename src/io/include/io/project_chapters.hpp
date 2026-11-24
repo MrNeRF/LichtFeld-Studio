@@ -306,6 +306,7 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<std::optional<ReferenceRecord>>
         find(const lfs::core::Uuid& uuid) const;
         [[nodiscard]] lfs::Result<void> upsert(const ReferenceRecord& record);
+        [[nodiscard]] lfs::Result<void> update_locator(const lfs::core::Uuid& uuid, const ReferenceLocator& locator);
         [[nodiscard]] lfs::Result<bool> remove(const lfs::core::Uuid& uuid);
 
         // A matching size+content fingerprint with mtime-only drift updates just
@@ -323,6 +324,10 @@ namespace lfs::io::project {
     private:
         JsonChapterDom dom_;
     };
+
+    [[nodiscard]] LFS_IO_API ReferenceLocator make_path_reference_locator(
+        const std::filesystem::path& project_root,
+        const std::filesystem::path& live_path);
 
     // Path ↔ REFS helpers for production adapters. Mint fingerprints a live
     // path and upserts a row (reusing the UUID for an existing key). Resolve

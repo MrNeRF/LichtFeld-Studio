@@ -246,3 +246,27 @@ TEST(BlobSeeding, ViewWithoutPeaksYieldsEmptyPeakList) {
     EXPECT_FLOAT_EQ(peaks.density[0], 0.0f);
     EXPECT_FLOAT_EQ(peaks.density[1], 0.0f);
 }
+
+// Fails if a view whose centre coincides with the swept view's counts as its neighbour: views cut from one photograph
+// share its centre, so a point on a ray of one lands on the same pixel of the other at every depth.
+TEST(BlobSeeding, ViewsSharingACentreDoNotSupportEachOther) {
+    namespace bs = lfs::training::kernels::blob_seeding;
+    const float c = std::cos(0.5f), s = std::sin(0.5f);
+    const auto view = [](const std::array<float, 9>& R, const Vec3& centre) {
+        bs::SweepView v{};
+        std::copy(R.begin(), R.end(), v.R);
+        for (int r = 0; r < 3; ++r)
+            v.t[r] = -(R[3 * r] * centre[0] + R[3 * r + 1] * centre[1] + R[3 * r + 2] * centre[2]);
+        v.fx = v.fy = FOCAL;
+        v.z_min = 1.0f;
+        v.z_max = 10.0f;
+        return v;
+    };
+    const std::array<float, 9> forward{1, 0, 0, 0, 1, 0, 0, 0, 1};
+    const std::array<float, 9> turned{c, 0, -s, 0, 1, 0, s, 0, c};
+    // Two views of one centre that overlap, and a view beside them.
+    const std::array views{view(forward, {0, 0, 0}), view(turned, {1e-7f, 0, 0}), view(forward, {0.5f, 0, 0})};
+    const std::vector<uint64_t> visible(3, ~uint64_t{0});
+    const auto neighbors = lfs::training::select_sweep_neighbors(views, visible, 1, 2);
+    EXPECT_EQ(neighbors, (std::vector<int>{2, -1, 2, -1, 0, 1}));
+}

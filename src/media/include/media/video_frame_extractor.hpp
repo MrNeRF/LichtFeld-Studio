@@ -9,6 +9,7 @@
 #include "media/dji_timed_metadata.hpp"
 #include "media/srt_metadata.hpp"
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <string>
@@ -18,6 +19,7 @@
 #include "core/extracted_frame.hpp"
 #include "media/hdr_tonemap.hpp"
 #include "media/image_output.hpp"
+#include "media/sharpness_score.hpp"
 
 namespace lfs::media {
     class FrameSink;
@@ -76,12 +78,6 @@ namespace lfs::io {
         Completed,
         Cancelled,
         Failed,
-    };
-
-    enum class SharpnessAlgorithm {
-        LAPLACIAN, // Laplacian variance — fast, blur detection
-        TENENGRAD, // Sobel energy — directional blur detection
-        COMBINED   // Tenengrad + Laplacian — best overall
     };
 
     struct SharpnessParams {

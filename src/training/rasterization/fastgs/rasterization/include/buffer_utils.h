@@ -256,13 +256,16 @@ namespace fast_lfs::rasterization {
     }
 
     // A FastGS frame has one persistent prefix and one phase-local slice.  The
-    // latter is allocated as one arena block and suballocated here so phase B
-    // can rewind over phase A after the forward kernels have finished.  The
-    // retained prefix is the sorted primitive list, which backward still reads.
+    // latter is allocated as one arena block and suballocated here so each phase
+    // rewinds over the previous one once its kernels have been enqueued: the
+    // forward sort scratch, then the loss scratch between forward and backward,
+    // then the backward helpers.  The retained prefix is the sorted primitive
+    // list and its contributor storage, which backward still reads.
     class FastGSPhaseArena {
     public:
         enum class Phase : unsigned char { Forward = 1,
-                                           Backward = 2 };
+                                           Loss = 2,
+                                           Backward = 3 };
 
         FastGSPhaseArena(std::function<char*(size_t)> backing, cudaStream_t stream)
             : backing_(std::move(backing)), stream_(stream), poison_(std::getenv("LFS_FASTGS_PHASE_POISON") != nullptr) {}

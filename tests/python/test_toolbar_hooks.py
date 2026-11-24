@@ -13,6 +13,8 @@ import sys
 
 import pytest
 
+from rcss_test_support import rule_body
+
 
 def _install_stub_modules(monkeypatch):
     hook_calls = []
@@ -2012,7 +2014,6 @@ def test_viewport_toolbar_uses_theme_glass_without_backdrop_filter():
 
     for token in (
         "viewport.toolbar_glass_decor",
-        "viewport.toolbar_border",
         "viewport.toolbar_shadow",
         "viewport.toolbar_text",
         "viewport.toolbar_selected_decor",
@@ -2025,24 +2026,18 @@ def test_viewport_toolbar_uses_theme_glass_without_backdrop_filter():
         assert f"@{{{token}}}" in theme_rcss
         assert f'{{"{token}"' in resolver
 
-    centered_toolbar_start = theme_rcss.index(".toolbar-hcenter .toolbar-container {")
-    centered_toolbar_end = theme_rcss.index("\n}", centered_toolbar_start)
-    centered_toolbar_rule = theme_rcss[centered_toolbar_start:centered_toolbar_end]
+    centered_toolbar_rule = rule_body(theme_rcss, ".toolbar-hcenter .toolbar-container")
     assert "@{viewport.toolbar_glass_decor};" in centered_toolbar_rule
-    assert "border-color: @{viewport.toolbar_border};" in centered_toolbar_rule
+    assert "border-color: @{border};" in centered_toolbar_rule
     assert "box-shadow: @{viewport.toolbar_shadow};" in centered_toolbar_rule
 
-    tool_panel_start = theme_rcss.index(".viewport-transform-panel {")
-    tool_panel_end = theme_rcss.index("\n}", tool_panel_start)
-    tool_panel_rule = theme_rcss[tool_panel_start:tool_panel_end]
+    tool_panel_rule = rule_body(theme_rcss, ".viewport-transform-panel")
     assert "@{viewport.toolbar_glass_decor};" in tool_panel_rule
     assert "color: @{viewport.toolbar_text};" in tool_panel_rule
-    assert "border-color: @{viewport.toolbar_border};" in tool_panel_rule
+    assert "border-color: @{border};" in tool_panel_rule
     assert "box-shadow: @{viewport.toolbar_shadow};" in tool_panel_rule
 
-    centered_selected_start = theme_rcss.index(".toolbar-hcenter .icon-btn.selected {")
-    centered_selected_end = theme_rcss.index("\n}", centered_selected_start)
-    centered_selected_rule = theme_rcss[centered_selected_start:centered_selected_end]
+    centered_selected_rule = rule_body(theme_rcss, ".toolbar-hcenter .icon-btn.selected")
     assert "@{viewport.toolbar_selected_decor};" in centered_selected_rule
     assert ".toolbar-hcenter .icon-btn.selected img" in theme_rcss
     assert ".viewport-transform-panel .icon-btn.selected img" in theme_rcss

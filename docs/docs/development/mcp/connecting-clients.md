@@ -83,7 +83,7 @@ The repository's [`.mcp.json`](https://github.com/MrNeRF/LichtFeld-Studio/blob/m
 This path targets coding agents that operate inside a checkout of this repository. Current limitations to know about:
 
 - The bridge frames stdio messages with `Content-Length` headers. Clients that use spec-standard newline-delimited framing (including Claude Desktop) will hang; use `mcp-remote` or direct HTTP for those instead.
-- Auto-launch passes `--no-splash`, which portable builds (the released binaries) do not recognize, so the launched app exits immediately. Use a regular development build, or set `LFS_EXECUTABLE` to one.
+- Auto-launch omits `--no-splash` for the Windows portable root executable when `bin/bin.manifest` is present. It also searches `dist/` before `dist/bin/` on Windows. Other layouts still receive `--no-splash`, which portable builds do not recognize; use a regular development build or connect to an already running portable instance for those layouts.
 
 See [issue #1399](https://github.com/MrNeRF/LichtFeld-Studio/issues/1399) for the status of these limitations.
 

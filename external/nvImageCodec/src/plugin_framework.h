@@ -19,11 +19,24 @@
 
 #include "idirectory_scaner.h"
 #include "ilibrary_loader.h"
+#include <atomic>
 #include <filesystem>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <nvimgcodec.h>
 #include <string>
 #include <vector>
+
+namespace nvimgcodec {
+
+    class PluginFramework;
+
+} // namespace nvimgcodec
+
+struct nvimgcodecExtension {
+    nvimgcodec::PluginFramework* framework_;
+};
 
 namespace nvimgcodec {
 
@@ -42,11 +55,15 @@ namespace nvimgcodec {
     public:
         explicit PluginFramework(ILogger* logger, ICodecRegistry* codec_registry, std::unique_ptr<IEnvironment> env,
                                  std::unique_ptr<IDirectoryScaner> directory_scaner, std::unique_ptr<ILibraryLoader> library_loader,
-                                 const std::string& extensions_path);
+                                 const std::string& extensions_path, std::atomic_size_t* active_clients = nullptr,
+                                 std::recursive_mutex* registry_mutex = nullptr);
         ~PluginFramework();
         nvimgcodecStatus_t registerExtension(nvimgcodecExtension_t* extension, const nvimgcodecExtensionDesc_t* extension_desc);
         nvimgcodecStatus_t unregisterExtension(nvimgcodecExtension_t extension);
         void unregisterAllExtensions();
+        nvimgcodecStatus_t getExtensions(nvimgcodecExtension_t* extensions, int* count) const;
+        nvimgcodecStatus_t getExtensionDesc(nvimgcodecExtension_t extension, const nvimgcodecExtensionDesc_t** extension_desc) const;
+        const nvimgcodecFrameworkDesc_t* getFrameworkDesc() const;
 
         void discoverAndLoadExtModules();
         void loadExtModule(const std::string& modulePath);
@@ -59,14 +76,17 @@ namespace nvimgcodec {
         };
 
         struct Extension {
-            nvimgcodecExtension_t handle_;
+            std::unique_ptr<::nvimgcodecExtension> public_handle_;
+            nvimgcodecExtension_t plugin_handle_;
             nvimgcodecExtensionDesc_t desc_;
             Module module_;
+            bool plugin_destroyed_ = false;
         };
 
         nvimgcodecStatus_t registerExtension(
             nvimgcodecExtension_t* extension, const nvimgcodecExtensionDesc_t* extension_desc, const Module& module);
-        nvimgcodecStatus_t unregisterExtension(std::map<std::string, Extension>::const_iterator it);
+        nvimgcodecStatus_t unregisterExtension(std::map<std::string, Extension>::iterator it);
+        bool hasActiveClients() const;
 
         ICodec* ensureExistsAndRetrieveCodec(const char* codec_name);
 
@@ -76,6 +96,15 @@ namespace nvimgcodec {
         nvimgcodecStatus_t unregisterDecoder(const nvimgcodecDecoderDesc_t* desc);
         nvimgcodecStatus_t registerParser(const nvimgcodecParserDesc_t* desc, float priority);
         nvimgcodecStatus_t unregisterParser(const nvimgcodecParserDesc_t* desc);
+        nvimgcodecStatus_t registerFileExtension(const char* codec, const char* file_extension, int is_default);
+        nvimgcodecStatus_t unregisterFileExtension(const char* codec, const char* file_extension);
+        nvimgcodecStatus_t getCodecNames(char* codec_names, int* count, const char* file_extension) const;
+        nvimgcodecStatus_t getFileExtensions(char* file_extensions, int* count, const char* codec_name) const;
+        nvimgcodecStatus_t getDecoderDescs(
+            const nvimgcodecDecoderDesc_t** decoder_descs, int* count, const char* codec_name, nvimgcodecBackendKind_t backend_kind) const;
+        nvimgcodecStatus_t getEncoderDescs(
+            const nvimgcodecEncoderDesc_t** encoder_descs, int* count, const char* codec_name, nvimgcodecBackendKind_t backend_kind) const;
+        nvimgcodecStatus_t getParserDescs(const nvimgcodecParserDesc_t** parser_descs, int* count, const char* codec_name) const;
 
         nvimgcodecStatus_t log(const nvimgcodecDebugMessageSeverity_t message_severity, const nvimgcodecDebugMessageCategory_t message_category,
                                const nvimgcodecDebugMessageData_t* callback_data);
@@ -86,6 +115,19 @@ namespace nvimgcodec {
         static nvimgcodecStatus_t static_unregister_decoder(void* instance, const nvimgcodecDecoderDesc_t* desc);
         static nvimgcodecStatus_t static_register_parser(void* instance, const nvimgcodecParserDesc_t* desc, float priority);
         static nvimgcodecStatus_t static_unregister_parser(void* instance, const nvimgcodecParserDesc_t* desc);
+        static nvimgcodecStatus_t static_register_file_extension(
+            void* instance, const char* codec, const char* file_extension, int is_default);
+        static nvimgcodecStatus_t static_unregister_file_extension(void* instance, const char* codec, const char* file_extension);
+        static nvimgcodecStatus_t static_get_codec_names(
+            void* instance, char* codec_names, int* count, const char* file_extension);
+        static nvimgcodecStatus_t static_get_file_extensions(
+            void* instance, char* file_extensions, int* count, const char* codec_name);
+        static nvimgcodecStatus_t static_get_decoder_descs(void* instance, const nvimgcodecDecoderDesc_t** decoder_descs, int* count,
+                                                           const char* codec_name, nvimgcodecBackendKind_t backend_kind);
+        static nvimgcodecStatus_t static_get_encoder_descs(void* instance, const nvimgcodecEncoderDesc_t** encoder_descs, int* count,
+                                                           const char* codec_name, nvimgcodecBackendKind_t backend_kind);
+        static nvimgcodecStatus_t static_get_parser_descs(
+            void* instance, const nvimgcodecParserDesc_t** parser_descs, int* count, const char* codec_name);
 
         static nvimgcodecStatus_t static_log(void* instance, const nvimgcodecDebugMessageSeverity_t message_severity,
                                              const nvimgcodecDebugMessageCategory_t message_category, const nvimgcodecDebugMessageData_t* callback_data);
@@ -98,5 +140,8 @@ namespace nvimgcodec {
         nvimgcodecFrameworkDesc_t framework_desc_;
         ICodecRegistry* codec_registry_;
         std::vector<std::string> extension_paths_;
+        std::atomic_size_t* active_clients_;
+        std::recursive_mutex owned_registry_mutex_;
+        std::recursive_mutex* registry_mutex_;
     };
 } // namespace nvimgcodec

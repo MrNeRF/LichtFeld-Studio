@@ -56,7 +56,7 @@ namespace nvimgcodec {
     }
 
     Exception::Exception(Status eStatus, const std::string& rMessage, const std::string& rLoc)
-        : eStatus_(eStatus), sMessage_(getErrorString(eStatus_) + (rMessage.empty() ? "" : " - " + rMessage)), sLocation_(rLoc) {
+        : std::runtime_error(getErrorString(eStatus) + (rMessage.empty() ? "" : " - " + rMessage)), eStatus_(eStatus), sMessage_(getErrorString(eStatus_) + (rMessage.empty() ? "" : " - " + rMessage)), sLocation_(rLoc) {
         ;
     }
 

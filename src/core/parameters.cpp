@@ -655,6 +655,12 @@ namespace lfs::core {
                        : 0.0f;
         }
 
+        int OptimizationParameters::calibration_correction_start_iteration() const {
+            // A scaler of zero or below means no step scaling; the field never starts on the untrained scene.
+            const float scaler = steps_scaler > 0.f ? steps_scaler : 1.f;
+            return std::max(1, static_cast<int>(std::lround(CALIBRATION_CORRECTION_START_ITER * scaler)));
+        }
+
         void OptimizationParameters::apply_step_scaling() {
             if (steps_scaler <= 0.f || steps_scaler == 1.f)
                 return;
@@ -1150,7 +1156,6 @@ namespace lfs::core {
                 std::pair{"ppisp_lr", ppisp_lr},
                 std::pair{"ppisp_reg_weight", ppisp_reg_weight},
                 std::pair{"ppisp_controller_lr", ppisp_controller_lr},
-                std::pair{"growth_grad_threshold", growth_grad_threshold},
                 std::pair{"means_noise_weight", means_noise_weight},
                 std::pair{"screen_share_penalty", screen_share_penalty},
             };
@@ -1437,6 +1442,7 @@ namespace lfs::core {
             p.refine_every = 200;
             p.start_refine = 0;
             p.stop_refine = 28'500;
+            p.grow_until_iter = 27'500;
             p.max_cap = 5'000'000;
             p.grow_fraction = -1.0f;
             p.shs_lr = -1.0f;
@@ -1446,11 +1452,10 @@ namespace lfs::core {
             p.densify_structure_weight = 1.0f;
             p.min_opacity = 1.0f / 255.0f;
             p.means_lr_end = 2e-7f;
-            p.opacity_lr = 0.012f;
+            p.opacity_lr = 0.025f;
             p.scaling_lr_end = 5e-3f;
             p.late_lr_anneal = 0.3f;
             p.lambda_dssim = 0.22f;
-            p.growth_grad_threshold = 0.00309693f;
             p.max_screen_share = 0.586511f;
             p.screen_share_penalty = 0.847085f;
             p.means_lr = 2.17871e-5f;
@@ -1462,9 +1467,10 @@ namespace lfs::core {
             p.scale_reg_decay_power = 0.4f;
             p.erank_reg = 0.001f;
             p.dc_reg = 0.001f;
-            p.sh_rest_reg = 0.001f;
+            p.sh_rest_reg = 0.375f;
             p.use_error_map = true;
             p.use_edge_map = true;
+            p.sh_degree_interval = 1; // every SH degree from the first steps
             return p;
         }
 
@@ -1495,21 +1501,33 @@ namespace lfs::core {
             return mrnf_defaults();
         }
 
-        OptimizationParameters OptimizationParameters::from_json(const nlohmann::json& json) {
-            OptimizationParameters params;
-            if (json.contains("strategy")) {
-                const auto strategy = json.at("strategy").get<std::string>();
-                if (const auto canonical = canonical_strategy_name(strategy); !canonical.empty()) {
-                    params = defaults_for_strategy(canonical);
-                } else {
-                    LOG_WARN("Invalid strategy '{}' in JSON, using default", strategy);
+        namespace {
+            // The strategy's defaults with every stored value applied.
+            OptimizationParameters optimization_from_json(const nlohmann::json& json) {
+                OptimizationParameters params;
+                if (json.contains("strategy")) {
+                    const auto strategy = json.at("strategy").get<std::string>();
+                    if (const auto canonical = canonical_strategy_name(strategy); !canonical.empty()) {
+                        params = OptimizationParameters::defaults_for_strategy(canonical);
+                    } else {
+                        LOG_WARN("Invalid strategy '{}' in JSON, using default", strategy);
+                    }
                 }
+                apply_optimization_json_overlay(params, json, false);
+                params.eval_mask = normalize_eval_mask(params.eval_mask);
+                // Legacy GUI saves recorded the image factor in steps_scaler.
+                if (!stored_image_count_scaler(json, params.steps_scaler))
+                    params.image_count_scaler = params.steps_scaler > 0.f ? params.steps_scaler : 1.f;
+                return params;
             }
-            apply_optimization_json_overlay(params, json, false);
-            params.eval_mask = normalize_eval_mask(params.eval_mask);
-            // Legacy GUI saves recorded the image factor in steps_scaler.
-            if (!stored_image_count_scaler(json, params.steps_scaler))
-                params.image_count_scaler = params.steps_scaler > 0.f ? params.steps_scaler : 1.f;
+        } // namespace
+
+        OptimizationParameters OptimizationParameters::from_json(const nlohmann::json& json) {
+            auto params = optimization_from_json(json);
+            // Parameters stored without this key were saved by a build that had no calibration correction, so the run
+            // they belong to trained without it and keeps it off when resumed.
+            if (!json.contains("calibration_correction"))
+                params.calibration_correction = false;
             return params;
         }
 
@@ -1577,7 +1595,8 @@ namespace lfs::core {
                         return std::unexpected(*error);
                 }
 
-                auto params = OptimizationParameters::from_json(opt_json);
+                // A parameter file is no saved run: a key it leaves out takes the strategy's default.
+                auto params = optimization_from_json(opt_json);
                 if (auto error = params.validate(); !error.empty())
                     return std::unexpected("Invalid optimization parameters: " + error);
                 if (opt_json.is_object() && !opt_json.empty())

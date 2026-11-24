@@ -58,6 +58,7 @@ namespace lfs::gpu_ops {
         float scale_decay = 0.f;
         float train_t = 0.f;
         Tensor rendered_count;
+        Tensor reach;
     };
 
     struct GumbelParams {
@@ -68,6 +69,16 @@ namespace lfs::gpu_ops {
 
     // Scratch stays the caller's GumbelTopKScratch.
     // A null Gumbel scratch keeps the launcher's temporary-allocation path.
+    struct MrnfGrowthOps {
+        void (*fold_view)(Out error, Out info, Out views);
+        void (*mean_view)(Out error, In info);
+        void (*fold_need)(Out error, float scale, float maximum, float power);
+        void (*blend_peak)(Out step, Out peak, Out renders, float decay);
+        void (*covered_factor)(In peak, In renders, In opacity, In scales, float grace, float keep, float floor, Out factor);
+        void (*retire_key)(In peak, In opacity, float dead_peak, Out key);
+        void (*lowest_rows)(In score, In eligible, Out rows);
+    };
+
     struct MrnfOps {
         void (*noise)(
             Out means, In raw_opacity, In visibility, In frozen,
@@ -99,6 +110,7 @@ namespace lfs::gpu_ops {
         // `secondary` importance (secondary may be invalid; ties by row);
         // rows come out by rank, ties by row, ineligible rows last.
         void (*rank_exchange_rows)(In primary, In secondary, In eligible, Out rows);
+        const MrnfGrowthOps* growth = nullptr;
     };
 
 } // namespace lfs::gpu_ops

@@ -1,3 +1,19 @@
+/* Shared border roles and shape scale. */
+
+.tab-nav {
+    border-radius: 4dp;
+}
+
+.tab {
+    border-top-left-radius: 4dp;
+    border-top-right-radius: 4dp;
+    border-bottom-color: transparent;
+}
+
+.tab-close {
+    border-radius: 4dp;
+}
+
 .tab {
     background-color: transparent;
     color: @{text_dim};

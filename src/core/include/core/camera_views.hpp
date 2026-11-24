@@ -3,6 +3,7 @@
 #pragma once
 
 #include "core/camera.hpp"
+#include "core/error.hpp"
 #include <span>
 
 namespace lfs::core {
@@ -16,6 +17,14 @@ namespace lfs::core {
         UndistortParams params;
         const char* suffix;
     };
+
+    struct CameraViewGroup {
+        std::shared_ptr<Camera> photograph;
+        std::vector<std::shared_ptr<Camera>> drawn;
+    };
+
+    LFS_CORE_API lfs::Result<std::vector<CameraViewGroup>> group_camera_views(
+        std::span<const std::shared_ptr<Camera>> drawn, std::span<const std::shared_ptr<Camera>> scene);
 
     LFS_CORE_API std::vector<PinholeView> plan_camera_views(const Camera& source, float lens_limit);
     LFS_CORE_API std::vector<std::shared_ptr<Camera>> make_camera_views(

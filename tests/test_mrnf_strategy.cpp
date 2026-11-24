@@ -17,22 +17,27 @@ class MRNFStrategyTest_DegenerateBoundsStayInvalidAndKeepFiniteMeanLearningRate_
 class MRNFStrategyTest_LineBoundsUseFiniteSceneScaleForMeanLearningRate_Test;
 class CropDampingStrategyTest_MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale_Test;
 class MRNFStrategyTest_ApplyDecaySkipsFrozenRows_Test;
-class MRNFStrategyTest_DensificationInfoShapeIsTwoRows_Test;
+class MRNFStrategyTest_DensificationInfoShapeIsFourRows_Test;
 class MRNFStrategyTest_ZeroVisibilityProducesNoGrowth_Test;
 class MRNFStrategyTest_DirectAuxiliaryGrowthPreservesPrefix_Test;
 class MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Test;
-class MRNFStrategyTest_GrowthExchangeUsesMaxOfImpactRanks_Test;
 class MRNFStrategyTest_GrowthExchangeSkipsNewbornsUntilScored_Test;
 class MRNFStrategyTest_GrowthExchangeMarksSplitParentsAndChildrenNewborn_Test;
 class MRNFStrategyTest_RemoveGaussiansKeepsGrowthExchangeStateAligned_Test;
-class MRNFStrategyTest_GrowthExchangeFallsBackToCoverageWithoutImpact_Test;
+class MRNFStrategyTest_GrowthExchangeRanksByCoverageWithoutViewCounts_Test;
 class MRNFStrategyTest_GrowthExchangeMatchesDemandWithoutDeletingParents_Test;
 class MRNFStrategyTest_GrowthExchangeCosineQuotaAtStartMiddleAndEnd_Test;
 class MRNFStrategyTest_RayDepthStateFollowsItsSplats_Test;
+class MRNFRecipeTest_NeedGuidedGrowthAtTheCap_Test;
+class MRNFRecipeTest_RefineErrorIsTheCompressedViewMean_Test;
+class MRNFRecipeTest_GrowthExchangeRanksByContributionPerView_Test;
+class MRNFRecipeTest_SplitAtTheCapConservesTheOpacity_Test;
+class MRNFRecipeTest_RetireQuotaTakesDeadThenLowestReachAndKeepsLargeCoveredSplats_Test;
 
 #include "core/camera.hpp"
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda/sh_layout.cuh"
+#include "core/gpu_device_runtime.hpp"
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
 #include "core/parameters.hpp"
@@ -61,6 +66,7 @@ class MRNFStrategyTest_RayDepthStateFollowsItsSplats_Test;
 #include "training/strategies/strategy_utils.hpp"
 
 #include <algorithm>
+#include <array>
 #include <climits>
 #include <cmath>
 #include <cstdint>
@@ -79,7 +85,9 @@ class MRNFStrategyTest_RayDepthStateFollowsItsSplats_Test;
 using namespace lfs::core;
 using namespace lfs::training;
 
-class MRNFStrategyTest : public lfs::test::CudaBackendTest {};
+class MRNFStrategyTest : public lfs::test::CudaDeviceTest {};
+class MRNFCudaStorageTest : public lfs::test::CudaBackendTest {};
+class MRNFRecipeTest : public lfs::test::CudaDeviceTest {};
 
 TEST_F(MRNFStrategyTest, PruneBoundsOrMatchesTensorChain) {
     constexpr size_t n = 513;
@@ -149,12 +157,7 @@ TEST_F(MRNFStrategyTest, ReplaceParentWeightsMatchesTensorProducts) {
             expected = expected * edge;
 
         auto actual = Tensor::empty({n}, Device::GPU);
-        mrnf_strategy::launch_replace_parent_weights(
-            opacities.ptr<float>(), visibility.ptr<float>(),
-            options & 1 ? active.ptr<bool>() : nullptr,
-            options & 2 ? trainable.ptr<bool>() : nullptr,
-            options & 4 ? edge.ptr<float>() : nullptr,
-            actual.ptr<float>(), n);
+        training_ops(default_gpu_backend()).mrnf->replace_parent_weights(opacities, visibility, options & 1 ? active : Tensor{}, options & 2 ? trainable : Tensor{}, options & 4 ? edge : Tensor{}, actual);
         const auto actual_host = actual.cpu();
         const auto expected_host = expected.cpu();
         EXPECT_EQ(std::memcmp(actual_host.ptr<float>(), expected_host.ptr<float>(), n * sizeof(float)), 0)
@@ -162,16 +165,16 @@ TEST_F(MRNFStrategyTest, ReplaceParentWeightsMatchesTensorProducts) {
     }
 }
 
-// The growth exchange ranks rows by the later of their positions in the two
-// importance orders. The radix ranking must give up exactly the rows the
-// comparator sorts (Tensor::sort) did, with ties, NaN, -0 and +inf present.
+// The growth exchange ranks rows by their position in the importance order. The
+// radix ranking must give up exactly the rows the comparator sort (Tensor::sort)
+// did, with ties, NaN, -0 and +inf present.
 TEST_F(MRNFStrategyTest, ExchangeRanksMatchComparatorSorts) {
     constexpr size_t n = 300007;
     constexpr size_t count = n / 7;
     const float nan = std::numeric_limits<float>::quiet_NaN();
     const float inf = std::numeric_limits<float>::infinity();
     const std::vector<float> palette{0.0f, -0.0f, 0.25f, 0.5f, 1.0f, 3.0f, inf, nan, 1e-30f};
-    std::vector<float> primary(n), secondary(n), eligible(n);
+    std::vector<float> primary(n), eligible(n);
     uint32_t state = 4321u;
     const auto next = [&state] {
         state = state * 1664525u + 1013904223u;
@@ -180,42 +183,28 @@ TEST_F(MRNFStrategyTest, ExchangeRanksMatchComparatorSorts) {
     for (size_t i = 0; i < n; ++i) {
         const uint32_t r = next();
         primary[i] = r % 3 == 0 ? palette[r % palette.size()] : static_cast<float>(r % 997) * 0.01f;
-        secondary[i] = palette[next() % palette.size()];
         eligible[i] = next() % 5 != 0 ? 1.0f : 0.0f;
     }
     const auto primary_d = Tensor::from_vector(primary, TensorShape({n}), Device::GPU);
-    const auto secondary_d = Tensor::from_vector(secondary, TensorShape({n}), Device::GPU);
     const auto eligible_d = Tensor::from_vector(eligible, TensorShape({n}), Device::GPU) > 0.5f;
 
-    for (const bool with_secondary : {false, true}) {
-        SCOPED_TRACE(::testing::Message() << "secondary=" << with_secondary);
-        const auto order_of = [&](const Tensor& importance) {
-            return importance.masked_fill(eligible_d.logical_not(), inf).sort(0, false).second.to_vector_int64();
-        };
-        std::vector<int64_t> ranks(n, 0);
-        for (const auto* importance : {&primary_d, with_secondary ? &secondary_d : nullptr}) {
-            if (importance == nullptr)
-                continue;
-            const auto order = order_of(*importance);
-            for (size_t position = 0; position < n; ++position)
-                ranks[order[position]] = std::max<int64_t>(ranks[order[position]], static_cast<int64_t>(position));
-        }
-        std::vector<int64_t> expected(n);
-        for (size_t i = 0; i < n; ++i)
-            expected[i] = static_cast<int64_t>(i);
-        std::stable_sort(expected.begin(), expected.end(), [&](const int64_t a, const int64_t b) {
-            const int64_t rank_a = eligible[a] > 0.5f ? ranks[a] : INT_MAX;
-            const int64_t rank_b = eligible[b] > 0.5f ? ranks[b] : INT_MAX;
-            return rank_a < rank_b;
-        });
-        expected.resize(count);
+    const auto order = primary_d.masked_fill(eligible_d.logical_not(), inf).sort(0, false).second.to_vector_int64();
+    std::vector<int64_t> ranks(n, 0);
+    for (size_t position = 0; position < n; ++position)
+        ranks[order[position]] = static_cast<int64_t>(position);
+    std::vector<int64_t> expected(n);
+    for (size_t i = 0; i < n; ++i)
+        expected[i] = static_cast<int64_t>(i);
+    std::stable_sort(expected.begin(), expected.end(), [&](const int64_t a, const int64_t b) {
+        const int64_t rank_a = eligible[a] > 0.5f ? ranks[a] : INT_MAX;
+        const int64_t rank_b = eligible[b] > 0.5f ? ranks[b] : INT_MAX;
+        return rank_a < rank_b;
+    });
+    expected.resize(count);
 
-        auto rows = Tensor::empty({count}, Device::GPU, DataType::Int64);
-        mrnf_strategy::launch_rank_exchange_rows(
-            primary_d.ptr<float>(), with_secondary ? secondary_d.ptr<float>() : nullptr,
-            eligible_d.ptr<bool>(), n, count, rows.ptr<int64_t>());
-        EXPECT_EQ(rows.to_vector_int64(), expected);
-    }
+    auto rows = Tensor::empty({count}, Device::GPU, DataType::Int64);
+    training_ops(default_gpu_backend()).mrnf->growth->lowest_rows(primary_d, eligible_d, rows);
+    EXPECT_EQ(rows.to_vector_int64(), expected);
 }
 
 namespace {
@@ -273,9 +262,7 @@ TEST_F(MRNFStrategyTest, RefinePredicatesAndIndicesMatchTensorReferenceOnRealSce
 
         const auto expected_weights = opacities * (visibility > 0.0f) * active * trainable * edge;
         auto actual_weights = Tensor::empty({n}, Device::GPU);
-        mrnf_strategy::launch_replace_parent_weights(
-            opacities.ptr<float>(), visibility.ptr<float>(), active.ptr<bool>(),
-            trainable.ptr<bool>(), edge.ptr<float>(), actual_weights.ptr<float>(), n);
+        training_ops(default_gpu_backend()).mrnf->replace_parent_weights(opacities, visibility, active, trainable, edge, actual_weights);
         const auto actual_weights_host = actual_weights.cpu();
         const auto expected_weights_host = expected_weights.cpu();
         EXPECT_EQ(std::memcmp(actual_weights_host.ptr<float>(), expected_weights_host.ptr<float>(),
@@ -284,7 +271,7 @@ TEST_F(MRNFStrategyTest, RefinePredicatesAndIndicesMatchTensorReferenceOnRealSce
     }
 }
 
-TEST_F(MRNFStrategyTest, ShNBatchArenaMatchesCatFallbackOnRealScene) {
+TEST_F(MRNFCudaStorageTest, ShNBatchArenaMatchesCatFallbackOnRealScene) {
     struct QuantReset {
         ~QuantReset() { sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt); }
     } reset;
@@ -343,7 +330,7 @@ TEST_F(MRNFStrategyTest, ShNBatchArenaMatchesCatFallbackOnRealScene) {
     const auto held = arena.begin_frame(stream);
     flush(fallback_splat);
     arena.end_frame(held, stream);
-    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    ASSERT_NO_THROW(gpu_device_barrier(default_gpu_backend()));
 
     const auto arena_codes = arena_splat.shN().cpu().contiguous();
     const auto fallback_codes = fallback_splat.shN().cpu().contiguous();
@@ -622,7 +609,7 @@ TEST_F(MRNFStrategyTest, EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward)
     }
 }
 
-class CropDampingStrategyTest : public lfs::test::CudaBackendTest {};
+class CropDampingStrategyTest : public lfs::test::CudaDeviceTest {};
 
 TEST_F(CropDampingStrategyTest, MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale) {
     auto splat_data = create_mrnf_test_splat_data();
@@ -631,7 +618,6 @@ TEST_F(CropDampingStrategyTest, MrnfRejectedRowsAreNotRefineCandidatesAtZeroScal
     auto opt_params = vanilla_mrnf_params();
     opt_params.iterations = 100;
     opt_params.max_cap = 32;
-    opt_params.growth_grad_threshold = 0.5f;
     strategy.initialize(opt_params);
     strategy._refine_weight_max = Tensor::ones({10}, Device::GPU);
     strategy.visibility_accumulator().fill_(1.0f);
@@ -962,7 +948,6 @@ TEST_F(MRNFStrategyTest, GrowAndSplitResetsOptimizerStateForParents) {
     opt_params.iterations = 10'000;
     opt_params.sh_degree_interval = 10'000;
     opt_params.max_cap = 32;
-    opt_params.growth_grad_threshold = 0.5f;
     opt_params.grow_fraction = 1.0f;
     opt_params.grow_until_iter = 10'000;
 
@@ -1048,7 +1033,6 @@ TEST_F(MRNFStrategyTest, SHDegree0KeepsShNEmptyAndFusedAdamUsableAfterGrowth) {
     opt_params.iterations = 10'000;
     opt_params.sh_degree_interval = 10'000;
     opt_params.max_cap = 32;
-    opt_params.growth_grad_threshold = 0.5f;
     opt_params.grow_fraction = 1.0f;
     opt_params.grow_until_iter = 10'000;
 
@@ -1166,6 +1150,27 @@ TEST_F(MRNFStrategyTest, ShNReservationTracksMaxDegreeAndMaxCap) {
     expect_shN_capacity(scheduled_splat, scheduled_strategy.get_optimizer(), 1);
 }
 
+// Catches MRNF holding the higher SH coefficients back: its defaults raise the SH degree every step and its optimizer
+// steps them from the first iteration, while the other strategies keep the 1,000-iteration warm-up.
+TEST_F(MRNFRecipeTest, ShNTrainsFromTheFirstStep) {
+    EXPECT_EQ(param::OptimizationParameters::mrnf_defaults().sh_degree_interval, 1);
+
+    auto splat_data = create_mrnf_test_splat_data(10, 1);
+    MRNF strategy(splat_data);
+    auto params = vanilla_mrnf_params();
+    params.iterations = 10'000;
+    strategy.initialize(params);
+    EXPECT_FALSE(strategy.get_optimizer().get_config().sh_warmup);
+    EXPECT_TRUE(adam_group(strategy.get_optimizer().prepare_fastgs_fused_adam(1), lfs::gpu_ops::AdamSlot::ShN).enabled);
+
+    auto other_splat = create_mrnf_test_splat_data(10, 1);
+    auto other_params = param::OptimizationParameters::mcmc_defaults();
+    const auto other = create_optimizer(other_splat, other_params);
+    EXPECT_TRUE(other->get_config().sh_warmup);
+    EXPECT_FALSE(adam_group(other->prepare_fastgs_fused_adam(1), lfs::gpu_ops::AdamSlot::ShN).enabled);
+    EXPECT_TRUE(adam_group(other->prepare_fastgs_fused_adam(1001), lfs::gpu_ops::AdamSlot::ShN).enabled);
+}
+
 TEST_F(MRNFStrategyTest, DirectAuxiliaryGrowthPreservesPrefix) {
     constexpr size_t sfm_points = 8;
     constexpr size_t grown_points = sfm_points * 3;
@@ -1215,7 +1220,6 @@ TEST_F(MRNFStrategyTest, GrowAndSplitUsesIgsPlusSplitRule) {
     opt_params.iterations = 10'000;
     opt_params.sh_degree_interval = 10'000;
     opt_params.max_cap = 32;
-    opt_params.growth_grad_threshold = 0.5f;
     opt_params.grow_fraction = 1.0f;
     opt_params.grow_until_iter = 10'000;
     strategy.initialize(opt_params);
@@ -1270,7 +1274,6 @@ TEST_F(MRNFStrategyTest, GrowAndSplitDoesNotReserveOversizeCandidates) {
     params.iterations = 10000;
     params.sh_degree_interval = 10000;
     params.max_cap = 32;
-    params.growth_grad_threshold = .5f;
     params.grow_fraction = .5f;
     params.grow_until_iter = 10000;
     params.max_screen_share = .3f;
@@ -1363,7 +1366,6 @@ TEST_F(MRNFStrategyTest, GrowAndSplitWithoutMaxCapExtendsBookkeepingMasks) {
     opt_params.iterations = 10'000;
     opt_params.sh_degree_interval = 10'000;
     opt_params.max_cap = 0;
-    opt_params.growth_grad_threshold = 0.5f;
     opt_params.grow_fraction = 1.0f;
     opt_params.grow_until_iter = 10'000;
     strategy.initialize(opt_params);
@@ -1393,7 +1395,6 @@ TEST_F(MRNFStrategyTest, DeletedMaskCapacityGrowthPreservesExistingRows) {
     opt_params.iterations = 10'000;
     opt_params.sh_degree_interval = 10'000;
     opt_params.max_cap = 0;
-    opt_params.growth_grad_threshold = 0.5f;
     opt_params.grow_fraction = 1.0f;
     opt_params.grow_until_iter = 10'000;
     strategy.initialize(opt_params);
@@ -1432,7 +1433,6 @@ TEST_F(MRNFStrategyTest, GrowAndSplitReplacementSkipsZeroWeightCandidates) {
     opt_params.iterations = 10'000;
     opt_params.sh_degree_interval = 10'000;
     opt_params.max_cap = 32;
-    opt_params.growth_grad_threshold = 0.5f;
     opt_params.grow_fraction = 0.0f;
     opt_params.grow_until_iter = 0;
     strategy.initialize(opt_params);
@@ -1442,7 +1442,8 @@ TEST_F(MRNFStrategyTest, GrowAndSplitReplacementSkipsZeroWeightCandidates) {
     auto true_vals = Tensor::ones_bool({2}, Device::GPU);
     strategy._splat_data->deleted().index_put_(free_indices, true_vals);
 
-    strategy._refine_weight_max = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::GPU);
+    // Refills are drawn by NEED: every row has error, only row 0 was seen.
+    strategy._refine_weight_max = Tensor::ones({static_cast<size_t>(splat_data.size())}, Device::GPU);
     auto visibility = strategy.visibility_accumulator();
     visibility.zero_();
 
@@ -1465,7 +1466,6 @@ TEST_F(MRNFStrategyTest, GrowAndSplitReusesFreeSlotsBeforeAppending) {
     opt_params.iterations = 10'000;
     opt_params.sh_degree_interval = 10'000;
     opt_params.max_cap = 32;
-    opt_params.growth_grad_threshold = 0.5f;
     opt_params.grow_fraction = 1.0f;
     opt_params.grow_until_iter = 10'000;
     strategy.initialize(opt_params);
@@ -1546,7 +1546,6 @@ TEST_F(MRNFStrategyTest, RefineOutOfVramIsUndoneToTheRowsItStartedFrom) {
         params.iterations = 10'000;
         params.sh_degree_interval = 10'000;
         params.max_cap = 1000;
-        params.growth_grad_threshold = 0.5f;
         params.grow_fraction = 1.0f;
         params.grow_until_iter = 10'000;
         strategy.initialize(params);
@@ -1559,7 +1558,7 @@ TEST_F(MRNFStrategyTest, RefineOutOfVramIsUndoneToTheRowsItStartedFrom) {
 
         int calls = 0;
         pressure.set_allocation_probe([&](const lfs::core::MemoryDomain domain, size_t) {
-            return domain == lfs::core::MemoryDomain::CudaDevice && ++calls > allowed;
+            return domain == lfs::core::device_memory_domain(default_gpu_backend()) && ++calls > allowed;
         });
         bool failed = false;
         try {
@@ -1568,7 +1567,7 @@ TEST_F(MRNFStrategyTest, RefineOutOfVramIsUndoneToTheRowsItStartedFrom) {
             failed = true;
         }
         pressure.set_allocation_probe(nullptr);
-        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        ASSERT_NO_THROW(gpu_device_barrier(default_gpu_backend()));
 
         if (failed) {
             ++undone;
@@ -1584,7 +1583,7 @@ TEST_F(MRNFStrategyTest, RefineOutOfVramIsUndoneToTheRowsItStartedFrom) {
         const size_t grown_from = splat.size();
         prepare(strategy, splat);
         ASSERT_NO_THROW(strategy.grow_and_split(2, 0));
-        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        ASSERT_NO_THROW(gpu_device_barrier(default_gpu_backend()));
         EXPECT_GT(splat.size(), grown_from);
         expect_whole(strategy, splat);
     }
@@ -1705,10 +1704,8 @@ TEST_F(MRNFStrategyTest, SetOptimizationParamsRecomputesDecayFromCurrentState) {
     strategy._mean_lr_unscaled = 2.0e-6;
     strategy._scale_lr_current = 4.0e-4;
     strategy._exchange_importance_sum = Tensor::ones({splat_data.size()}, Device::GPU);
-    strategy._exchange_importance_peak = Tensor::ones({splat_data.size()}, Device::GPU);
     strategy._exchange_birth = Tensor::zeros({splat_data.size()}, Device::GPU);
     strategy._exchange_windows = 3;
-    strategy._exchange_first_iter = 100;
 
     auto resumed_params = opt_params;
     resumed_params.iterations = 3000;
@@ -1729,10 +1726,8 @@ TEST_F(MRNFStrategyTest, SetOptimizationParamsRecomputesDecayFromCurrentState) {
     EXPECT_NEAR(strategy._scale_lr_gamma, expected_scale_gamma, 1e-12);
     EXPECT_NEAR(strategy.get_optimizer().get_param_lr(ParamType::Scaling), strategy._scale_lr_current, 1e-12);
     EXPECT_FALSE(strategy._exchange_importance_sum.is_valid());
-    EXPECT_FALSE(strategy._exchange_importance_peak.is_valid());
     EXPECT_FALSE(strategy._exchange_birth.is_valid());
     EXPECT_EQ(strategy._exchange_windows, 0);
-    EXPECT_EQ(strategy._exchange_first_iter, -1);
 }
 
 namespace {
@@ -1800,8 +1795,9 @@ TEST_F(MRNFStrategyTest, ApplyDecaySkipsFrozenRows) {
     const auto scales = splat_data.scaling_raw().cpu();
     const float* o = opac.ptr<float>();
     const float* s = scales.ptr<float>();
-    const float* o0 = opac_orig.cpu().ptr<float>();
-    const float* s0 = scale_orig.cpu().ptr<float>();
+    const auto original_opacity_host = opac_orig.cpu(), original_scales_host = scale_orig.cpu();
+    const float* o0 = original_opacity_host.ptr<float>();
+    const float* s0 = original_scales_host.ptr<float>();
     EXPECT_NEAR(o[0], o0[0], 1e-6f);
     EXPECT_NEAR(s[0], s0[0], 1e-6f);
     for (size_t i = 1; i < splat_data.size(); ++i) {
@@ -1810,7 +1806,7 @@ TEST_F(MRNFStrategyTest, ApplyDecaySkipsFrozenRows) {
     }
 }
 
-TEST_F(MRNFStrategyTest, DensificationInfoShapeIsTwoRows) {
+TEST_F(MRNFStrategyTest, DensificationInfoShapeIsFourRows) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
     auto opt_params = vanilla_mrnf_params();
@@ -1819,7 +1815,7 @@ TEST_F(MRNFStrategyTest, DensificationInfoShapeIsTwoRows) {
     strategy.initialize(opt_params);
     strategy.ensure_densification_info_shape();
     ASSERT_TRUE(splat_data._densification_info.is_valid());
-    EXPECT_EQ(splat_data._densification_info.shape()[0], 2u);
+    EXPECT_EQ(splat_data._densification_info.shape()[0], 4u);
     EXPECT_EQ(splat_data._densification_info.shape()[1], splat_data.size());
 }
 
@@ -1865,7 +1861,6 @@ TEST_F(MRNFStrategyTest, ZeroVisibilityProducesNoGrowth) {
     opt_params.iterations = 10'000;
     opt_params.sh_degree_interval = 10'000;
     opt_params.max_cap = 32;
-    opt_params.growth_grad_threshold = 0.5f;
     opt_params.grow_fraction = 1.0f;
     opt_params.grow_until_iter = 10'000;
     strategy.initialize(opt_params);
@@ -1891,12 +1886,10 @@ namespace {
         opt.max_cap = 32;
         opt.grow_fraction = 1.0f;
         opt.grow_until_iter = 10'000;
-        opt.growth_exchange = true;
         return opt;
     }
 
     const std::vector<float> kExchangeSum{1000.0f, 0.1f, 0.5f, 0.6f, 10.0f, 11.0f, 12.0f, 13.0f, 14.0f, 15.0f};
-    const std::vector<float> kExchangePeak{0.01f, 0.95f, 0.02f, 0.03f, 0.40f, 0.41f, 0.42f, 0.43f, 0.44f, 0.45f};
 
     std::vector<int64_t> selected_rows(const Tensor& indices) {
         if (!indices.is_valid())
@@ -1909,25 +1902,6 @@ namespace {
     }
 } // namespace
 
-TEST_F(MRNFStrategyTest, GrowthExchangeUsesMaxOfImpactRanks) {
-    const auto run = [](const std::vector<float>& primary, const std::vector<float>* secondary) {
-        auto splat_data = create_mrnf_test_splat_data();
-        MRNF strategy(splat_data);
-        strategy.initialize(growth_exchange_test_params());
-        const size_t n = splat_data.size();
-        strategy._exchange_importance_sum = Tensor::from_vector(primary, TensorShape({n}), Device::GPU);
-        if (secondary)
-            strategy._exchange_importance_peak = Tensor::from_vector(*secondary, TensorShape({n}), Device::GPU);
-        strategy._exchange_birth = Tensor::zeros({n}, Device::GPU);
-        strategy._exchange_windows = strategy.exchange_warmup_windows() + 1;
-        return selected_rows(strategy.select_exchange_victims(2));
-    };
-
-    EXPECT_EQ(run(kExchangeSum, &kExchangePeak), (std::vector<int64_t>{2, 3}));
-    EXPECT_EQ(run(kExchangeSum, nullptr), (std::vector<int64_t>{1, 2}));
-    EXPECT_EQ(run(kExchangePeak, nullptr), (std::vector<int64_t>{0, 2}));
-}
-
 TEST_F(MRNFStrategyTest, GrowthExchangeSkipsNewbornsUntilScored) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
@@ -1935,7 +1909,6 @@ TEST_F(MRNFStrategyTest, GrowthExchangeSkipsNewbornsUntilScored) {
 
     const size_t n = splat_data.size();
     strategy._exchange_importance_sum = Tensor::from_vector(kExchangeSum, TensorShape({n}), Device::GPU);
-    strategy._exchange_importance_peak = Tensor::from_vector(kExchangePeak, TensorShape({n}), Device::GPU);
     strategy._exchange_birth = Tensor::zeros({n}, Device::GPU);
     strategy._exchange_windows = strategy.exchange_warmup_windows() + 1;
 
@@ -1945,7 +1918,7 @@ TEST_F(MRNFStrategyTest, GrowthExchangeSkipsNewbornsUntilScored) {
     strategy.record_exchange_births();
 
     EXPECT_EQ(selected_rows(strategy.select_exchange_victims(2)),
-              (std::vector<int64_t>{4, 5}));
+              (std::vector<int64_t>{1, 4}));
 
     strategy._exchange_windows += strategy.exchange_warmup_windows() + 1;
     EXPECT_EQ(selected_rows(strategy.select_exchange_victims(2)),
@@ -1959,7 +1932,6 @@ TEST_F(MRNFStrategyTest, GrowthExchangeMarksSplitParentsAndChildrenNewborn) {
 
     const size_t n = splat_data.size();
     strategy._exchange_importance_sum = Tensor::from_vector(kExchangeSum, TensorShape({n}), Device::GPU);
-    strategy._exchange_importance_peak = Tensor::from_vector(kExchangePeak, TensorShape({n}), Device::GPU);
     strategy._exchange_birth = Tensor::zeros({n}, Device::GPU);
     strategy._exchange_windows = strategy.exchange_warmup_windows() + 3;
     strategy._exchange_free_before_growth = Tensor::zeros_bool({n}, Device::GPU);
@@ -1970,11 +1942,9 @@ TEST_F(MRNFStrategyTest, GrowthExchangeMarksSplitParentsAndChildrenNewborn) {
     strategy.record_exchange_births(parents);
 
     const auto sum = strategy._exchange_importance_sum.cpu().to_vector();
-    const auto peak = strategy._exchange_importance_peak.cpu().to_vector();
     const auto birth = strategy._exchange_birth.cpu().to_vector();
     for (const size_t row : {0u, 2u, 3u}) {
         EXPECT_EQ(sum[row], 0.0f);
-        EXPECT_EQ(peak[row], 0.0f);
         EXPECT_EQ(birth[row], static_cast<float>(strategy._exchange_windows));
     }
     EXPECT_EQ(sum[1], kExchangeSum[1]);
@@ -1988,15 +1958,7 @@ TEST_F(MRNFStrategyTest, RemoveGaussiansKeepsGrowthExchangeStateAligned) {
 
     const size_t n = splat_data.size();
     strategy._exchange_importance_sum = Tensor::from_vector(kExchangeSum, TensorShape({n}), Device::GPU);
-    strategy._exchange_importance_peak = Tensor::from_vector(kExchangePeak, TensorShape({n}), Device::GPU);
     strategy._exchange_birth = Tensor::zeros({n}, Device::GPU);
-    std::vector<float> impact_sum(n);
-    std::vector<float> impact_peak(n);
-    std::iota(impact_sum.begin(), impact_sum.end(), 20.0f);
-    std::iota(impact_peak.begin(), impact_peak.end(), 40.0f);
-    strategy._exchange_window_impact_sum = Tensor::from_vector(impact_sum, TensorShape({n}), Device::GPU);
-    strategy._exchange_window_impact_peak = Tensor::from_vector(impact_peak, TensorShape({n}), Device::GPU);
-    strategy._exchange_impact_written = true;
     strategy._exchange_windows = strategy.exchange_warmup_windows() + 1;
 
     const auto mask = Tensor::from_vector(
@@ -2007,22 +1969,14 @@ TEST_F(MRNFStrategyTest, RemoveGaussiansKeepsGrowthExchangeStateAligned) {
 
     ASSERT_EQ(splat_data.size(), 8u);
     ASSERT_EQ(strategy._exchange_importance_sum.numel(), 8u);
-    ASSERT_EQ(strategy._exchange_importance_peak.numel(), 8u);
     ASSERT_EQ(strategy._exchange_birth.numel(), 8u);
-    ASSERT_EQ(strategy._exchange_window_impact_sum.numel(), 8u);
-    ASSERT_EQ(strategy._exchange_window_impact_peak.numel(), 8u);
-    EXPECT_TRUE(strategy._exchange_impact_written);
     EXPECT_EQ(strategy._exchange_importance_sum.cpu().to_vector(),
               std::vector<float>(kExchangeSum.begin() + 1, kExchangeSum.end() - 1));
-    EXPECT_EQ(strategy._exchange_window_impact_sum.cpu().to_vector(),
-              std::vector<float>(impact_sum.begin() + 1, impact_sum.end() - 1));
-    EXPECT_EQ(strategy._exchange_window_impact_peak.cpu().to_vector(),
-              std::vector<float>(impact_peak.begin() + 1, impact_peak.end() - 1));
     EXPECT_EQ(selected_rows(strategy.select_exchange_victims(2)),
-              (std::vector<int64_t>{1, 2}));
+              (std::vector<int64_t>{0, 1}));
 }
 
-TEST_F(MRNFStrategyTest, GrowthExchangeFallsBackToCoverageWithoutImpact) {
+TEST_F(MRNFStrategyTest, GrowthExchangeRanksByCoverageWithoutViewCounts) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
     strategy.initialize(growth_exchange_test_params());
@@ -2030,15 +1984,9 @@ TEST_F(MRNFStrategyTest, GrowthExchangeFallsBackToCoverageWithoutImpact) {
     const size_t n = splat_data.size();
     strategy.visibility_accumulator().copy_(
         Tensor::from_vector(kExchangeSum, TensorShape({n}), Device::GPU));
-    strategy._exchange_window_impact_sum = Tensor::zeros({n}, Device::GPU);
-    strategy._exchange_window_impact_peak = Tensor::zeros({n}, Device::GPU);
-    strategy._exchange_impact_written = false;
     strategy.update_exchange_importance();
 
     EXPECT_EQ(strategy._exchange_importance_sum.cpu().to_vector(), kExchangeSum);
-    EXPECT_FALSE(strategy._exchange_importance_peak.is_valid());
-    EXPECT_FALSE(strategy._exchange_window_impact_sum.is_valid());
-    EXPECT_FALSE(strategy._exchange_window_impact_peak.is_valid());
     strategy._exchange_windows = strategy.exchange_warmup_windows() + 1;
     EXPECT_EQ(selected_rows(strategy.select_exchange_victims(2)),
               (std::vector<int64_t>{1, 2}));
@@ -2054,7 +2002,6 @@ TEST_F(MRNFStrategyTest, GrowthExchangeMatchesDemandWithoutDeletingParents) {
 
     const size_t n = splat_data.size();
     strategy._exchange_importance_sum = Tensor::from_vector(kExchangeSum, TensorShape({n}), Device::GPU);
-    strategy._exchange_importance_peak = Tensor::from_vector(kExchangePeak, TensorShape({n}), Device::GPU);
     strategy._exchange_birth = Tensor::zeros({n}, Device::GPU);
     strategy._exchange_windows = strategy.exchange_warmup_windows() + 1;
     strategy._refine_weight_max = Tensor::ones({n}, Device::GPU);
@@ -2085,12 +2032,18 @@ TEST_F(MRNFStrategyTest, GrowthExchangeCosineQuotaAtStartMiddleAndEnd) {
     auto params = growth_exchange_test_params();
     params.grow_until_iter = 1000;
     strategy.initialize(params);
-    strategy._exchange_first_iter = 200;
 
-    // 4% of 1010 active splats at the first exchange, 2.25% halfway, 0.5% at grow_until_iter.
-    EXPECT_EQ(strategy.exchange_quota(200, 1010), 40u);
-    EXPECT_EQ(strategy.exchange_quota(600, 1010), 22u);
-    EXPECT_EQ(strategy.exchange_quota(1000, 1010), 5u);
+    // 5% of 1010 active splats at the start, 2.5% halfway, none at grow_until_iter.
+    EXPECT_EQ(strategy.exchange_quota(0, 1010, 0), 50u);
+    EXPECT_EQ(strategy.exchange_quota(500, 1010, 0), 25u);
+    EXPECT_EQ(strategy.exchange_quota(1000, 1010, 0), 0u);
+    // Half of the rows the refine freed already (rounded down) come off the quota, which never goes below 0.
+    EXPECT_EQ(strategy.exchange_quota(0, 1010, 20), 40u);
+    EXPECT_EQ(strategy.exchange_quota(0, 1010, 21), 40u);
+    EXPECT_EQ(strategy.exchange_quota(500, 1010, 49), 1u);
+    EXPECT_EQ(strategy.exchange_quota(500, 1010, 50), 0u);
+    EXPECT_EQ(strategy.exchange_quota(500, 1010, 1'000'000), 0u);
+    EXPECT_EQ(strategy.exchange_quota(1000, 1010, 7), 0u);
 }
 
 namespace {
@@ -2257,7 +2210,6 @@ TEST_F(MRNFStrategyTest, RayDepthStateFollowsItsSplats) {
     params.iterations = 10'000;
     params.sh_degree_interval = 10'000;
     params.max_cap = 32;
-    params.growth_grad_threshold = 0.5f;
     params.grow_fraction = 1.0f;
     params.grow_until_iter = 10'000;
     MRNF strategy(splat);
@@ -2400,14 +2352,12 @@ TEST_F(MRNFStrategyTest, HardRemovalRepublishesFarMaskForDegenerateModel) {
     ASSERT_NE(optimizer.mean_step_far_mask(), nullptr);
     ASSERT_EQ(optimizer.mean_step_far_mask_n(), splat.means().shape()[0]);
     bool is_far = false;
-    ASSERT_EQ(cudaMemcpy(&is_far, optimizer.mean_step_far_mask(), sizeof(is_far),
-                         cudaMemcpyDeviceToHost),
-              cudaSuccess);
+    is_far = optimizer.mean_step_far_mask_tensor().item<bool>();
     EXPECT_TRUE(is_far);
 
     optimizer.get_grad(ParamType::Means).fill_(0.2f);
     EXPECT_NO_THROW(optimizer.step(1));
-    EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    ASSERT_NO_THROW(gpu_device_barrier(default_gpu_backend()));
     EXPECT_EQ(optimizer.mean_step_far_mask_n(), splat.means().shape()[0]);
     EXPECT_LT(splat.means().cpu().ptr<float>()[0], 3.0f);
     const auto fused = optimizer.prepare_fastgs_fused_adam(2);
@@ -2435,22 +2385,18 @@ TEST_F(MRNFStrategyTest, DeserializeRepublishesFarMaskWithDegenerateBounds) {
     auto& optimizer = restored.get_optimizer();
     ASSERT_NE(optimizer.mean_step_far_mask(), nullptr);
     bool is_far = true;
-    ASSERT_EQ(cudaMemcpy(&is_far, optimizer.mean_step_far_mask(), sizeof(is_far),
-                         cudaMemcpyDeviceToHost),
-              cudaSuccess);
+    is_far = optimizer.mean_step_far_mask_tensor().item<bool>();
     ASSERT_FALSE(is_far);
 
     splat.deserialize(checkpoint);
     restored.deserialize(checkpoint);
     ASSERT_NE(optimizer.mean_step_far_mask(), nullptr);
     ASSERT_EQ(optimizer.mean_step_far_mask_n(), splat.means().shape()[0]);
-    ASSERT_EQ(cudaMemcpy(&is_far, optimizer.mean_step_far_mask(), sizeof(is_far),
-                         cudaMemcpyDeviceToHost),
-              cudaSuccess);
+    is_far = optimizer.mean_step_far_mask_tensor().item<bool>();
     EXPECT_TRUE(is_far);
     optimizer.get_grad(ParamType::Means).fill_(0.2f);
     EXPECT_NO_THROW(optimizer.step(1));
-    EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    ASSERT_NO_THROW(gpu_device_barrier(default_gpu_backend()));
 }
 
 namespace {
@@ -2500,7 +2446,7 @@ TEST_F(MRNFStrategyTest, MeanStepFarMaskMismatchIsIgnoredByExplicitAdam) {
         FarMaskWarningCapture warnings;
 
         EXPECT_NO_THROW(optimizer.step(1));
-        EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        ASSERT_NO_THROW(gpu_device_barrier(default_gpu_backend()));
         EXPECT_EQ(optimizer.mean_step_far_mask(), nullptr);
         EXPECT_EQ(optimizer.mean_step_far_mask_n(), 0);
         control_optimizer.step(1);
@@ -2545,7 +2491,7 @@ TEST_F(MRNFStrategyTest, MeanStepFarMaskMismatchIsIgnoredByFusedAdam) {
         EXPECT_EQ((republished.mean_step_far_mask.is_valid() ? republished.mean_step_far_mask.ptr<bool>() : nullptr), current_mask.ptr<bool>());
         EXPECT_EQ(republished.mean_step_far_mask.numel(), 2);
         EXPECT_EQ(warnings.messages.size(), 1u);
-        EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        ASSERT_NO_THROW(gpu_device_barrier(default_gpu_backend()));
     }
 }
 
@@ -2574,13 +2520,10 @@ TEST_F(MRNFStrategyTest, MeanStepFarMaskUploadsHostStorageBeforeAdam) {
             control_optimizer.set_mean_step_far_mask(mask.gpu().contiguous());
             EXPECT_NE(optimizer.mean_step_far_mask(), mask.ptr<bool>());
         }
-        cudaPointerAttributes attributes{};
-        ASSERT_EQ(cudaPointerGetAttributes(&attributes, optimizer.mean_step_far_mask()), cudaSuccess);
-        EXPECT_EQ(attributes.type, cudaMemoryTypeDevice);
-        bool values[2] = {};
-        ASSERT_EQ(cudaMemcpy(values, optimizer.mean_step_far_mask(), sizeof(values),
-                             cudaMemcpyDeviceToHost),
-                  cudaSuccess);
+        EXPECT_EQ(optimizer.mean_step_far_mask_tensor().device(), Device::GPU);
+        EXPECT_EQ(gpu_backend_of(optimizer.mean_step_far_mask_tensor()), default_gpu_backend());
+        const auto values = optimizer.mean_step_far_mask_tensor().to_vector_bool();
+        ASSERT_EQ(values.size(), 2u);
         EXPECT_TRUE(values[0]);
         EXPECT_FALSE(values[1]);
         const auto fused = optimizer.prepare_fastgs_fused_adam(1);
@@ -2590,12 +2533,35 @@ TEST_F(MRNFStrategyTest, MeanStepFarMaskUploadsHostStorageBeforeAdam) {
         control_optimizer.get_grad(ParamType::Means).fill_(0.2f);
         optimizer.step(1);
         control_optimizer.step(1);
-        EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        ASSERT_NO_THROW(gpu_device_barrier(default_gpu_backend()));
         EXPECT_EQ(means_xyz(splat), means_xyz(control_splat));
     }
 }
 
-TEST_F(MRNFStrategyTest, MeanStepFarMaskRetainsAllocationUntilBindingIsCleared) {
+// Owned and borrowed tensor storage have the same lifetime contract on either device.
+TEST_F(MRNFStrategyTest, FarMaskOwnsAndCopiesPortableStorage) {
+    auto splat = create_mrnf_test_splat_data(2, 0);
+    MRNF strategy(splat);
+    strategy.initialize(vanilla_mrnf_params());
+    auto& optimizer = strategy.get_optimizer();
+    {
+        auto owned = Tensor::ones_bool({2}, Device::GPU);
+        optimizer.set_mean_step_far_mask(owned);
+        EXPECT_EQ(optimizer.mean_step_far_mask_tensor().data_ptr(), owned.data_ptr());
+    }
+    EXPECT_EQ(optimizer.mean_step_far_mask_tensor().to_vector_bool(), (std::vector<bool>{true, true}));
+    for (bool strided : {false, true}) {
+        auto owner = Tensor::ones_bool({2, 2}, Device::GPU);
+        auto view = strided ? owner.slice(1, 0, 1).squeeze(1) : owner.slice(0, 0, 1).reshape({2});
+        optimizer.set_mean_step_far_mask(view);
+        owner.zero_();
+        EXPECT_EQ(optimizer.mean_step_far_mask_tensor().to_vector_bool(), (std::vector<bool>{true, true}));
+    }
+    optimizer.set_mean_step_far_mask({});
+    EXPECT_FALSE(optimizer.mean_step_far_mask_tensor().is_valid());
+}
+
+TEST_F(MRNFCudaStorageTest, MeanStepFarMaskRetainsAllocationUntilBindingIsCleared) {
     auto splat = create_mrnf_test_splat_data(2, 0);
     MRNF strategy(splat);
     strategy.initialize(vanilla_mrnf_params());
@@ -2614,7 +2580,7 @@ TEST_F(MRNFStrategyTest, MeanStepFarMaskRetainsAllocationUntilBindingIsCleared) 
     ASSERT_FALSE(allocation.expired());
     optimizer.get_grad(ParamType::Means).fill_(0.2f);
     optimizer.step(1);
-    EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    ASSERT_NO_THROW(gpu_device_barrier(default_gpu_backend()));
     optimizer.set_per_splat_mean_step(false, 0.0f);
     EXPECT_TRUE(allocation.expired());
     EXPECT_EQ(optimizer.mean_step_far_mask(), nullptr);
@@ -2633,12 +2599,10 @@ TEST_F(MRNFStrategyTest, MeanStepFarMaskRetainsAllocationUntilBindingIsCleared) 
             EXPECT_NE(optimizer.mean_step_far_mask(), source.ptr<bool>());
             // Also prove independence while the source is still allocated.
             source.zero_();
-            EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+            ASSERT_NO_THROW(gpu_device_barrier(default_gpu_backend()));
         }
-        bool values[2] = {};
-        ASSERT_EQ(cudaMemcpy(values, optimizer.mean_step_far_mask(), sizeof(values),
-                             cudaMemcpyDeviceToHost),
-                  cudaSuccess);
+        const auto values = optimizer.mean_step_far_mask_tensor().to_vector_bool();
+        ASSERT_EQ(values.size(), 2u);
         EXPECT_TRUE(values[0]);
         EXPECT_TRUE(values[1]);
     }
@@ -2671,7 +2635,7 @@ TEST_F(MRNFStrategyTest, MeanStepFarMaskEmptyBindingsClearExplicitAndFusedAdam) 
     optimizer.set_mean_step_far_mask(empty);
     EXPECT_EQ(optimizer.mean_step_far_mask(), nullptr);
     EXPECT_EQ(optimizer.mean_step_far_mask_n(), 0);
-    EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    ASSERT_NO_THROW(gpu_device_barrier(default_gpu_backend()));
 }
 
 TEST_F(MRNFStrategyTest, CheckpointLoadPreservesDatasetFarFieldProtection) {
@@ -2685,10 +2649,8 @@ TEST_F(MRNFStrategyTest, CheckpointLoadPreservesDatasetFarFieldProtection) {
     original.initialize(params.optimization);
     ASSERT_NE(original.get_optimizer().mean_step_far_mask(), nullptr);
 
-    std::vector<uint8_t> expected_mask(8);
-    ASSERT_EQ(cudaMemcpy(expected_mask.data(), original.get_optimizer().mean_step_far_mask(),
-                         expected_mask.size(), cudaMemcpyDeviceToHost),
-              cudaSuccess);
+    const auto expected_mask = original.get_optimizer().mean_step_far_mask_tensor().to_vector_bool();
+    ASSERT_EQ(expected_mask.size(), 8u);
     ASSERT_EQ(expected_mask[1], 0);
     ASSERT_EQ(expected_mask[7], 1);
 
@@ -2708,14 +2670,12 @@ TEST_F(MRNFStrategyTest, CheckpointLoadPreservesDatasetFarFieldProtection) {
     ASSERT_EQ(*loaded, 100);
     ASSERT_NE(resumed.get_optimizer().mean_step_far_mask(), nullptr);
     ASSERT_EQ(resumed.get_optimizer().mean_step_far_mask_n(), 8);
-    std::vector<uint8_t> actual_mask(8);
-    ASSERT_EQ(cudaMemcpy(actual_mask.data(), resumed.get_optimizer().mean_step_far_mask(),
-                         actual_mask.size(), cudaMemcpyDeviceToHost),
-              cudaSuccess);
+    const auto actual_mask = resumed.get_optimizer().mean_step_far_mask_tensor().to_vector_bool();
+    ASSERT_EQ(actual_mask.size(), 8u);
     EXPECT_EQ(actual_mask, expected_mask);
 }
 
-class MRNFDecayTest : public lfs::test::CudaBackendTest {};
+class MRNFDecayTest : public lfs::test::CudaDeviceTest {};
 
 TEST_F(MRNFDecayTest, ZeroDecayPreservesFiniteLogitsAndStillDecaysScales) {
     const std::vector<float> original{-80.0f, -20.0f, 0.0f, 16.85f, 20.0f, 80.0f};
@@ -2913,12 +2873,8 @@ TEST_F(MRNFStrategyTest, LongAxisSplitPlacementIgnoresQuaternionMagnitudeOnRealR
     for (size_t i = 0; i < n; ++i)
         indices[i] = static_cast<int>(i);
     const auto split_indices = Tensor::from_vector(indices, {n}, Device::GPU).to(DataType::Int64);
-    kernels::launch_long_axis_split_gaussians_inplace(
-        positions.ptr<float>(), quaternions.ptr<float>(), log_scales.ptr<float>(),
-        sh0.ptr<float>(), nullptr, opacities.ptr<float>(), children_positions.ptr<float>(),
-        children_rotations.ptr<float>(), children_scales.ptr<float>(), children_sh0.ptr<float>(),
-        nullptr, children_opacities.ptr<float>(), split_indices.ptr<int64_t>(), static_cast<int>(n), 0);
-    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    training_ops(default_gpu_backend()).refine->split({positions, quaternions, log_scales, sh0, opacities}, {children_positions, children_rotations, children_scales, children_sh0, children_opacities}, split_indices);
+    ASSERT_NO_THROW(gpu_device_barrier(default_gpu_backend()));
     const auto first = positions.cpu().to_vector();
     const auto second = children_positions.cpu().to_vector();
     EXPECT_EQ(quaternions.cpu().to_vector(), rotations);
@@ -2936,4 +2892,321 @@ TEST_F(MRNFStrategyTest, LongAxisSplitPlacementIgnoresQuaternionMagnitudeOnRealR
         }
         EXPECT_NEAR(std::sqrt(squared_length), expected_lengths[row], tolerance);
     }
+}
+
+namespace {
+    param::OptimizationParameters recipe_test_params(const int max_cap) {
+        auto p = vanilla_mrnf_params();
+        p.iterations = 10'000;
+        p.sh_degree_interval = 10'000;
+        p.max_cap = max_cap;
+        p.grow_fraction = 0.0f;
+        p.start_refine = 0;
+        p.refine_every = 100;
+        p.stop_refine = 5'000;
+        p.grow_until_iter = 5'000;
+        return p;
+    }
+
+    Tensor row_range(const size_t from, const size_t to) {
+        std::vector<int> rows;
+        for (size_t i = from; i < to; ++i)
+            rows.push_back(static_cast<int>(i));
+        return Tensor::from_vector(rows, TensorShape({rows.size()}), Device::GPU).to(DataType::Int64);
+    }
+} // namespace
+
+// At the cap, the growth exchange (lowest contribution) funds growth drawn by NEED = (error / active mean)^3: the
+// high-error half takes the splits, the victims are never parents, and the model stays at the cap.
+TEST_F(MRNFRecipeTest, NeedGuidedGrowthAtTheCap) {
+    constexpr size_t n = 200;
+    auto data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+    MRNF strategy(data);
+    strategy.initialize(recipe_test_params(static_cast<int>(n)));
+    std::vector<float> error(n, 0.1f), contribution(n, 10.0f);
+    std::fill_n(error.begin(), 100, 1.0f);
+    std::fill_n(contribution.begin() + 100, 3, 0.1f);
+    strategy._refine_weight_max = Tensor::from_vector(error, TensorShape({n}), Device::GPU);
+    strategy.visibility_accumulator().fill_(1.0f);
+    strategy.soft_delete_rows(row_range(n - 2, n)); // 198 of 200 active: at the cap
+    strategy._exchange_importance_sum = Tensor::from_vector(contribution, TensorShape({n}), Device::GPU);
+    strategy._exchange_birth = Tensor::zeros({n}, Device::GPU);
+    strategy._exchange_windows = strategy.exchange_warmup_windows() + 1;
+
+    const auto result = strategy.grow_and_split(100, 2, strategy.compute_refine_candidates(), 3);
+    EXPECT_EQ(result.replacement_count, 2);
+    EXPECT_EQ(result.growth_count, 3);
+    EXPECT_EQ(selected_rows(result.exchange_victim_indices), (std::vector<int64_t>{100, 101, 102}));
+    size_t high = 0;
+    for (const int64_t row : selected_rows(result.split_indices))
+        high += row < 100 ? 1 : 0;
+    EXPECT_GE(high, 4u);
+    EXPECT_EQ(strategy.active_count(), n);
+}
+
+// The window error: per view the error sum s enters as s^0.2, averaged over the views with s > 0, so a
+// view that saw the splat without error does not dilute it.
+TEST_F(MRNFRecipeTest, RefineErrorIsTheCompressedViewMean) {
+    auto data = create_mrnf_test_splat_data(3, 0);
+    MRNF strategy(data);
+    strategy.initialize(recipe_test_params(32));
+    ASSERT_EQ(data._densification_info.shape()[0], 4u);
+    const std::vector<std::vector<float>> error{{0.1f, 0.8f, 0.0f}, {0.4f, 0.0f, 0.0f}};
+    RenderOutput output;
+    for (int v = 0; v < 2; ++v) {
+        data._densification_info.slice(0, 0, 1).fill_(1.0f);
+        data._densification_info.slice(0, 1, 2).copy_(Tensor::from_vector(error[v], TensorShape({1, 3}), Device::GPU));
+        strategy.post_backward(96 + v, output);
+    }
+    auto mean = strategy._refine_weight_max.clone();
+    training_ops(default_gpu_backend()).mrnf->growth->mean_view(mean, data._densification_info);
+    const auto got = mean.cpu().to_vector();
+    EXPECT_NEAR(got[0], 0.5f * (std::pow(0.1f, 0.2f) + std::pow(0.4f, 0.2f)), 1e-5f);
+    EXPECT_NEAR(got[1], std::pow(0.8f, 0.2f), 1e-5f);
+    EXPECT_EQ(got[2], 0.0f);
+}
+
+// Exchange victims rank by contribution per covering view, floored at 5 % of the training views: 10 over 40
+// views (0.25) outranks 20 over 200 (0.1), and 1 seen once ranks as 1 / 5.
+TEST_F(MRNFRecipeTest, GrowthExchangeRanksByContributionPerView) {
+    auto data = create_mrnf_test_splat_data();
+    MRNF strategy(data);
+    strategy.initialize(recipe_test_params(32));
+    std::vector<std::shared_ptr<Camera>> cams;
+    for (int i = 0; i < 100; ++i)
+        cams.push_back(make_hull_camera(i % 2 == 0 ? -1.0f : 1.0f, 0.0f, 0.1f * static_cast<float>(i), i));
+    DatasetConfig cfg;
+    cfg.test_every = 100'000;
+    strategy.set_training_dataset(std::make_shared<CameraDataset>(std::move(cams), cfg, CameraDataset::Split::ALL));
+    const size_t n = data.size();
+    const std::vector<float> sum{10.0f, 20.0f, 1.0f, 100.0f, 100.0f, 100.0f, 100.0f, 100.0f, 100.0f, 100.0f};
+    const std::vector<float> views{40.0f, 200.0f, 1.0f, 10.0f, 10.0f, 10.0f, 10.0f, 10.0f, 10.0f, 10.0f};
+    strategy._exchange_importance_sum = Tensor::from_vector(sum, TensorShape({n}), Device::GPU);
+    strategy._exchange_view_count = Tensor::from_vector(views, TensorShape({n}), Device::GPU);
+    strategy._exchange_birth = Tensor::zeros({n}, Device::GPU);
+    strategy._exchange_windows = strategy.exchange_warmup_windows() + 1;
+    EXPECT_EQ(selected_rows(strategy.select_exchange_victims(1)), (std::vector<int64_t>{1}));
+    EXPECT_EQ(selected_rows(strategy.select_exchange_victims(2)), (std::vector<int64_t>{1, 2}));
+}
+
+// Keep covered scales both decays by the row's reach: reach 1 gives the plain decay bit for bit, reach 0
+// keeps the scale and decays no opacity, reach 0.5 decays less than the plain decay.
+TEST_F(MRNFRecipeTest, DecayScalesByReach) {
+    constexpr size_t n = 4;
+    const std::vector<float> opacity{0.3f, -1.2f, 2.0f, 0.0f};
+    const std::vector<float> scale{-2.0f, -1.5f, -3.0f, -2.5f, -1.0f, -2.2f, -0.5f, -4.0f, -1.7f, -2.8f, -3.3f, -0.9f};
+    const std::vector<float> reach{1.0f, 0.0f, 0.5f, 2.0f};
+    auto decay = [&](const Tensor* reach_rows) {
+        auto o = Tensor::from_vector(opacity, TensorShape({n}), Device::GPU);
+        auto s = Tensor::from_vector(scale, TensorShape({n, 3}), Device::GPU);
+        training_ops(default_gpu_backend()).mrnf->decay(o, s, {}, {.opacity_decay = 0.01f, .scale_decay = 0.02f, .train_t = 0.2f, .reach = reach_rows ? *reach_rows : Tensor{}});
+        return std::pair{o.cpu().to_vector(), s.cpu().to_vector()};
+    };
+    const auto reach_rows = Tensor::from_vector(reach, TensorShape({n}), Device::GPU);
+    const auto [plain_o, plain_s] = decay(nullptr);
+    const auto [reach_o, reach_s] = decay(&reach_rows);
+    for (const size_t row : {size_t{0}, size_t{3}}) {
+        EXPECT_EQ(reach_o[row], plain_o[row]);
+        for (int d = 0; d < 3; ++d)
+            EXPECT_EQ(reach_s[row * 3 + d], plain_s[row * 3 + d]);
+    }
+    for (int d = 0; d < 3; ++d) {
+        EXPECT_EQ(reach_s[3 + d], scale[3 + d]);
+        EXPECT_LT(reach_s[6 + d], scale[6 + d]);
+        EXPECT_GT(reach_s[6 + d], plain_s[6 + d]);
+    }
+    EXPECT_NEAR(reach_o[1], opacity[1], 1e-5f);
+    EXPECT_LT(reach_o[2], opacity[2]);
+    EXPECT_GT(reach_o[2], plain_o[2]);
+}
+
+// At the cap both children shrink the longest and the smallest axis by 0.7, keep the middle one, and take
+// 1 - sqrt(1 - o), so that the two composite back to the parent's opacity; below the cap the split is the
+// ordinary one (long axis halved, 0.85 width, 0.6x opacity).
+TEST_F(MRNFRecipeTest, SplitAtTheCapConservesTheOpacity) {
+    constexpr size_t n = 200;
+    const auto raw_of = [](const float alpha) { return std::log(alpha / (1.0f - alpha)); };
+    struct Case {
+        int cap;
+        std::array<float, 3> axes; // the unit parents' log scales after the split (longest first, ties by index)
+        float opacity;
+    };
+    for (const auto& [cap, axes, opacity] :
+         {Case{200, {std::log(0.7f), std::log(0.7f), 0.0f}, 1.0f - std::sqrt(0.5f)},
+          Case{1000, {std::log(0.5f), std::log(0.85f), std::log(0.85f)}, 0.3f}}) {
+        SCOPED_TRACE(cap);
+        auto data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+        MRNF strategy(data);
+        strategy.initialize(recipe_test_params(cap));
+        strategy._refine_weight_max = Tensor::ones({n}, Device::GPU);
+        strategy.visibility_accumulator().fill_(1.0f);
+        strategy.soft_delete_rows(row_range(n - 2, n)); // 198 of 200 active
+        const auto result = strategy.grow_and_split(100, 2, strategy.compute_refine_candidates(), 0);
+        ASSERT_EQ(result.replacement_count, 2);
+        const auto raw = data.opacity_raw().cpu().to_vector();
+        const auto scales = data.scaling_raw().cpu().to_vector();
+        size_t children = 0;
+        for (size_t row = 0; row < n; ++row) {
+            if (scales[3 * row] == 0.0f)
+                continue;
+            ++children;
+            for (int axis = 0; axis < 3; ++axis)
+                EXPECT_NEAR(scales[3 * row + axis], axes[axis], 1e-6f) << row << " axis " << axis;
+            EXPECT_NEAR(raw[row], raw_of(opacity), 1e-5f) << row;
+        }
+        EXPECT_EQ(children, 4u);
+    }
+}
+
+// The conserving split on single rows: the two children composite back to the parent's opacity within 1e-6
+// from faint to nearly opaque, the middle axis is kept bit for bit, the longest and the smallest axis (in either
+// order of the shorter two) take the factor. Without it the split is the ordinary one.
+TEST_F(MRNFRecipeTest, ConservingSplitCompositesToTheParentOpacity) {
+    const std::vector<float> alphas{0.001f, 0.05f, 0.3f, 0.5f, 0.9f, 0.999f};
+    const size_t n = alphas.size();
+    std::vector<float> raw(n), log_scales(3 * n), rotations(4 * n, 0.0f);
+    for (size_t i = 0; i < n; ++i) {
+        raw[i] = std::log(alphas[i] / (1.0f - alphas[i]));
+        const std::array<float, 3> s = i % 2 == 0 ? std::array{-1.0f, -3.0f, -2.0f} : std::array{-2.5f, -0.5f, -4.0f};
+        std::copy(s.begin(), s.end(), log_scales.begin() + 3 * i);
+        rotations[4 * i] = 1.0f;
+    }
+    std::vector<int> indices(n);
+    for (size_t i = 0; i < n; ++i)
+        indices[i] = static_cast<int>(i);
+    const auto split_indices = Tensor::from_vector(indices, {n}, Device::GPU).to(DataType::Int64);
+    const auto split = [&](const float conserve_axis_scale) {
+        auto positions = Tensor::zeros({n, 3}, Device::GPU);
+        auto quaternions = Tensor::from_vector(rotations, {n, 4}, Device::GPU);
+        auto scales = Tensor::from_vector(log_scales, {n, 3}, Device::GPU);
+        auto sh0 = Tensor::zeros({n, 3}, Device::GPU);
+        auto opacities = Tensor::from_vector(raw, {n}, Device::GPU);
+        auto child_positions = Tensor::empty({n, 3}, Device::GPU);
+        auto child_rotations = Tensor::empty({n, 4}, Device::GPU);
+        auto child_scales = Tensor::empty({n, 3}, Device::GPU);
+        auto child_sh0 = Tensor::empty({n, 3}, Device::GPU);
+        auto child_opacities = Tensor::empty({n}, Device::GPU);
+        training_ops(default_gpu_backend()).refine->conserving_split({positions, quaternions, scales, sh0, opacities}, {child_positions, child_rotations, child_scales, child_sh0, child_opacities}, split_indices, conserve_axis_scale);
+        EXPECT_EQ(scales.cpu().to_vector(), child_scales.cpu().to_vector());
+        EXPECT_EQ(opacities.cpu().to_vector(), child_opacities.cpu().to_vector());
+        return std::pair{scales.cpu().to_vector(), opacities.cpu().to_vector()};
+    };
+    const auto sigmoid = [](const double x) { return 1.0 / (1.0 + std::exp(-x)); };
+
+    const auto [conserved_scales, conserved_raw] = split(0.7f);
+    const auto [ordinary_scales, ordinary_raw] = split(0.0f);
+    for (size_t i = 0; i < n; ++i) {
+        SCOPED_TRACE(alphas[i]);
+        const double parent = sigmoid(raw[i]);
+        const double child = sigmoid(conserved_raw[i]);
+        EXPECT_NEAR(1.0 - (1.0 - child) * (1.0 - child), parent, 1e-6);
+        EXPECT_NEAR(sigmoid(ordinary_raw[i]), 0.6 * parent, 1e-6);
+        // Row 0, 2, 4: longest 0, smallest 1, middle 2. Row 1, 3, 5: longest 1, smallest 2, middle 0.
+        const int longest = i % 2 == 0 ? 0 : 1;
+        const int smallest = i % 2 == 0 ? 1 : 2;
+        const int middle = i % 2 == 0 ? 2 : 0;
+        const float* before = log_scales.data() + 3 * i;
+        const float* conserved = conserved_scales.data() + 3 * i;
+        const float* ordinary = ordinary_scales.data() + 3 * i;
+        EXPECT_NEAR(conserved[longest], before[longest] + std::log(0.7f), 1e-6f);
+        EXPECT_NEAR(conserved[smallest], before[smallest] + std::log(0.7f), 1e-6f);
+        EXPECT_EQ(conserved[middle], before[middle]);
+        EXPECT_NEAR(ordinary[longest], before[longest] + std::log(0.5f), 1e-6f);
+        EXPECT_NEAR(ordinary[smallest], before[smallest] + std::log(0.85f), 1e-6f);
+        EXPECT_NEAR(ordinary[middle], before[middle] + std::log(0.85f), 1e-6f);
+    }
+}
+
+// The retire key ranks dead rows (peak < 0.01) first, by peak, then every other row by its reach
+// clamp(peak / opacity, 0, 1).
+TEST_F(MRNFRecipeTest, RetireKeyRanksDeadRowsFirstThenByReach) {
+    const auto raw_of = [](const float alpha) { return std::log(alpha / (1.0f - alpha)); };
+    const std::vector<float> peak{0.0f, 0.009f, 0.01f, 0.05f, 0.03f, 0.6f};
+    const std::vector<float> raw{raw_of(0.9f), raw_of(0.01f), raw_of(0.04f), raw_of(0.9f), raw_of(0.03f), raw_of(0.5f)};
+    const size_t n = peak.size();
+    const auto peak_rows = Tensor::from_vector(peak, TensorShape({n}), Device::GPU);
+    const auto raw_rows = Tensor::from_vector(raw, TensorShape({n}), Device::GPU);
+    auto key = Tensor::empty({n}, Device::GPU);
+    training_ops(default_gpu_backend()).mrnf->growth->retire_key(peak_rows, raw_rows, 0.01f, key);
+    const auto got = key.cpu().to_vector();
+    EXPECT_EQ(got[0], -1.0f);
+    EXPECT_NEAR(got[1], 0.009f - 1.0f, 1e-7f); // dead although its peak nearly matches its opacity
+    EXPECT_NEAR(got[2], 0.25f, 1e-5f);
+    EXPECT_NEAR(got[3], 0.05f / 0.9f, 1e-5f);
+    EXPECT_NEAR(got[4], 1.0f, 1e-5f); // faint and fully visible
+    EXPECT_EQ(got[5], 1.0f);
+}
+
+// From the first refine at the cap, 1.5 % of the live splats retire, tapering to 0 at grow_until_iter:
+// among the splats past the 30-render grace, the dead ones (peak blend weight below 0.01) first, then the
+// lowest reach. A large splat whose peak stays far below its opacity (covered by others) is kept out of
+// the pool; a small covered one is not.
+TEST_F(MRNFRecipeTest, RetireQuotaTakesDeadThenLowestReachAndKeepsLargeCoveredSplats) {
+    EXPECT_EQ(MRNF::retire_count(100, -1, 5'000, 1'000), 0u);
+    EXPECT_EQ(MRNF::retire_count(100, 100, 5'000, 1'000), 15u);
+    EXPECT_EQ(MRNF::retire_count(2'550, 100, 5'000, 1'000), 7u);
+    EXPECT_EQ(MRNF::retire_count(5'000, 100, 5'000, 1'000), 0u);
+
+    // Every row has opacity 0.5 and peak 0.5 (reach 1) unless set; `large` rows get a largest axis 7x the median.
+    const auto retire_rows = [](const std::vector<std::pair<size_t, float>>& peaks, const std::vector<std::pair<size_t, float>>& alphas,
+                                const std::vector<size_t>& large, const std::vector<size_t>& in_grace,
+                                std::vector<float>* factor) {
+        constexpr size_t n = 200;
+        auto data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+        auto scales = data.scaling_raw().cpu().to_vector();
+        for (const size_t row : large)
+            scales[3 * row] = std::log(7.0f);
+        data.scaling_raw().copy_(Tensor::from_vector(scales, TensorShape({n, 3}), Device::GPU));
+        std::vector<float> raw(n, 0.0f);
+        for (const auto& [row, alpha] : alphas)
+            raw[row] = std::log(alpha / (1.0f - alpha));
+        data.opacity_raw().copy_(Tensor::from_vector(raw, TensorShape({n, 1}), Device::GPU));
+        MRNF strategy(data);
+        strategy.initialize(recipe_test_params(static_cast<int>(n)));
+        strategy.ensure_peak_rows();
+        std::vector<float> peak(n, 0.5f), renders(n, 100.0f);
+        for (const auto& [row, p] : peaks)
+            peak[row] = p;
+        for (const size_t row : in_grace)
+            renders[row] = 29.0f;
+        strategy._blend_peak.copy_(Tensor::from_vector(peak, TensorShape({n}), Device::GPU));
+        strategy._renders.copy_(Tensor::from_vector(renders, TensorShape({n}), Device::GPU));
+        auto prune = Tensor::zeros_bool({n}, Device::GPU);
+        strategy.update_covered_size_floor(prune);
+        *factor = strategy.covered_factor().cpu().to_vector();
+        EXPECT_EQ(strategy.mark_retirees(100, prune), 3u); // 1.5 % of 200
+        EXPECT_EQ(strategy._retire_first_iter, 100);
+        std::vector<int64_t> rows;
+        const auto mask = prune.to(DataType::Float32).cpu().to_vector();
+        for (size_t i = 0; i < n; ++i)
+            if (mask[i] != 0.0f)
+                rows.push_back(static_cast<int64_t>(i));
+        return rows;
+    };
+    // Rows 50..79 have rising peaks (50 the faintest), rows 50..54 are within the grace.
+    std::vector<std::pair<size_t, float>> rising;
+    for (size_t i = 50; i < 80; ++i)
+        rising.emplace_back(i, 0.001f * static_cast<float>(i - 49));
+    const std::vector<size_t> grace{50, 51, 52, 53, 54};
+    std::vector<float> factor;
+    EXPECT_EQ(retire_rows(rising, {}, {}, grace, &factor), (std::vector<int64_t>{55, 56, 57}));
+    EXPECT_EQ(retire_rows(rising, {}, {55}, grace, &factor), (std::vector<int64_t>{56, 57, 58}));
+    EXPECT_LT(factor[55], 0.5f);
+    EXPECT_EQ(factor[56], 1.0f);
+    // Past the dead row 10, the lowest reach goes (12: 0.05 of 0.9, 11: 0.02 of 0.04); the faint row 13 shows all of
+    // its opacity and stays, although its peak is below both.
+    EXPECT_EQ(retire_rows({{10, 0.005f}, {11, 0.02f}, {12, 0.05f}, {13, 0.015f}}, {{11, 0.04f}, {12, 0.9f}, {13, 0.015f}},
+                          {}, {}, &factor),
+              (std::vector<int64_t>{10, 11, 12}));
+    EXPECT_EQ(retire_rows({{10, 0.005f}, {11, 0.02f}, {12, 0.05f}, {13, 0.015f}, {14, 0.04f}},
+                          {{11, 0.04f}, {12, 0.9f}, {13, 0.015f}, {14, 0.9f}}, {}, {}, &factor),
+              (std::vector<int64_t>{10, 12, 14}));
+}
+
+// MRNF asks for rendered-only shape regularizers.
+TEST_F(MRNFRecipeTest, AsksForRenderedOnlyRegularizers) {
+    auto data = create_mrnf_test_splat_data();
+    MRNF strategy(data);
+    strategy.initialize(recipe_test_params(32));
+    EXPECT_TRUE(strategy.regularize_rendered_only());
 }

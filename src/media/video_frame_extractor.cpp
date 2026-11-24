@@ -650,57 +650,6 @@ namespace lfs::io {
             return name ? name : "unknown";
         }
 
-        [[nodiscard]] double computeSharpnessScore(const uint8_t* rgb,
-                                                   const int w,
-                                                   const int h,
-                                                   const SharpnessAlgorithm algo) {
-            const long long total_pixels = static_cast<long long>(w) * h;
-            // Laplacian threshold: pixel needs Laplacian > 10 to count as edge
-            // Tenengrad threshold: pixel needs Sobel energy > 40 to count as edge (4x)
-            const int lap_threshold = 10;
-            const int ten_threshold = 40;
-            long long edge_count = 0;
-
-            if (algo == SharpnessAlgorithm::COMBINED) {
-                // Single pass: count if EITHER condition is met (no double counting)
-                for (int y = 1; y < h - 1; ++y) {
-                    for (int x = 1; x < w - 1; ++x) {
-                        const uint8_t* const p = rgb + (y * w + x) * 3 + 1;
-                        const int lap = std::abs(static_cast<int>(p[0] * 4) - p[-w * 3] - p[3] - p[-3] - p[w * 3]);
-                        if (lap > lap_threshold) {
-                            ++edge_count;
-                            continue;
-                        }
-                        const int gx = -p[-w * 3 - 3] + p[-w * 3 + 3] - p[-3] * 2 + p[3] * 2 - p[+w * 3 - 3] + p[+w * 3 + 3];
-                        const int gy = -p[-w * 3 - 3] - p[-w * 3] * 2 - p[-w * 3 + 3] + p[+w * 3 - 3] + p[+w * 3] * 2 + p[+w * 3 + 3];
-                        if (std::abs(gx) + std::abs(gy) > ten_threshold)
-                            ++edge_count;
-                    }
-                }
-            } else if (algo == SharpnessAlgorithm::LAPLACIAN) {
-                for (int y = 1; y < h - 1; ++y) {
-                    for (int x = 1; x < w - 1; ++x) {
-                        const uint8_t* const p = rgb + (y * w + x) * 3 + 1;
-                        if (std::abs(static_cast<int>(p[0] * 4) - p[-w * 3] - p[3] - p[-3] - p[w * 3]) > lap_threshold)
-                            ++edge_count;
-                    }
-                }
-            } else { // TENENGRAD
-                for (int y = 1; y < h - 1; ++y) {
-                    for (int x = 1; x < w - 1; ++x) {
-                        const uint8_t* const p = rgb + (y * w + x) * 3 + 1;
-                        const int gx = -p[-w * 3 - 3] + p[-w * 3 + 3] - p[-3] * 2 + p[3] * 2 - p[+w * 3 - 3] + p[+w * 3 + 3];
-                        const int gy = -p[-w * 3 - 3] - p[-w * 3] * 2 - p[-w * 3 + 3] + p[+w * 3 - 3] + p[+w * 3] * 2 + p[+w * 3 + 3];
-                        if (std::abs(gx) + std::abs(gy) > ten_threshold)
-                            ++edge_count;
-                    }
-                }
-            }
-
-            // Edge ratio: percentage of pixels that are part of a sharp edge (0-100)
-            return static_cast<double>(edge_count) * 100.0 / static_cast<double>(total_pixels);
-        }
-
     } // namespace
 
     std::size_t calculateFpsSampleCount(const double start_time, const double end_time,
@@ -2214,20 +2163,31 @@ namespace lfs::io {
                         const auto hardware_frame = media::detail::cudaFrameView(hw_frame, source_range == AVCOL_RANGE_JPEG, source_colorspace);
                         if (!hardware_frame)
                             throw lfs::Exception(hardware_frame.error());
-                        gpu_jpeg->convertHardware(*hardware_frame, params.sharpness.enabled ? cpu_contiguous_buffer : nullptr);
+                        gpu_jpeg->convertHardware(*hardware_frame);
                         ++gpu_color_frames;
                         if (hw_sw_format == AV_PIX_FMT_P010LE)
                             ++gpu_p010_frames;
                         else
                             ++gpu_nv12_frames;
-                        if (params.sharpness.enabled)
-                            ++rgb_readback_frames;
                         double frame_score = 0.0;
                         if (params.sharpness.enabled) {
-                            frame_score = computeSharpnessScore(
-                                cpu_contiguous_buffer, out_width, out_height, params.sharpness.algorithm);
+                            const auto score = gpu_jpeg->scoreHardware(params.sharpness.algorithm);
+                            if (score) {
+                                frame_score = *score;
+                            } else {
+                                gpu_jpeg->readHardware(cpu_contiguous_buffer);
+                                ++rgb_readback_frames;
+                                frame_score = computeSharpnessScore(cpu_contiguous_buffer, out_width, out_height,
+                                                                    params.sharpness.algorithm);
+                            }
                             if (params.sharpness.window_mode) {
-                                consider_window_frame(cpu_contiguous_buffer, current_info, frame_score, current_frame_time, current_src_frame);
+                                if (!window_best || frame_score > window_best->score) {
+                                    if (score) {
+                                        gpu_jpeg->readHardware(cpu_contiguous_buffer);
+                                        ++rgb_readback_frames;
+                                    }
+                                    consider_window_frame(cpu_contiguous_buffer, current_info, frame_score, current_frame_time, current_src_frame);
+                                }
                                 gpu_jpeg->finishHardware();
                                 return;
                             }

@@ -527,6 +527,11 @@ namespace lfs::vis {
         };
         [[nodiscard]] std::optional<GTSelectionContext> gtComparisonSelectionContext(ViewId view = kNoView) const;
 
+        [[nodiscard]] std::optional<GTPresentedView> getGTComparisonGuideCamera(ViewId view) const {
+            std::lock_guard lock(settings_mutex_);
+            return viewState(view).gt_guide_camera;
+        }
+
         // Current camera tracking for GT comparison
         void setCurrentCameraId(int cam_id);
         int getCurrentCameraId() const { return camera_interaction_service_.currentCameraId(); }

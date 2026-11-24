@@ -4,6 +4,7 @@
 #include "core/export.hpp"
 #include "media/cuda_frame.hpp"
 #include "media/hdr_renderer.hpp"
+#include "media/sharpness_score.hpp"
 #include "video_color.hpp"
 #include <cstddef>
 #include <cstdint>
@@ -23,7 +24,9 @@ namespace lfs::media::detail {
         virtual ~GpuJpegEncoder() = default;
         virtual std::size_t capacity() const noexcept = 0;
         virtual bool canConvertHardware() const noexcept = 0;
-        virtual void convertHardware(const CudaVideoFrame&, std::uint8_t* optional_readback) = 0;
+        virtual void convertHardware(const CudaVideoFrame&) = 0;
+        virtual std::optional<double> scoreHardware(io::SharpnessAlgorithm) = 0;
+        virtual void readHardware(std::uint8_t*) = 0;
         virtual void finishHardware() = 0;
         virtual void* queueHardware(std::size_t index) = 0;
         virtual void* queueHost(std::size_t index, const std::uint8_t*) = 0;

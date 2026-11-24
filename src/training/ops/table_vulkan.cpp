@@ -32,6 +32,8 @@ namespace lfs::training {
         static const TrainingOps table{
             .backend = core::GpuBackend::Vulkan,
 #if defined(LFS_TENSOR_VULKAN)
+            .calibration = &vulkan_calibration_ops(),
+            .pose = &vulkan_pose_ops(),
             .photometric = &vulkan_photometric_ops(),
             .adam = &vulkan_adam_ops(),
             .mcmc = &vulkan_mcmc_ops(),

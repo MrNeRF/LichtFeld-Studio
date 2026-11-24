@@ -131,6 +131,9 @@ namespace lfs::vis {
                                    VkSemaphore completion_semaphore = VK_NULL_HANDLE,
                                    std::uint64_t completion_value = 0,
                                    glm::ivec2 alloc_size = {0, 0});
+        // The scene image keeps its aspect ratio and is cropped to fill the
+        // viewport; off, it is stretched over the viewport it was rendered for.
+        void setSceneImageCropToFill(bool crop) { scene_image_crop_to_fill_ = crop; }
         void setSplitRightImage(std::shared_ptr<const lfs::core::Tensor> image,
                                 glm::ivec2 size,
                                 bool flip_y,
@@ -239,6 +242,7 @@ namespace lfs::vis {
         glm::ivec2 external_scene_image_alloc_size_{0, 0};
         bool external_scene_image_flip_y_ = false;
         std::uint64_t external_scene_image_generation_ = 0;
+        bool scene_image_crop_to_fill_ = false;
 
         std::vector<FrameCompletion> frame_completions_;
 

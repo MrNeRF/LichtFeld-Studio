@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -37,6 +38,8 @@ namespace lfs::core {
         std::array<std::uint8_t, 16> uuid{};
         int compute_capability_major = 0;
     };
+    // Compares the selected compute device with the graphics context requesting interop.
+    LFS_CORE_API bool gpu_device_matches_uuid(const GpuDeviceInfo& device, std::span<const uint8_t, 16> uuid);
 
     // Vulkan queries use the backend's current device.
     LFS_CORE_API std::optional<GpuDeviceInfo> gpu_backend_device_info(GpuBackend backend);

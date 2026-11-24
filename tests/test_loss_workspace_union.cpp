@@ -15,6 +15,7 @@
 #include "cuda_backend_test.hpp"
 #include "lfs/kernels/ssim.cuh"
 #include "lfs/training/ops/photometric_cuda.hpp"
+#include "lfs/training/ops/registry.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -93,11 +94,12 @@ namespace {
 
 } // namespace
 
-class LossWorkspaceUnionTest : public lfs::test::CudaBackendTest {};
+class CudaLossWorkspaceTest : public lfs::test::CudaBackendTest {};
+class LossWorkspaceUnionTest : public lfs::test::CudaDeviceTest {};
 
 // Five independent workspaces retain the sum of their allocations, while the
 // production arena keeps only its active variant.
-TEST_F(LossWorkspaceUnionTest, IndependentWorkspacesRetainSum) {
+TEST_F(CudaLossWorkspaceTest, IndependentWorkspacesRetainSum) {
     const std::vector<size_t> shape = {1, 3, 64, 96};
 
     FusedL1SSIMWorkspace fused;
@@ -129,7 +131,7 @@ TEST_F(LossWorkspaceUnionTest, IndependentWorkspacesRetainSum) {
 }
 
 // Variant switches resize in both directions to the active layout exactly.
-TEST_F(LossWorkspaceUnionTest, SequentialModesThroughArenaTrackActiveVariantExactly) {
+TEST_F(CudaLossWorkspaceTest, SequentialModesThroughArenaTrackActiveVariantExactly) {
     const std::vector<size_t> shape = {1, 3, 64, 96};
 
     LossWorkspaceArena arena;
@@ -150,7 +152,7 @@ TEST_F(LossWorkspaceUnionTest, SequentialModesThroughArenaTrackActiveVariantExac
         arena, LossWorkspaceArena::masked_decoupled_layout_bytes(shape));
 }
 
-TEST_F(LossWorkspaceUnionTest, MixedResolutionSameVariantIsGrowOnly) {
+TEST_F(CudaLossWorkspaceTest, MixedResolutionSameVariantIsGrowOnly) {
     const std::vector<size_t> small_shape = {1, 3, 32, 48};
     const std::vector<size_t> large_shape = {1, 3, 96, 128};
 
@@ -194,7 +196,7 @@ TEST_F(LossWorkspaceUnionTest, MixedResolutionSameVariantIsGrowOnly) {
         arena, LossWorkspaceArena::fused_layout_bytes(small_shape));
 }
 
-TEST_F(LossWorkspaceUnionTest, ActiveVariantAllocationMatchesRequiredAtTwoShapes) {
+TEST_F(CudaLossWorkspaceTest, ActiveVariantAllocationMatchesRequiredAtTwoShapes) {
     const std::vector<std::vector<size_t>> shapes = {
         {1, 3, 17, 29},
         {2, 3, 64, 96},
@@ -224,7 +226,7 @@ TEST_F(LossWorkspaceUnionTest, ActiveVariantAllocationMatchesRequiredAtTwoShapes
 }
 
 // Loss values must match between arena-backed and independently-allocated fused workspaces.
-TEST_F(LossWorkspaceUnionTest, ArenaFusedLossMatchesIndependent) {
+TEST_F(CudaLossWorkspaceTest, ArenaFusedLossMatchesIndependent) {
     const int N = 1, C = 3, H = 48, W = 48;
     auto img1 = Tensor::randn({N, C, H, W}, Device::GPU);
     auto img2 = Tensor::randn({N, C, H, W}, Device::GPU);
@@ -264,7 +266,7 @@ TEST_F(LossWorkspaceUnionTest, PhotometricOpsUsesSharedArena) {
     auto gt = Tensor::randn({1, 3, 32, 48}, Device::GPU);
     auto mask = Tensor::ones({32, 48}, Device::GPU);
 
-    const auto& ops = lfs::training::cuda_photometric_ops();
+    const auto& ops = *lfs::training::training_ops(default_gpu_backend()).photometric;
     lfs::gpu_ops::PhotoSaved saved{.backend = ops.create()};
     lfs::core::Tensor loss;
     lfs::core::Tensor grad;
@@ -292,8 +294,70 @@ TEST_F(LossWorkspaceUnionTest, PhotometricOpsUsesSharedArena) {
     expect_layout(LossWorkspaceArena::pure_ssim_layout_bytes(shape));
 }
 
+// With a step allocator bound, the partials come from it each step and the arena keeps only the
+// outputs; loss and gradients stay bit-identical to the owned layout, and steps allocate nothing.
+TEST_F(CudaLossWorkspaceTest, StepScratchPartialsMatchOwnedLayout) {
+    const std::vector<size_t> shape = {1, 3, 48, 64};
+    const float ssim_weight = 0.22f;
+    auto corrected = Tensor::randn({1, 3, 48, 64}, Device::CUDA);
+    auto raw = Tensor::randn({1, 3, 48, 64}, Device::CUDA);
+    auto gt = Tensor::randn({1, 3, 48, 64}, Device::CUDA);
+    auto mask = Tensor::ones({48, 64}, Device::CUDA);
+
+    const auto run = [&](LossWorkspaceArena& arena) {
+        auto& ws = arena.masked_decoupled();
+        auto [loss, ctx] = masked_decoupled_fused_l1_ssim_forward(corrected, raw, gt, mask, ssim_weight, ws);
+        const auto grads = masked_decoupled_fused_l1_ssim_backward(ctx, ws);
+        return std::pair{loss.cpu(), combined_gradient(grads, ctx).cpu()};
+    };
+
+    LossWorkspaceArena owned;
+    const auto [owned_loss, owned_grad] = run(owned);
+
+    auto scratch = Tensor::empty({size_t{1} << 20}, Device::CUDA, DataType::UInt8);
+    char* const scratch_base = static_cast<char*>(scratch.data_ptr());
+    size_t scratch_used = 0;
+    const auto bump = [&](const size_t bytes) -> char* {
+        char* const memory = scratch_base + scratch_used;
+        scratch_used += align_arena_bytes(bytes);
+        return scratch_used <= scratch.numel() ? memory : nullptr;
+    };
+
+    LossWorkspaceArena stepped;
+    const auto run_step = [&] {
+        scratch_used = 0;
+        stepped.bind_step_scratch(bump);
+        const auto result = run(stepped);
+        const auto* partial = static_cast<const char*>(stepped.masked_decoupled().raw_dm_dmu1.data_ptr());
+        EXPECT_TRUE(partial >= scratch_base && partial < scratch_base + scratch_used);
+        stepped.release_step_scratch();
+        EXPECT_FALSE(stepped.masked_decoupled().raw_dm_dmu1.is_valid());
+        return result;
+    };
+
+    const auto [step_loss, step_grad] = run_step();
+    expect_exact_active_allocation(stepped, LossWorkspaceArena::masked_decoupled_layout_bytes(shape, true));
+    EXPECT_EQ(scratch_used, 4 * align_arena_bytes(3 * 48 * 64 * sizeof(std::uint16_t)));
+    EXPECT_EQ(step_loss.item<float>(), owned_loss.item<float>());
+    ASSERT_EQ(step_grad.numel(), owned_grad.numel());
+    for (size_t i = 0; i < step_grad.numel(); ++i)
+        ASSERT_EQ(step_grad.ptr<float>()[i], owned_grad.ptr<float>()[i]) << "at " << i;
+
+    const auto alloc_snapshot = lfs::core::alloc_counter::snapshot();
+    const auto [again_loss, again_grad] = run_step();
+    EXPECT_EQ(lfs::core::alloc_counter::delta_since(alloc_snapshot), 0u)
+        << "a bound step must not commit device memory for its partials";
+    EXPECT_EQ(again_loss.item<float>(), owned_loss.item<float>());
+
+    stepped.shrink_to_required();
+    expect_exact_active_allocation(stepped, LossWorkspaceArena::masked_decoupled_layout_bytes(shape, true));
+    const auto [unbound_loss, unbound_grad] = run(stepped);
+    expect_exact_active_allocation(stepped, LossWorkspaceArena::masked_decoupled_layout_bytes(shape));
+    EXPECT_EQ(unbound_loss.item<float>(), owned_loss.item<float>());
+}
+
 // The appearance branch omits sigma partials while preserving gradient results.
-TEST_F(LossWorkspaceUnionTest, ZeroTermsDeletedAndDecoupledGradsStable) {
+TEST_F(CudaLossWorkspaceTest, ZeroTermsDeletedAndDecoupledGradsStable) {
     const int N = 1, C = 3, H = 48, W = 48;
     const std::vector<size_t> shape = {1, 3, 48, 48};
     const float ssim_weight = 0.2f;
@@ -367,7 +431,7 @@ TEST_F(LossWorkspaceUnionTest, ZeroTermsDeletedAndDecoupledGradsStable) {
 
 // Pure-SSIM, decoupled, masked, and masked-decoupled paths use fp16 dm_* partials.
 // Workspace byte bounds use fp32-partial layouts as reference ceilings.
-TEST_F(LossWorkspaceUnionTest, Fp16PartialsWorkspaceBytesAndGradEquiv) {
+TEST_F(CudaLossWorkspaceTest, Fp16PartialsWorkspaceBytesAndGradEquiv) {
     const int N = 1, C = 3, H = 48, W = 48;
     const std::vector<size_t> shape = {1, 3, 48, 48};
     const float ssim_weight = 0.2f;
@@ -491,4 +555,159 @@ TEST_F(LossWorkspaceUnionTest, Fp16PartialsWorkspaceBytesAndGradEquiv) {
     }
     EXPECT_LT(max_pure, 1e-6);
     EXPECT_TRUE(std::isfinite(sloss_a.item<float>()));
+}
+
+TEST_F(LossWorkspaceUnionTest, StepScratchPartialsMatchOwnedLayout) {
+    using namespace lfs;
+    using namespace lfs::gpu_ops;
+    const auto& ops = *training::training_ops(core::default_gpu_backend()).photometric;
+    ASSERT_TRUE(ops.bind_step_scratch);
+    PhotoSaved saved{.backend = ops.create()};
+    const auto shape = core::TensorShape{1, 3, 41, 73};
+    auto render = Tensor::rand(shape, Device::GPU);
+    auto target = Tensor::rand(shape, Device::GPU);
+    auto raw = Tensor::rand(shape, Device::GPU);
+    auto mask = Tensor::ones({41, 73}, Device::GPU);
+    const auto evaluate = [&] {
+        Tensor loss, gradient, raw_gradient;
+        ops.evaluate(saved, render, raw, target, mask,
+                     {.path = PhotoPath::MaskedDecoupled, .ssim_weight = .2f, .calibration_fit = true},
+                     loss, gradient, raw_gradient);
+        return std::pair{loss.item<float>(), (gradient + raw_gradient).cpu().to_vector()};
+    };
+    const auto reference = evaluate();
+    const auto owned_bytes = ops.workspace_bytes(saved).allocated;
+    auto scratch = Tensor::empty({size_t(1) << 19}, Device::GPU, DataType::UInt8);
+    for (int step = 0; step < 2; ++step) {
+        size_t used = 0;
+        ops.bind_step_scratch(saved, [&](size_t bytes) {
+            auto view = scratch.slice(0, used, used + bytes);
+            used += align_arena_bytes(bytes);
+            return StepScratch{.native = static_cast<char*>(view.data_ptr()), .storage = std::move(view)};
+        });
+        const auto result = evaluate();
+        // Borrowing changes only the addresses of the same backend's partials.
+        EXPECT_EQ(reference, result);
+        EXPECT_GT(used, 0u);
+        ops.shrink_to_required(saved);
+        EXPECT_LT(ops.workspace_bytes(saved).allocated, owned_bytes);
+        ops.bind_step_scratch(saved, {});
+    }
+    EXPECT_EQ(reference, evaluate());
+}
+
+namespace {
+    using lfs::gpu_ops::PhotoParams;
+    using lfs::gpu_ops::PhotoPath;
+    constexpr std::array paths{PhotoPath::SSIM, PhotoPath::Fused, PhotoPath::Decoupled, PhotoPath::MaskedFused, PhotoPath::MaskedDecoupled};
+
+    size_t expected_bytes(PhotoPath path, const std::vector<size_t>& dims) {
+        switch (path) {
+        case PhotoPath::SSIM: return LossWorkspaceArena::pure_ssim_layout_bytes(dims);
+        case PhotoPath::Fused: return LossWorkspaceArena::fused_layout_bytes(dims);
+        case PhotoPath::Decoupled: return LossWorkspaceArena::decoupled_layout_bytes(dims);
+        case PhotoPath::MaskedFused: return LossWorkspaceArena::masked_fused_layout_bytes(dims);
+        case PhotoPath::MaskedDecoupled: return LossWorkspaceArena::masked_decoupled_layout_bytes(dims);
+        default: throw std::logic_error("This path has no SSIM workspace");
+        }
+    }
+
+    struct LossImages {
+        explicit LossImages(std::vector<size_t> dims) : shape(std::move(dims)),
+                                                        render(Tensor::rand(TensorShape(shape), Device::GPU)),
+                                                        target(Tensor::rand(TensorShape(shape), Device::GPU)),
+                                                        mask(Tensor::ones({shape[2], shape[3]}, Device::GPU)) {}
+        std::vector<size_t> shape;
+        Tensor render, target, mask;
+    };
+    struct LossResult {
+        float loss;
+        Tensor gradient;
+    };
+    struct TestPhotoArena {
+        const lfs::gpu_ops::PhotometricOps& ops = *lfs::training::training_ops(default_gpu_backend()).photometric;
+        lfs::gpu_ops::PhotoSaved saved{.backend = ops.create()};
+        LossResult run(const LossImages& images, PhotoPath path, bool padding = true) {
+            const bool masked = path == PhotoPath::MaskedFused || path == PhotoPath::MaskedDecoupled;
+            const bool decoupled = path == PhotoPath::Decoupled || path == PhotoPath::MaskedDecoupled;
+            Tensor loss, gradient, raw;
+            ops.evaluate(saved, images.render, decoupled ? images.render : Tensor{}, images.target, masked ? images.mask : Tensor{},
+                         {.path = path, .ssim_weight = path == PhotoPath::SSIM ? 1.f : .2f, .valid_padding = padding, .calibration_fit = true},
+                         loss, gradient, raw);
+            if (raw.is_valid())
+                gradient = gradient + raw;
+            return {loss.item<float>(), gradient.cpu().contiguous()};
+        }
+        auto bytes() const { return ops.workspace_bytes(saved); }
+    };
+} // namespace
+TEST_F(LossWorkspaceUnionTest, IndependentWorkspacesRetainSum) {
+    const LossImages image({1, 3, 41, 73});
+    std::array<TestPhotoArena, 5> arenas;
+    size_t total = 0, expected = 0;
+    for (size_t i = 0; i < paths.size(); ++i) {
+        arenas[i].run(image, paths[i]);
+        expected += expected_bytes(paths[i], image.shape);
+    }
+    for (const auto& a : arenas)
+        total += a.bytes().allocated;
+    EXPECT_EQ(total, expected);
+}
+TEST_F(LossWorkspaceUnionTest, SequentialModesThroughArenaTrackActiveVariantExactly) {
+    const LossImages image({1, 3, 41, 73});
+    TestPhotoArena arena;
+    for (auto mode : paths) {
+        arena.run(image, mode);
+        EXPECT_EQ(arena.bytes().required, expected_bytes(mode, image.shape));
+        EXPECT_EQ(arena.bytes().allocated, arena.bytes().required);
+    }
+}
+TEST_F(LossWorkspaceUnionTest, MixedResolutionSameVariantIsGrowOnly) {
+    const LossImages small({1, 3, 17, 29}), large({1, 3, 64, 96});
+    TestPhotoArena arena;
+    arena.run(large, PhotoPath::Fused);
+    const auto peak = arena.bytes().allocated;
+    arena.run(small, PhotoPath::Fused);
+    EXPECT_EQ(arena.bytes().allocated, peak);
+    arena.ops.shrink_to_required(arena.saved);
+    EXPECT_EQ(arena.bytes().allocated, expected_bytes(PhotoPath::Fused, small.shape));
+    arena.ops.reset(arena.saved);
+    EXPECT_EQ(arena.bytes().allocated, 0u);
+}
+TEST_F(LossWorkspaceUnionTest, ActiveVariantAllocationMatchesRequiredAtTwoShapes) {
+    for (auto shape : {std::vector<size_t>{1, 3, 17, 29}, std::vector<size_t>{2, 3, 64, 96}}) {
+        const LossImages image(shape);
+        TestPhotoArena arena;
+        for (auto path : paths) {
+            arena.run(image, path);
+            EXPECT_EQ(arena.bytes().allocated, expected_bytes(path, shape));
+        }
+    }
+}
+TEST_F(LossWorkspaceUnionTest, ArenaFusedLossMatchesIndependent) {
+    const LossImages image({1, 3, 48, 48});
+    TestPhotoArena first, second;
+    first.run(image, PhotoPath::Decoupled);
+    auto a = first.run(image, PhotoPath::Fused), b = second.run(image, PhotoPath::Fused);
+    EXPECT_EQ(a.loss, b.loss);
+    EXPECT_EQ(a.gradient.to_vector(), b.gradient.to_vector());
+}
+TEST_F(LossWorkspaceUnionTest, ZeroTermsDeletedAndDecoupledGradsStable) {
+    const LossImages image({1, 3, 48, 48});
+    TestPhotoArena arena;
+    auto a = arena.run(image, PhotoPath::Fused), b = arena.run(image, PhotoPath::Decoupled);
+    EXPECT_NEAR(a.loss, b.loss, 1e-4f);
+    EXPECT_LT((a.gradient - b.gradient).abs().max().item<float>(), 5e-4f);
+}
+TEST_F(LossWorkspaceUnionTest, Fp16PartialsWorkspaceBytesAndGradEquiv) {
+    const LossImages image({1, 3, 48, 48});
+    TestPhotoArena arena;
+    auto a = arena.run(image, PhotoPath::Fused, false);
+    for (auto path : {PhotoPath::Decoupled, PhotoPath::MaskedFused, PhotoPath::MaskedDecoupled}) {
+        const auto b = arena.run(image, path, false);
+        // Layout helpers count packed half partials. The reconstruction sums separately rounded derivatives.
+        EXPECT_EQ(arena.bytes().allocated, expected_bytes(path, image.shape));
+        EXPECT_NEAR(a.loss, b.loss, 1e-4f);
+        EXPECT_LT((a.gradient - b.gradient).abs().max().item<float>(), 2e-3f);
+    }
 }

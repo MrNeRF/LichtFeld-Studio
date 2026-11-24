@@ -15,13 +15,16 @@ namespace lfs::training {
 
         // Preserve the mutable pointer access at the original call sites: even read-only
         // kernel inputs must detach pending lazy snapshots before escaping as raw pointers.
-        void split(const RefineOutputs& parents, const RefineOutputs& children, const Tensor& indices) {
+        void conserving_split(const RefineOutputs& parents, const RefineOutputs& children, const Tensor& indices, float scale) {
             kernels::launch_long_axis_split_gaussians_inplace(
                 parents.means.ptr<float>(), parents.rotations.ptr<float>(), parents.scales.ptr<float>(),
                 parents.sh0.ptr<float>(), nullptr, parents.opacity.ptr<float>(),
                 children.means.ptr<float>(), children.rotations.ptr<float>(), children.scales.ptr<float>(),
                 children.sh0.ptr<float>(), nullptr, children.opacity.ptr<float>(),
-                const_cast<Tensor&>(indices).ptr<int64_t>(), indices.numel(), 0, core::getCurrentCUDAStream());
+                const_cast<Tensor&>(indices).ptr<int64_t>(), indices.numel(), 0, core::getCurrentCUDAStream(), scale);
+        }
+        void split(const RefineOutputs& parents, const RefineOutputs& children, const Tensor& indices) {
+            conserving_split(parents, children, indices, 0.f);
         }
         void fill_slots(const Tensor& indices, const RefineInputs& source, const RefineOutputs& destination, Tensor& free_mask) {
             kernels::launch_fill_free_slots_fused(
@@ -71,6 +74,7 @@ namespace lfs::training {
             .oversize_scores = oversize_scores,
             .dead_mask = dead_mask,
             .rotation_mask = rotation_mask,
+            .conserving_split = conserving_split,
         };
     } // namespace
 

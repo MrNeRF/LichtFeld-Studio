@@ -11,6 +11,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 #include <memory>
+#include <source_location>
 #include <vector>
 
 namespace {
@@ -88,7 +89,8 @@ namespace {
             EXPECT_FLOAT_EQ(*cached, *cold);
         }
 
-        void expectColor(const Tensor& image, glm::ivec2 pixel, glm::vec3 expected) {
+        void expectColor(const Tensor& image, glm::ivec2 pixel, glm::vec3 expected, std::source_location caller = std::source_location::current()) {
+            SCOPED_TRACE(caller.line());
             const auto* rgb = image.ptr<float>() + 3 * (pixel.y * request.size.x + pixel.x);
             for (int c = 0; c < 3; ++c) {
                 EXPECT_TRUE(std::isfinite(rgb[c]));
@@ -236,5 +238,39 @@ namespace {
         ASSERT_EQ((*before)->numel(), (*after)->numel());
         for (std::size_t i = 0; i < (*before)->numel(); ++i)
             ASSERT_FLOAT_EQ((*before)->ptr<float>()[i], (*after)->ptr<float>()[i]);
+    }
+
+    TEST_F(PointCloudVulkanProjectionTest, InPlaceEditUploadsOnNewRevisionAndBoolMaskHidesPoints) {
+        points({0, 0, -4, 2, 0, -4}, {1, 0, 0, 0, 1, 0});
+        positions = positions.to(Device::CUDA);
+        colors = colors.to(Device::CUDA);
+        ASSERT_TRUE(renderer->render(*context, request, target));
+        auto image = renderer->readOutputImage(*context, target);
+        ASSERT_TRUE(image);
+        expectColor(**image, {128, 64}, {1, 0, 0});
+        expectColor(**image, {160, 64}, {0, 1, 0});
+
+        // Same tensor, new contents: only a new revision makes the renderer upload it.
+        colors.copy_from(Tensor::from_vector(std::vector<float>{0, 0, 1, 0, 0, 1},
+                                             {std::size_t{2}, std::size_t{3}}, Device::CPU));
+        ASSERT_TRUE(renderer->render(*context, request, target));
+        image = renderer->readOutputImage(*context, target);
+        ASSERT_TRUE(image);
+        expectColor(**image, {128, 64}, {1, 0, 0});
+        ++request.colors_revision;
+        ASSERT_TRUE(renderer->render(*context, request, target));
+        image = renderer->readOutputImage(*context, target);
+        ASSERT_TRUE(image);
+        expectColor(**image, {128, 64}, {0, 0, 1});
+
+        const Tensor deleted = Tensor::from_vector(std::vector<float>{1, 0}, {std::size_t{2}}, Device::CUDA)
+                                   .to(lfs::core::DataType::Bool);
+        request.deleted_mask = &deleted;
+        request.deleted_mask_revision = 1;
+        ASSERT_TRUE(renderer->render(*context, request, target));
+        image = renderer->readOutputImage(*context, target);
+        ASSERT_TRUE(image);
+        expectColor(**image, {128, 64}, {0, 0, 0});
+        expectColor(**image, {160, 64}, {0, 0, 1});
     }
 } // namespace

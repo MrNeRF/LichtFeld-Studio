@@ -1,0 +1,6 @@
+.demo-card {
+    background-color: @{surface};
+    border-color: @{border};
+    border-radius: @{radius.surface}dp;
+    border-width: @{stroke.normal}dp;
+}

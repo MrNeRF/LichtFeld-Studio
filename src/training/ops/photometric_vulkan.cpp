@@ -34,15 +34,18 @@ namespace lfs::training {
         struct PhotoState : BackendState {
             Tensor arena, map, cs, gradient, raw_gradient;
             Tensor horizontal, full_map, full_cs, losses, normalizer, l1_gradient;
-            Tensor error_storage;
+            Tensor error_storage, step_partials;
+            StepScratchAllocator step_scratch;
+            bool borrowed_layout = false;
             PhotoPath kind = PhotoPath::L1;
             size_t required = 0, capacity = 0, partial_offset = 0, partial_stride = 0;
             core::TensorShape shape;
             void ensure(PhotoPath path, core::TensorShape dims) {
                 const size_t e = dims.elements(), pixels = dims[0] * dims[2] * dims[3];
                 std::vector<size_t> sizes{4 * (path == PhotoPath::SSIM ? e : pixels)};
-                for (int j = 0; j < (decoupled(path) ? 4 : 3); ++j)
-                    sizes.push_back(2 * e);
+                if (!step_scratch)
+                    for (int j = 0; j < (decoupled(path) ? 4 : 3); ++j)
+                        sizes.push_back(2 * e);
                 if (path == PhotoPath::SSIM)
                     sizes.push_back(4 * e);
                 sizes.push_back(4 * e);
@@ -54,10 +57,11 @@ namespace lfs::training {
                 for (size_t bytes : sizes)
                     required = aligned(required) + bytes;
                 required = aligned(required);
-                if (!arena.is_valid() || kind != path || required > capacity) {
+                if (!arena.is_valid() || kind != path || borrowed_layout != bool(step_scratch) || required > capacity) {
                     arena = Tensor::empty_exact({required / 4});
                     capacity = required;
                 }
+                borrowed_layout = bool(step_scratch);
                 kind = path;
                 shape = dims;
                 size_t offset = 0;
@@ -71,9 +75,14 @@ namespace lfs::training {
                 map = field(sizes[0], map_shape);
                 partial_offset = aligned(offset);
                 partial_stride = aligned(2 * e) / 2;
-                offset = partial_offset;
-                for (int j = 0; j < (decoupled(path) ? 4 : 3); ++j)
-                    offset = aligned(offset) + 2 * e;
+                const size_t partial_count = decoupled(path) ? 4 : 3;
+                if (step_scratch) {
+                    step_partials = step_scratch(partial_count * aligned(2 * e)).storage;
+                } else {
+                    offset = partial_offset;
+                    for (size_t j = 0; j < partial_count; ++j)
+                        offset = aligned(offset) + 2 * e;
+                }
                 if (path == PhotoPath::SSIM)
                     offset = aligned(offset) + 4 * e;
                 gradient = field(4 * e, dims);
@@ -172,7 +181,7 @@ namespace lfs::training {
                 ensure_buffer(s.full_map, dims);
                 ensure_buffer(s.full_cs, dims);
                 p.horizontal = address(s.horizontal);
-                p.partials = derivatives ? address(s.arena) + s.partial_offset : 0;
+                p.partials = derivatives ? (s.step_partials.is_valid() ? address(s.step_partials) : address(s.arena) + s.partial_offset) : 0;
                 p.partial_stride = s.partial_stride;
                 p.ssim = address(s.full_map);
                 p.cs = address(s.full_cs);
@@ -183,6 +192,8 @@ namespace lfs::training {
                     writes.push_back(ref(s.horizontal));
                 if (derivatives)
                     writes.push_back(ref(s.arena));
+                if (s.step_partials.is_valid())
+                    writes.push_back(ref(s.step_partials));
                 if (s.raw_gradient.is_valid())
                     writes.push_back(ref(s.raw_gradient));
                 auto reads = inputs;
@@ -233,11 +244,86 @@ namespace lfs::training {
                     raw_grad = raw_grad.squeeze(0);
             }
         }
+        // Temporary blur planes are scoped to this evaluation. The command recorder keeps
+        // storage live through its last queued access and the allocator can then reuse it.
+        void evaluate_blur(PhotoSaved& saved, In corrected, In raw, In target, In mask,
+                           const PhotoParams& options, Out loss, Out grad, Out raw_grad) {
+            const auto a = corrected.contiguous(), y = target.contiguous();
+            const auto r = decoupled(options.path) ? raw.contiguous() : a;
+            const auto m = masked(options.path) ? mask.contiguous() : Tensor{};
+            const auto shape = a.shape();
+            const auto dims = a.ndim() == 3 ? a.unsqueeze(0).shape() : shape;
+            const size_t batches = dims[0], channels = dims[1], h = dims[2], w = dims[3];
+            const size_t count = a.numel();
+            struct BlurParams {
+                uint64_t corrected, raw, photo, mask, blurred, sharp_partials, blur_partials, branch_gradient;
+                uint64_t sharp_map, cs_map, loss, grad, raw_grad;
+                int width, height, channels, batches, byte_photo, byte_mask, radius;
+                float sw, denominator, taps[6];
+            };
+            LFS_ASSERT_MSG(options.blur_sigma > 0 && options.blur_sigma <= 1.5f && dims.rank() == 4, "Invalid blur loss parameters");
+            auto& state = *static_cast<PhotoState*>(saved.backend.get());
+            ensure_buffer(state.gradient, shape);
+            grad = state.gradient;
+            if (decoupled(options.path)) {
+                ensure_buffer(state.raw_gradient, shape);
+                raw_grad = state.raw_gradient;
+            } else
+                raw_grad = {};
+            const core::TensorShape maps{batches, 1, h, w};
+            ensure_buffer(state.map, maps);
+            ensure_buffer(state.cs, maps);
+            saved.ssim_map = state.map;
+            saved.cs_map = state.cs;
+            auto storage = state.step_scratch ? state.step_scratch(count * 7 * sizeof(float)).storage
+                                              : Tensor::empty({count, size_t(7)}, Device::GPU);
+            auto scores = Tensor::empty(maps, Device::GPU);
+            const auto scratch = address(storage);
+            BlurParams p{address(a), address(r), address(y), address(m), scratch, scratch + count * 8, scratch + count * 16, scratch + count * 24,
+                         address(state.map), address(state.cs), address(scores), address(grad), address(raw_grad),
+                         int(w), int(h), int(channels), int(batches), y.dtype() == DataType::UInt8, m.is_valid() && m.dtype() != DataType::Float32,
+                         int(std::ceil(3.0 * options.blur_sigma)), options.ssim_weight};
+            double sum = 0, weights[6]{};
+            for (int i = 0; i <= p.radius; ++i) {
+                weights[i] = std::exp(-.5 * i * i / (double(options.blur_sigma) * options.blur_sigma));
+                sum += (i ? 2 : 1) * weights[i];
+            }
+            for (int i = 0; i <= p.radius; ++i)
+                p.taps[i] = float(weights[i] / sum);
+            if (m.is_valid()) {
+                p.denominator = options.denominator > 0 ? options.denominator : (m.dtype() == DataType::Float32 ? m : (m != 0).to(DataType::Float32)).sum().item() * batches * channels + 1e-8f;
+                saved.mask_denominator = p.denominator;
+                saved.empty_mask = p.denominator <= 1e-8f;
+            } else {
+                p.denominator = float(batches * channels * (h > 10 ? h - 10 : h) * (w > 10 ? w - 10 : w));
+                saved.empty_mask = false;
+            }
+            uint32_t blocks = uint32_t(std::min<size_t>(((w + 15) / 16) * ((h + 15) / 16) * batches, 65535));
+            std::vector<vulkan::StorageRef> inputs{ref(a), ref(r), ref(y)};
+            if (m.is_valid())
+                inputs.push_back(ref(m));
+            auto scratch_ref = ref(storage);
+            vulkan::dispatch("blur_ssim", p, inputs, std::array{scratch_ref}, blocks, 0);
+            inputs.push_back(scratch_ref);
+            vulkan::dispatch("blur_ssim", p, inputs, std::array{scratch_ref, ref(state.map), ref(state.cs), ref(scores)}, blocks, 1);
+            vulkan::dispatch("blur_ssim", p, inputs, std::array{scratch_ref}, blocks, 2);
+            std::vector<vulkan::StorageRef> outputs{ref(grad)};
+            if (raw_grad.is_valid())
+                outputs.push_back(ref(raw_grad));
+            vulkan::dispatch("blur_ssim", p, inputs, outputs, blocks, 3);
+            loss = (scores.sum() / p.denominator).reshape({1});
+        }
         State create() { return std::make_unique<PhotoState>(); }
         void evaluate(PhotoSaved& saved, In corrected, In raw, In target, In mask, const PhotoParams& options,
                       Out loss, Out grad, Out raw_grad) {
             auto& s = state(saved);
+            if (options.blur_sigma > 0) {
+                evaluate_blur(saved, corrected, raw, target, mask, options, loss, grad, raw_grad);
+                return;
+            }
             run(s, corrected, raw, target, mask, options, loss, grad, raw_grad);
+            if (options.calibration_fit && masked(options.path))
+                saved.mask_denominator = options.denominator > 0 ? options.denominator : s.normalizer.item() * float(corrected.numel() / mask.numel()) + 1e-8f;
             if (options.path != PhotoPath::L1) {
                 bind(saved.ssim_map, s.map);
                 bind(saved.cs_map, s.cs);
@@ -347,6 +433,8 @@ namespace lfs::training {
                 return;
             auto& s = state(saved);
             s.arena = {};
+            s.step_scratch = {};
+            s.step_partials = {};
             s.map = {};
             s.cs = {};
             s.gradient = {};
@@ -354,7 +442,12 @@ namespace lfs::training {
             s.required = s.capacity = 0;
             s.kind = PhotoPath::L1;
         }
-        const PhotometricOps ops{create, evaluate, metric, masked_metric_map, error_map, map_to_error, workspace_bytes, shrink, reset};
+        const PhotometricOps ops{create, evaluate, metric, masked_metric_map, error_map, map_to_error, workspace_bytes, shrink, reset, nullptr,
+                                 [](PhotoSaved& saved, const StepScratchAllocator& allocate) {
+                                     auto& s = state(saved);
+                                     s.step_partials = {};
+                                     s.step_scratch = allocate;
+                                 }};
     } // namespace
     const gpu_ops::PhotometricOps& vulkan_photometric_ops() { return ops; }
 } // namespace lfs::training

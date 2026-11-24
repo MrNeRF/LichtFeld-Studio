@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/tensor_image.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
+#include "core/shared_image_ops.hpp"
 #include "core/tensor_execution.hpp"
 #include "internal/image_resample.hpp"
 #include "internal/tensor_impl.hpp"
@@ -151,6 +152,22 @@ namespace lfs::core {
 #endif
 
 namespace lfs::core {
+    Tensor fit_image_prior(const Tensor& input, int request_h, int request_w, int render_h, int render_w, bool normal) {
+        const auto backend = gpu_backend_of(input).value();
+        const GpuBackendScope scope(backend);
+        const auto& ops = *shared_image_ops(backend);
+        if (request_h <= 0 || request_w <= 0) {
+            request_h = render_h;
+            request_w = render_w;
+        }
+        using gpu_ops::Resample;
+        auto fitted = ops.resize_prior_async ? ops.resize_prior_async(input, request_h, request_w, normal)
+                                             : ops.resize(input, request_h, request_w, normal ? Resample::NormalPrior : Resample::DepthPrior, 2);
+        if (request_h != render_h || request_w != render_w)
+            fitted = ops.resize(fitted, render_h, render_w, normal ? Resample::LanczosFloatCHW : Resample::LanczosGray, 2);
+        return fitted;
+    }
+
     namespace {
         Tensor warp(const Tensor& input, const UndistortParams& params, int mode, bool inverse,
                     Tensor* validity, void* stream) {

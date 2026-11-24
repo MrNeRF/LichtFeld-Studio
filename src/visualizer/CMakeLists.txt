@@ -35,6 +35,9 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         core/parameter_manager.cpp
         core/services.cpp
         $<$<BOOL:${LFS_OPENXR_BUILD}>:vr/openxr_service.cpp>
+        vr/openxr_runtimes.cpp
+        $<$<BOOL:${LFS_OPENXR_BUILD}>:vr/vr_hand_renderer.cpp>
+        vr/vr_tracked_hands.cpp
         $<$<NOT:$<BOOL:${LFS_OPENXR_BUILD}>>:vr/openxr_service_unavailable.cpp>
 
         # Geometry node modifiers
@@ -447,6 +450,8 @@ compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/scene_temporal_
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/scene_depth_history.comp" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/scene_depth_history.comp.spv.h" kSceneDepthHistoryCompSpv)
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/point_cloud.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/point_cloud.vert.spv.h" kPointCloudVertSpv "${LFS_EQUIRECT_PROJECTION_SHADER}")
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/point_cloud.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/point_cloud.frag.spv.h" kPointCloudFragSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/vr_hand.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/vr_hand.vert.spv.h" kVrHandVertSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/vr_hand.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/vr_hand.frag.spv.h" kVrHandFragSpv)
 endif()
 
 if(LFS_GRAPHICS_VULKAN_BUILD)

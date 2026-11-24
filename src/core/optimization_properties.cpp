@@ -35,7 +35,7 @@ namespace lfs::core::param {
             .json_required()
             .all_strategies()
             .size_prop(&OptimizationParameters::sh_degree_interval,
-                       "sh_degree_interval", "SH Interval", d.sh_degree_interval, 100, 10000,
+                       "sh_degree_interval", "SH Interval", d.sh_degree_interval, 1, 10000,
                        "Iterations between SH degree increases")
             .locale("training.refinement.sh_upgrade_every")
             .tooltip("training.tooltip.sh_upgrade_every")
@@ -584,16 +584,6 @@ namespace lfs::core::param {
             .strategies({"igs+"})
             // MRNF strategy parameters
             .all_strategies()
-            .float_prop(&OptimizationParameters::growth_grad_threshold,
-                        "growth_grad_threshold", "Growth Grad Threshold", d.growth_grad_threshold, 0.0f, 1.0f,
-                        "Min refine weight for growth candidacy (MRNF)")
-            .locale("training.advanced.growth_grad_threshold")
-            .tooltip("training.tooltip.growth_grad_threshold")
-            .precision(4)
-            .ui_step(0.0001)
-            .flags(PROP_ADVANCED)
-            .strategies({"mrnf"})
-            .all_strategies()
             .float_prop(&OptimizationParameters::grow_fraction,
                         "grow_fraction", "Grow Fraction", d.grow_fraction, 0.0f, 1.0f,
                         "Fraction of above-threshold splats to grow (MRNF)")
@@ -611,14 +601,6 @@ namespace lfs::core::param {
             .tooltip("training.tooltip.grow_until_iter")
             .precision(0)
             .ui_step(1000)
-            .strategies({"mrnf"})
-            .all_strategies()
-            .bool_prop(&OptimizationParameters::growth_exchange,
-                       "growth_exchange", "Growth Exchange", d.growth_exchange,
-                       "Keeps error-guided growth working at the splat cap by freeing the splats whose removal changes the image least (MRNF)")
-            .locale("training.advanced.growth_exchange")
-            .tooltip("training.tooltip.growth_exchange")
-            .flags(PROP_ADVANCED)
             .strategies({"mrnf"})
             .all_strategies()
             .float_prop(&OptimizationParameters::opacity_decay,
@@ -718,6 +700,17 @@ namespace lfs::core::param {
                        "Refine the training camera poses during training; the refined poses replace the cameras' own")
             .locale("training_params.pose_opt")
             .tooltip("training.tooltip.pose_opt")
+            .all_strategies()
+            .bool_prop(&OptimizationParameters::calibration_correction,
+                       "calibration_correction", "Calibration Correction", d.calibration_correction,
+                       "Fits a small, smooth warp to every training photo that absorbs what the calibration missed "
+                       "(rolling shutter, stabilization, focus breathing, a slightly wrong pose), so photos that "
+                       "disagree by a pixel no longer blur the scene. Starts at step 1000, scaled with the step "
+                       "count; evaluation scores each held-out view as rendered and, in addition, after aligning the render "
+                       "to the photo.")
+            .locale("training_params.calibration_correction")
+            .tooltip("training.tooltip.calibration_correction")
+            .flags(PROP_ADVANCED)
             .all_strategies()
             .bool_prop(&OptimizationParameters::use_ppisp,
                        "ppisp", "PPISP", d.use_ppisp,

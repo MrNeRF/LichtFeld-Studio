@@ -8,6 +8,7 @@
 #include "lfs/training/ops/adam.hpp"
 #include "lfs/training/ops/bilateral.hpp"
 #include "lfs/training/ops/blob.hpp"
+#include "lfs/training/ops/calibration.hpp"
 #include "lfs/training/ops/extra_loss.hpp"
 #include "lfs/training/ops/geometry.hpp"
 #include "lfs/training/ops/gsplat.hpp"
@@ -18,6 +19,7 @@
 #include "lfs/training/ops/morton.hpp"
 #include "lfs/training/ops/mrnf.hpp"
 #include "lfs/training/ops/popspa.hpp"
+#include "lfs/training/ops/pose.hpp"
 #include "lfs/training/ops/ppisp.hpp"
 #include "lfs/training/ops/raster.hpp"
 #include "lfs/training/ops/refine.hpp"
@@ -42,6 +44,8 @@ namespace lfs::training {
 
     struct TrainingOps {
         core::GpuBackend backend = core::GpuBackend::CUDA;
+        const ops::CalibrationOps* calibration = nullptr;
+        const ops::PoseOps* pose = nullptr;
         const ops::PhotometricOps* photometric = nullptr;
         const ops::AdamOps* adam = nullptr;
         const ops::McmcOps* mcmc = nullptr;

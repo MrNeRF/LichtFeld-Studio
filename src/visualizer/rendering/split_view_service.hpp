@@ -49,8 +49,8 @@ namespace lfs::vis {
             std::optional<bool> restore_equirectangular;
         };
 
-        [[nodiscard]] std::optional<glm::ivec2> gtContentDimensions() const;
         [[nodiscard]] bool isActive(const RenderSettings& settings) const;
+        [[nodiscard]] std::optional<glm::ivec2> gtContentDimensions() const;
         [[nodiscard]] bool isGTComparisonActive(const RenderSettings& settings) const;
         [[nodiscard]] ModeChangeResult toggleMode(RenderSettings& settings,
                                                   SplitViewMode target_mode);

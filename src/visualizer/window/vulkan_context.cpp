@@ -161,7 +161,7 @@ namespace lfs::vis {
             VkPhysicalDeviceProperties2 vk_props2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
             vk_props2.pNext = &vk_id;
             vkGetPhysicalDeviceProperties2(device, &vk_props2);
-            return std::equal(cuda_device.uuid.begin(), cuda_device.uuid.end(), vk_id.deviceUUID);
+            return lfs::core::gpu_device_matches_uuid(cuda_device, vk_id.deviceUUID);
         }
 
         [[nodiscard]] std::string vulkanApiVersionString(const uint32_t api_version) {
@@ -2355,6 +2355,11 @@ namespace lfs::vis {
             populateDebugMessengerCreateInfo(debug_create_info, &validation_errors_fatal_);
         }
 
+        for (const std::string& wanted : device_hooks_.wanted_instance_extensions) {
+            if (extensionAvailable(available_extensions, wanted.c_str()))
+                appendUniqueExtension(extensions, wanted.c_str());
+        }
+
         VkValidationFeatureEnableEXT synchronization_validation =
             VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT;
         VkValidationFeaturesEXT validation_features{};
@@ -2377,10 +2382,19 @@ namespace lfs::vis {
         if (result != VK_SUCCESS) {
             return setVkFailure(std::format("vkCreateInstance failed: {}", vkResultToString(result)), result);
         }
+        instance_extensions_.assign(extensions.begin(), extensions.end());
         if (validation_enabled_ && !createDebugMessenger()) {
             return false;
         }
         return true;
+    }
+
+    bool VulkanContext::instanceExtensionEnabled(const std::string_view name) const {
+        return std::ranges::find(instance_extensions_, name) != instance_extensions_.end();
+    }
+
+    bool VulkanContext::deviceExtensionEnabled(const std::string_view name) const {
+        return std::ranges::find(device_extensions_, name) != device_extensions_.end();
     }
 
     bool VulkanContext::createSurface(SDL_Window* window) {
@@ -3094,6 +3108,11 @@ namespace lfs::vis {
         features2.features.sparseBinding =
             (sparse_binding_supported && graphics_queue_sparse) ? VK_TRUE : VK_FALSE;
 
+        for (const std::string& wanted : device_hooks_.wanted_device_extensions) {
+            if (extensionAvailable(available_extensions, wanted.c_str()))
+                appendUniqueExtension(extensions, wanted.c_str());
+        }
+
         lfs::core::VulkanDeviceCreator create_device;
         if (device_hooks_.create_device) {
             create_device = [this](VkPhysicalDevice physical, const VkDeviceCreateInfo& info, VkDevice* device) {
@@ -3105,6 +3124,7 @@ namespace lfs::vis {
         if (result != VK_SUCCESS) {
             return setVkFailure(std::format("vkCreateDevice failed: {}", vkResultToString(result)), result);
         }
+        device_extensions_.assign(extensions.begin(), extensions.end());
 
         if (debug_utils_enabled_) {
             debug_name_writer_.initialize(device_);
@@ -3750,8 +3770,8 @@ namespace lfs::vis {
         // exporter's handle. A stale handle must assert instead of being hidden
         // by the VUID-01742 suppression below.
         {
-            struct stat st_src {};
-            struct stat st_dup {};
+            struct stat st_src{};
+            struct stat st_dup{};
             const int st_src_rc = ::fstat(handle, &st_src);
             const int st_dup_rc = ::fstat(dup_fd, &st_dup);
             int kcmp_rc = 0;

@@ -13,7 +13,7 @@ namespace lfs::core::internal {
         properties.pNext = &identity;
         vkGetPhysicalDeviceProperties2(static_cast<VkPhysicalDevice>(device.physical_device), &properties);
         const bool direct = device.external_memory && device.external_semaphore && cuda &&
-                            std::equal(cuda->uuid.begin(), cuda->uuid.end(), identity.deviceUUID);
+                            lfs::core::gpu_device_matches_uuid(*cuda, identity.deviceUUID);
         return direct ? make_cuda_vulkan_interop(device) : make_host_vulkan_interop(device, GpuBackend::CUDA);
     }
 } // namespace lfs::core::internal

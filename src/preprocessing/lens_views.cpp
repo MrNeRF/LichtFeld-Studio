@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "lens_views.hpp"
 #include "core/crash_handler.hpp"
+#include "core/distortion_model.hpp"
 #include "core/gpu_kernel_module.hpp"
 #include "core/tensor_backend.hpp"
 #include "lens_views_program.hpp"
@@ -52,9 +53,10 @@ namespace lfs::preprocessing {
         run("rays", camera, {}, {&rays}, size_t(camera.width) * camera.height);
     }
     float lens_max_angle(const LensCamera& camera) {
-        auto angle = core::Tensor::empty({1}, core::Device::GPU);
-        run("maxAngle", camera, {}, {&angle}, 1);
-        return angle.cpu().ptr<float>()[0];
+        const auto model = static_cast<core::CameraModelType>(camera.projection.model);
+        if (model != core::CameraModelType::FISHEYE && model != core::CameraModelType::THIN_PRISM_FISHEYE)
+            return 0.f;
+        return static_cast<float>(core::fisheye_radial_limit(camera.projection.radial));
     }
 
     void lens_rays_at(const LensCamera& camera, const core::Tensor& image_xy, core::Tensor& rays) {

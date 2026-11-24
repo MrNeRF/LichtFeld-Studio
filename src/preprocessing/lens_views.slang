@@ -198,8 +198,3 @@ void raysAt(uint3 id : SV_DispatchThreadID) {
     if (id.x < p.pixels)
         store_ray(gsplat_camera_load(p.camera), float2(p.b[2 * id.x], p.b[2 * id.x + 1]), p.a, id.x);
 }
-[shader("compute")][numthreads(256,1,1)]
-void maxAngle(uint3 id : SV_DispatchThreadID) {
-    if (id.x == 0)
-        p.a[0] = gsplat_camera_load(p.camera).max_angle;
-}

@@ -629,6 +629,23 @@ namespace lfs::vis {
         }
     };
 
+    TEST_F(RenderingManagerEventsTest, GTContentBoundsFollowDisplayedLetterboxAtReducedScale) {
+        screen::ScreenService views;
+        RenderingManager manager{views};
+        const auto view = views.activeView();
+        auto settings = manager.settingsForView(view);
+        settings.split_view_mode = SplitViewMode::GTComparison;
+        manager.updateSettings(settings);
+        auto& state = manager.viewState(view);
+        state.gt_composite_extent = {320, 180};
+        state.gt_composite_rect = {20, 0, 279, 180};
+        const auto bounds = manager.getContentBounds(view, {1281, 721});
+        EXPECT_EQ(bounds.x, 80);
+        EXPECT_EQ(bounds.x + bounds.width, 1197);
+        EXPECT_EQ(bounds.y, 0);
+        EXPECT_EQ(bounds.height, 721);
+    }
+
     TEST(SplitViewServiceTest, ToggleGtComparisonRestoresPreviousProjectionMode) {
         SplitViewService service;
         RenderSettings settings;

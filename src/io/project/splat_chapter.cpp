@@ -96,7 +96,8 @@ namespace lfs::io::project {
         };
 
         lfs::Error splat_error(const lfs::ErrorCode code, std::string message,
-                               std::string detail);
+                               std::string detail,
+                               lfs::Retryability retryability = lfs::Retryability::NotRetryable);
 
         constexpr std::size_t RAW_STREAM_WINDOW_BYTES = 16ull * 1024ull * 1024ull;
         constexpr std::uint64_t RAW_STREAM_MAX_MANIFEST_BYTES = 32ull * 1024ull * 1024ull;
@@ -286,12 +287,13 @@ namespace lfs::io::project {
         }
 
         lfs::Error splat_error(const lfs::ErrorCode code, std::string message,
-                               std::string detail) {
+                               std::string detail,
+                               const lfs::Retryability retryability) {
             return lfs::make_error(lfs::ErrorInit{
                 .code = code,
                 .domain = lfs::ErrorDomain::IO,
                 .severity = lfs::Severity::Error,
-                .retryability = lfs::Retryability::NotRetryable,
+                .retryability = retryability,
                 .operation_id = {},
                 .user_message = std::move(message),
                 .detail = std::move(detail),
@@ -432,7 +434,8 @@ namespace lfs::io::project {
     SplatChapterPayload::start_async_capture(
         const lfs::core::SplatData& model,
         const SplatSourceKind source_kind,
-        const bool is_training_model) {
+        const bool is_training_model,
+        const SplatCaptureFallback fallback) {
         if (is_training_model) {
             return splat_error(
                 lfs::ErrorCode::FailedPrecondition,
@@ -472,7 +475,7 @@ namespace lfs::io::project {
             }
             device_bytes += tensor->bytes();
         }
-        if (!has_gpu_tensor) {
+        if (device_bytes == 0) {
             return std::unique_ptr<AsyncSplatCapture>{};
         }
 
@@ -486,6 +489,14 @@ namespace lfs::io::project {
                                       ? !*splat_capture_no_headroom_override
                                       : lfs::core::MemoryPressureCoordinator::instance().preflight(plan, domain).ok;
         if (!has_headroom) {
+            if (fallback == SplatCaptureFallback::Defer) {
+                return splat_error(
+                    lfs::ErrorCode::ResourceExhausted,
+                    "The splat snapshot could not be allocated.",
+                    std::format("snapshot requires {} device bytes; insufficient VRAM headroom",
+                                device_bytes),
+                    lfs::Retryability::RetryableWithBackoff);
+            }
             LOG_WARN(
                 "SPLT async capture falling back to synchronous capture: "
                 "snapshot requires {} device bytes and VRAM headroom is unavailable",
@@ -517,6 +528,12 @@ namespace lfs::io::project {
                 splat_capture_stream_hook();
             cloned = model.clone_async(impl->stream ? impl->stream->get() : nullptr);
         } catch (const std::bad_alloc& error) {
+            if (fallback == SplatCaptureFallback::Defer) {
+                return splat_error(
+                    lfs::ErrorCode::ResourceExhausted,
+                    "The splat snapshot could not be allocated.", error.what(),
+                    lfs::Retryability::RetryableWithBackoff);
+            }
             LOG_WARN(
                 "SPLT async capture falling back to synchronous capture: "
                 "snapshot allocation failed after preflight: {}",

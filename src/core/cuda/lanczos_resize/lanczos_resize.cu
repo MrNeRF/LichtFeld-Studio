@@ -11,6 +11,7 @@
 #include "core/gpu_backend_fwd.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_memory_guard.hpp"
+#include "core/tensor_cuda_interop.hpp"
 #include "core/tensor_image.hpp"
 #include "lanczos_resize.hpp"
 
@@ -394,12 +395,16 @@ namespace lfs::core {
     }
 
     template <int Channels>
-    Tensor resize_prior(const Tensor& input, int output_h, int output_w, cudaStream_t stream) {
+    Tensor resize_prior(const Tensor& input, int output_h, int output_w, cudaStream_t stream,
+                        const bool synchronize) {
         if (!input.is_valid() || input.device() != Device::CUDA || input.dtype() != DataType::Float32 ||
             !input.is_contiguous() || output_h <= 0 || output_w <= 0 ||
             input.ndim() != (Channels == 1 ? 2 : 3) || (Channels == 3 && input.size(0) != 3)) {
             throw std::invalid_argument("Prior resize requires contiguous CUDA float depth [H,W] or normals [3,H,W]");
         }
+        // Orders the input's stream before the kernel and records the input's use on `stream`, so the
+        // caller may drop the input as soon as this returns.
+        prepare_inputs_for_stream({&input}, stream);
         const int h = static_cast<int>(input.size(input.ndim() - 2));
         const int w = static_cast<int>(input.size(input.ndim() - 1));
         const auto shape = Channels == 1
@@ -412,7 +417,8 @@ namespace lfs::core {
         resize_prior_kernel<Channels><<<grid, block, 0, stream>>>(input.ptr<float>(), output.ptr<float>(), w, h, output_w, output_h);
         LFS_CUDA_CHECK_MSG(cudaGetLastError(), "Prior resample kernel launch");
         // Match the existing resize helpers' lifetime/stream completion contract.
-        LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream), "Prior resample completion");
+        if (synchronize)
+            LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream), "Prior resample completion");
         return output;
     }
 
@@ -422,7 +428,7 @@ namespace lfs::core {
         }
         const GpuBackendScope backend_scope(GpuBackend::CUDA);
 
-        return resize_prior<1>(input, output_h, output_w, stream);
+        return resize_prior<1>(input, output_h, output_w, stream, true);
     }
 
     Tensor resize_normal_prior(const Tensor& input, int output_h, int output_w, cudaStream_t stream) {
@@ -431,7 +437,13 @@ namespace lfs::core {
         }
         const GpuBackendScope backend_scope(GpuBackend::CUDA);
 
-        return resize_prior<3>(input, output_h, output_w, stream);
+        return resize_prior<3>(input, output_h, output_w, stream, true);
+    }
+
+    Tensor resize_prior_async(const Tensor& input, int height, int width, bool normal) {
+        const auto stream = getCurrentCUDAStream();
+        return normal ? resize_prior<3>(input, height, width, stream, false)
+                      : resize_prior<1>(input, height, width, stream, false);
     }
 
 } // namespace lfs::core

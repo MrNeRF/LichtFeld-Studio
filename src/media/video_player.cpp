@@ -963,12 +963,14 @@ namespace lfs::io {
                     logged_hdr_rgba_preview_path_ = true;
                 }
             } else {
-                // FAST_BILINEAR biases neutral limited-range NV12 on the unscaled
-                // conversion path. Use the regular bilinear converter.
+                // Preserve conversion precision at native size without slowing capped previews.
+                const int sws_flags = src_width_ == width_ && src_height_ == height_
+                                          ? SWS_BILINEAR
+                                          : SWS_FAST_BILINEAR;
                 sws_ctx_ = sws_getCachedContext(
                     sws_ctx_, src_width_, src_height_,
                     static_cast<AVPixelFormat>(src_frame->format), width_, height_,
-                    AV_PIX_FMT_RGB24, SWS_BILINEAR, nullptr, nullptr, nullptr);
+                    AV_PIX_FMT_RGB24, sws_flags, nullptr, nullptr, nullptr);
                 if (!sws_ctx_) {
                     setError("Failed to create video color conversion context");
                     return false;

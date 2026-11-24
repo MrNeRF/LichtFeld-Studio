@@ -534,9 +534,9 @@ def set_camera_training_enabled(name: str, enabled: bool) -> None:
 def remove_disabled_cameras(camera_group_id: int) -> int:
     """Remove disabled direct camera children and return their count"""
 
-def camera_selection_start(operation: str, camera_group_id: int, percentage: float = 25.0, every_n: int = 2, overlap: float = 65.0, coverage: float = 40.0, cropbox_id: int = 0) -> dict:
+def camera_selection_start(operation: str, camera_group_id: int, percentage: float = 25.0, every_n: int = 2, overlap: float = 65.0, coverage: float = 40.0, cropbox_id: int = 0, sharpness_threshold: float = 10.0) -> dict:
     """
-    Start a cancellable camera-group selection job. Returns its runtime id and opaque handle; no training selection changes until it finishes.
+    Start a cancellable camera-group selection job. Blurry selects enabled cameras visually without changing training flags; other operations update training selection on completion.
     """
 
 def camera_selection_status() -> dict:
@@ -664,6 +664,9 @@ def set_vr_active(active: bool) -> None:
     """
     Enter or exit VR viewing; raises RuntimeError with the VR status when VR is unavailable
     """
+
+def detect_vr() -> None:
+    """Look again for a VR headset that was connected after startup"""
 
 def recenter_vr() -> None:
     """Put the VR view back at the desktop camera"""
@@ -2769,6 +2772,15 @@ class OptimizationParams:
 
     @pose_opt.setter
     def pose_opt(self, arg: bool, /) -> None: ...
+
+    @property
+    def calibration_correction(self) -> bool:
+        """
+        Fits a small, smooth warp to every training photo that absorbs what the calibration missed (rolling shutter, stabilization, focus breathing, a slightly wrong pose), so photos that disagree by a pixel no longer blur the scene. Starts at step 1000, scaled with the step count; evaluation scores each held-out view as rendered and, in addition, after aligning the render to the photo.
+        """
+
+    @calibration_correction.setter
+    def calibration_correction(self, arg: bool, /) -> None: ...
 
     @property
     def ppisp(self) -> bool:

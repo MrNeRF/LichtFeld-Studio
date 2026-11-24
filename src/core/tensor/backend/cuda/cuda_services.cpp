@@ -919,7 +919,7 @@ namespace lfs::core::internal {
                 VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
                 properties.pNext = &identity;
                 vkGetPhysicalDeviceProperties2(static_cast<VkPhysicalDevice>(target_.physical_device), &properties);
-                if (!cuda || !std::equal(cuda->uuid.begin(), cuda->uuid.end(), identity.deviceUUID))
+                if (!cuda || !lfs::core::gpu_device_matches_uuid(*cuda, identity.deviceUUID))
                     throw TensorError("Vulkan consumer and CUDA storage must use the same physical device");
                 imported = std::make_shared<CudaImportedBuffer>();
                 imported->target = target_;

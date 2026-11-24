@@ -25,6 +25,7 @@
 #include "visualizer/gui_capabilities.hpp"
 #include <algorithm>
 
+#include "core/gpu_device_info.hpp"
 #include <array>
 #include <chrono>
 #include <cstdlib>
@@ -192,6 +193,24 @@ TEST(VideoExportUtilsTest, CaptureSnapshotUsesRenderableModelAndTransforms) {
 
     ASSERT_TRUE(snapshot.transform_indices);
     EXPECT_EQ(snapshot.transform_indices->cpu().to_vector_int(), (std::vector<int>{0, 1}));
+}
+
+TEST(VideoExportUtilsTest, CudaDeviceIdentityRejectsMismatchAndRecovers) {
+    int device = 0;
+    if (cudaGetDevice(&device) != cudaSuccess)
+        GTEST_SKIP() << "CUDA device required";
+    cudaDeviceProp properties{};
+    ASSERT_EQ(cudaGetDeviceProperties(&properties, device), cudaSuccess);
+    std::array<std::uint8_t, 16> uuid{};
+    std::copy_n(properties.uuid.bytes, uuid.size(), uuid.begin());
+    auto other_uuid = uuid;
+    other_uuid[0] ^= 1;
+
+    const auto info = lfs::core::gpu_backend_device_info(lfs::core::GpuBackend::CUDA, device);
+    ASSERT_TRUE(info);
+    EXPECT_FALSE(lfs::core::gpu_device_matches_uuid(*info, other_uuid));
+    EXPECT_FALSE(lfs::core::gpu_device_matches_uuid(*info, other_uuid));
+    EXPECT_TRUE(lfs::core::gpu_device_matches_uuid(*info, uuid));
 }
 
 #if LFS_GRAPHICS_VULKAN

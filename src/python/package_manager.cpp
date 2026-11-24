@@ -390,7 +390,7 @@ namespace lfs::python {
         const auto embedded_python = lfs::core::getEmbeddedPython();
         if (embedded_python.empty()) {
             LOG_ERROR("Embedded Python not found (exe_dir={})",
-                      lfs::core::path_to_utf8(lfs::core::getExecutableDir()));
+                      lfs::core::path_to_utf8(lfs::core::getRuntimeDir()));
             return false;
         }
 

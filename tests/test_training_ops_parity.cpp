@@ -36,8 +36,10 @@
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "optimizer/adam_optimizer.hpp"
+#include "training/components/calibration_correction.hpp"
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
+#include "training_photo_test.hpp"
 
 #include "core/gpu_device_runtime.hpp"
 #if LFS_HAS_CUDA
@@ -2389,7 +2391,7 @@ namespace {
                      capture(lfs::training::Family::Photometric, GpuBackend::Vulkan), true);
     }
 
-    Capture capture_fast_nonzero(GpuBackend backend, int degree, bool mip, bool symmetric = false, bool old_momentum = false, bool quantized = false, DensificationType densify = DensificationType::MRNF, bool september = false, float disabled_dc_sh_weight = -1.f, bool disable_sh_rest = false) {
+    Capture capture_fast_nonzero(GpuBackend backend, int degree, bool mip, bool symmetric = false, bool old_momentum = false, bool quantized = false, DensificationType densify = DensificationType::MRNF, bool september = false, float disabled_dc_sh_weight = -1.f, bool disable_sh_rest = false, bool rendered_only = false) {
         const lfs::test::DefaultGpuBackendForTesting scope(backend);
         Capture out;
         if (!scope.switched()) {
@@ -2397,21 +2399,23 @@ namespace {
             return out;
         }
         const auto* table = lfs::training::training_ops(backend).fast;
-        auto camera = make_camera(35, 27);
-        auto splat = make_fast_splat(257, degree);
+        const size_t n = rendered_only ? 1051 : 257;
+        const size_t width = rendered_only ? 71 : 35, height = rendered_only ? 53 : 27;
+        auto camera = make_camera(width, height);
+        auto splat = make_fast_splat(n, degree);
         if (quantized)
             (void)lfs::training::sh_value::apply_shN_value_quant(splat);
         if (!symmetric) {
             auto means = splat.means().cpu();
-            for (size_t i = 0; i < 257; ++i) {
+            for (size_t i = 0; i < n; ++i) {
                 means.ptr<float>()[i * 3] += 0.013f + 0.0007f * float(i % 3);
                 means.ptr<float>()[i * 3 + 1] += 0.027f + 0.0011f * float(i % 5);
                 means.ptr<float>()[i * 3 + 2] += 0.021f * float(i % 7);
             }
             splat.means() = means.gpu();
         }
-        std::vector<float> scales(257 * 3), rotations(257 * 4);
-        for (size_t i = 0; i < 257; ++i) {
+        std::vector<float> scales(n * 3), rotations(n * 4);
+        for (size_t i = 0; i < n; ++i) {
             for (size_t c = 0; c < 3; ++c)
                 scales[i * 3 + c] = -2.f - 0.15f * float((i + c) % 5);
             rotations[i * 4] = 1.f;
@@ -2419,8 +2423,16 @@ namespace {
             rotations[i * 4 + 2] = 0.04f * float(int(i % 5) - 2);
             rotations[i * 4 + 3] = 0.05f * float(int(i % 3) - 1);
         }
-        splat.scaling_raw() = Tensor::from_vector(scales, {257, 3}, Device::GPU);
-        splat.rotation_raw() = Tensor::from_vector(rotations, {257, 4}, Device::GPU);
+        if (rendered_only) {
+            std::mt19937 rng(38091);
+            std::uniform_real_distribution<float> jitter(-.012f, .012f);
+            for (float& v : scales)
+                v += jitter(rng);
+            for (float& v : rotations)
+                v += jitter(rng);
+        }
+        splat.scaling_raw() = Tensor::from_vector(scales, {n, 3}, Device::GPU);
+        splat.rotation_raw() = Tensor::from_vector(rotations, {n, 4}, Device::GPU);
         if (september) {
             auto colors = splat.sh0().cpu();
             for (size_t i = 0; i < colors.numel(); ++i)
@@ -2428,10 +2440,10 @@ namespace {
             splat.sh0() = colors.gpu();
         }
         auto background = Tensor::from_vector({0.12f, 0.07f, 0.18f}, {3}, Device::GPU);
-        auto error = pattern({27, 35}, 0.1f, 17);
-        auto edges = pattern({27, 35}, 0.05f, 23);
-        auto scores = Tensor::zeros({257}, Device::GPU);
-        auto densification = Tensor::zeros({2, 257}, Device::GPU);
+        auto error = pattern({height, width}, 0.1f, 17);
+        auto edges = pattern({height, width}, 0.05f, 23);
+        auto scores = Tensor::zeros({n}, Device::GPU);
+        auto densification = Tensor::zeros({2, n}, Device::GPU);
         Tensor none;
         lfs::training::AdamConfig config{.lr = 1e-3f, .beta1 = 0.9, .beta2 = 0.999, .eps = 1e-15};
         lfs::training::AdamOptimizer optimizer(splat, config);
@@ -2483,6 +2495,12 @@ namespace {
                 .mean_step_median_extent = prepared.mean_step_median_extent,
                 .mean_step_far_mask = prepared.mean_step_far_mask,
             };
+            if (rendered_only) {
+                adam.reg_rendered_only = true;
+                adam.blend_peak = Tensor::zeros({n}, Device::GPU);
+                adam.impact_sum = Tensor::zeros({n}, Device::GPU);
+                adam.impact_peak = Tensor::zeros({n}, Device::GPU);
+            }
             adam.scale_reg_weight = 0.007f;
             adam.flatten_reg_weight = 0.003f;
             adam.opacity_reg_weight = 0.005f;
@@ -2537,6 +2555,13 @@ namespace {
                 }
             table->backward(saved, {grad, grad_alpha, grad_depth, grad_normal}, densification,
                             error, edges, scores, adam, densify);
+            if (rendered_only) {
+                keep(out.snapshot, backend, prefix + ".blend_peak", adam.blend_peak, kRaster);
+                keep(out.snapshot, backend, prefix + ".removal_sum", adam.impact_sum, kRaster);
+                keep(out.snapshot, backend, prefix + ".removal_peak", adam.impact_peak, kRaster);
+                EXPECT_GT(adam.impact_sum.max().item(), 0.f);
+            }
+
             if (disabled_dc_sh_weight >= 0.f || disable_sh_rest) {
                 size_t index = 0;
                 for (size_t i = 0; i < adam.groups.size(); ++i) {
@@ -2605,6 +2630,270 @@ namespace {
                              std::format("september_{}_degree{}_q16{}_weight{}.golden", backend_name(backend), degree, quantized, disabled_dc_sh_weight),
                          out);
         return out;
+    }
+
+    // Retain the actual maximum at full float precision so performance runs and
+    // numerical changes can be examined independently of the pass tolerance.
+    void compare_training_changes(const Capture& actual, const Capture& expected) {
+        expect_match(actual, expected, false);
+        ASSERT_EQ(actual.snapshot.fields.size(), expected.snapshot.fields.size());
+        for (size_t i = 0; i < actual.snapshot.fields.size(); ++i) {
+            const auto& a = actual.snapshot.fields[i];
+            const auto& b = expected.snapshot.fields[i];
+            ASSERT_EQ(a.name, b.name);
+            ASSERT_EQ(a.values.size(), b.values.size());
+            double difference = 0;
+            size_t worst = 0;
+            for (size_t j = 0; j < a.values.size(); ++j) {
+                const double delta = std::abs(double(a.values[j]) - b.values[j]);
+                if (delta > difference) {
+                    difference = delta;
+                    worst = j;
+                }
+            }
+            if (a.kind == Kind::Exact && a.bytes != b.bytes) {
+                std::cout << "[parity] " << a.name << " exact mismatch\n";
+            } else if (a.kind != Kind::Missing) {
+                std::cout << std::format("[parity] {} {:.9g} index={}\n", a.name, difference, worst);
+            }
+        }
+    }
+
+    Capture capture_growth_and_retire(GpuBackend backend) {
+        lfs::test::DefaultGpuBackendForTesting scope(backend);
+        Capture out;
+        constexpr size_t n = 2063;
+        const auto& table = lfs::training::training_ops(backend);
+        const auto& growth = *table.mrnf->growth;
+        std::mt19937 rng(783);
+        const auto random = [&](std::initializer_list<size_t> dims, float lo, float hi) {
+            lfs::core::TensorShape shape(dims);
+            std::vector<float> data(shape.elements());
+            std::uniform_real_distribution<float> dist(lo, hi);
+            for (auto& v : data)
+                v = dist(rng);
+            return Tensor::from_vector(data, shape, Device::GPU);
+        };
+        auto errors = random({n}, 0, .6f), info = random({4, n}, -2, 3), views = random({n}, 0, 2);
+        auto record = [&](const char* name, const Tensor& value, Tol tolerance) { keep(out.snapshot, backend, name, value, tolerance); };
+        // Elementwise powers allow a few float ulps. Coverage, reset rows and counts are exact.
+        growth.fold_view(errors, info, views);
+        record("growth.folded", errors, {2e-6, 2e-6});
+        record("growth.info", info, kExact);
+        record("growth.views", views, kExact);
+        growth.mean_view(errors, info);
+        record("growth.mean", errors, {2e-6, 2e-6});
+        growth.fold_need(errors, .3f, 2.5f, .7f);
+        record("growth.need", errors, {3e-6, 3e-6});
+        auto selected = Tensor::empty({127}, Device::GPU, DataType::Int64);
+        lfs::training::GumbelTopKScratch scratch;
+        const auto weights = random({n}, .01f, 2.f);
+        table.mrnf->gumbel(&scratch, weights, selected, {.seed = 6421, .compact_sparse = true});
+        record("growth.selected", selected, kExact);
+        auto step = random({n}, -.04f, .1f), peak = random({n}, 0, .04f), renders = random({n}, 27, 33);
+        growth.blend_peak(step, peak, renders, .975f);
+        record("retire.step", step, kExact);
+        record("retire.peak", peak, {1e-7, 1e-7});
+        record("retire.count", renders, kExact);
+        auto logits = random({n}, -8, 6), scales = random({n, 3}, -5, 1);
+        auto factor = Tensor::empty({n}, Device::GPU), key = Tensor::empty_like(factor);
+        growth.covered_factor(peak, renders, logits, scales, 30, .16f, -2, factor);
+        record("retire.factor", factor, {2e-6, 2e-6});
+        growth.retire_key(peak, logits, .01f, key);
+        record("retire.key", key, {2e-6, 2e-6});
+        auto frozen = bool_mask(n, 5);
+        table.mrnf->decay(logits, scales, frozen, {.opacity_decay = .018f, .scale_decay = .006f, .train_t = .4f, .rendered_count = renders, .reach = factor});
+        record("growth.decay.opacity", logits, {3e-6, 2e-6});
+        record("growth.decay.scale", scales, {1e-6, 1e-6});
+        std::vector<float> tied(n);
+        for (auto& v : tied)
+            v = float(int(rng() % 19) - 9);
+        tied[11] = -0.f;
+        tied[12] = 0.f;
+        tied[13] = std::numeric_limits<float>::infinity();
+        tied[14] = std::numeric_limits<float>::quiet_NaN();
+        tied[15] = -std::numeric_limits<float>::infinity();
+        auto scores = Tensor::from_vector(tied, {n}, Device::GPU);
+        auto eligible = bool_mask(n, 3);
+        auto rows = Tensor::empty({n}, Device::GPU, DataType::Int64);
+        growth.lowest_rows(scores, eligible, rows);
+        record("retire.stable_rows", rows, kExact);
+        auto means = random({n, 3}, -2, 2), rotation = random({n, 4}, -1, 1), sh = random({n, 1, 3}, -2, 2);
+        auto child_means = Tensor::empty_like(means), child_rot = Tensor::empty_like(rotation);
+        auto child_scales = Tensor::empty_like(scales), child_sh = Tensor::empty_like(sh), child_logits = Tensor::empty_like(logits);
+        auto parents = Tensor::arange(0, int(n), 1, Device::GPU).to(DataType::Int64);
+        table.refine->conserving_split({means, rotation, scales, sh, logits}, {child_means, child_rot, child_scales, child_sh, child_logits}, parents, .8f);
+        record("split.parent.position", means, {3e-6, 2e-6});
+        record("split.child.position", child_means, {3e-6, 2e-6});
+        record("split.parent.opacity", logits, {3e-6, 2e-6});
+        record("split.child.opacity", child_logits, {3e-6, 2e-6});
+        record("split.parent.scale", scales, {3e-6, 2e-6});
+        record("split.child.scale", child_scales, {3e-6, 2e-6});
+        record("split.rotation", child_rot, kExact);
+        record("split.sh", child_sh, kExact);
+        return out;
+    }
+
+    Capture capture_calibration_and_blur(GpuBackend backend) {
+        lfs::test::DefaultGpuBackendForTesting scope(backend);
+        Capture out;
+        constexpr size_t h = 131, w = 273;
+        std::mt19937 rng(4711);
+        std::uniform_real_distribution<float> unit(.02f, .98f);
+        const auto random = [&](const lfs::core::TensorShape& shape) {
+            std::vector<float> data(shape.elements());
+            for (auto& v : data)
+                v = unit(rng);
+            return Tensor::from_vector(data, shape, Device::GPU);
+        };
+        auto record = [&](std::string name, const Tensor& x, Tol tol) { keep(out.snapshot, backend, name, x, tol); };
+        auto photo = random({3, h, w}), render = random({3, h, w}), raw = random({3, h, w});
+        auto weight = random({h, w});
+        auto byte_weight = (weight > .35f).to(DataType::UInt8);
+        lfs::test::TrainingPhotoTestWorkspace workspace;
+        for (bool decoupled : {false, true})
+            for (bool masked : {false, true}) {
+                const auto result = workspace.evaluate(render, decoupled ? raw : Tensor{}, photo, masked ? weight : Tensor{}, .22f, .8215f);
+                const auto prefix = std::format("blur.{}.{}", decoupled, masked);
+                // SSIM stores half partial derivatives. The scalar is a float reduction over the whole image.
+                record(prefix + ".loss", result.loss, {1e-5, 1e-5});
+                record(prefix + ".image_gradient", result.grad_corrected, {2e-7, 1e-4});
+                if (decoupled)
+                    record(prefix + ".raw_gradient", result.grad_raw, {2e-7, 1e-4});
+            }
+        for (bool panorama : {false, true}) {
+            lfs::training::CalibrationCorrection fit(2);
+            fit.field().copy_from((random(fit.field().shape()) - .5f) * .9f);
+            Tensor mask = byte_weight.clone(), structure = weight.clone(), edges = weight.clone();
+            auto alpha = weight.clone(), background = Tensor::full({3}, .18f, Device::GPU), stable = Tensor::zeros_like(render);
+            const lfs::training::CalibrationCorrection::Composite composite{&alpha, &background, &background, &stable};
+            const auto prefix = panorama ? std::string("calibration.wrapped") : std::string("calibration.planar");
+            auto target = fit.warp(1, 270, 260, 0, 0, photo, render, mask, structure, edges, true, &composite, panorama);
+            record(prefix + ".photo", target, {2e-5, 1e-5});
+            record(prefix + ".stable", stable, {2e-5, 1e-5});
+            record(prefix + ".mask", mask, kExact);
+            record(prefix + ".structure", structure, {2e-5, 1e-5});
+            record(prefix + ".edge", edges, {2e-5, 1e-5});
+            auto gradient = render - target;
+            fit.clear_outside(gradient);
+            record(prefix + ".gradient", gradient, {2e-5, 1e-5});
+            fit.accumulate(render, gradient, weight, 3 * h * w, 5);
+            auto normal = fit.follow(raw, true), depth = fit.follow(weight, false);
+            // At width 273 a float sample coordinate can differ by 2^-15 pixels.
+            // Unit-length normalization amplifies interpolation error near the minimum valid norm.
+            record(prefix + ".normal", normal, {4e-5, 1e-5});
+            record(prefix + ".depth", depth, {2e-5, 1e-5});
+            fit.update();
+            // Accumulated normal equations and the small linear solve can amplify float summation differences.
+            record(prefix + ".solver", fit.field(), {2e-4, 1e-4});
+        }
+        // Exercise partial tiles independently of the solver. A second, excluded
+        // tile must accumulate onto the same full-photo grid without changing it.
+        const auto& ops = *lfs::training::training_ops(backend).calibration;
+        auto field = Tensor::zeros({1, 9, 9, 2}, Device::GPU);
+        auto partials = Tensor::empty({64, 1, 21}, Device::GPU);
+        auto original = random({3, 47, 65});
+        Tensor empty;
+        for (int tile_index = 0; tile_index < 2; ++tile_index) {
+            const lfs::gpu_ops::CalibrationTile tile = tile_index == 0
+                                                           ? lfs::gpu_ops::CalibrationTile{65, 47, 11, 9, 31, 27, 9, .8f, 1.2f, 0}
+                                                           : lfs::gpu_ops::CalibrationTile{65, 47, 45, 0, 17, 9, 9, .8f, 1.2f, 0};
+            const lfs::core::TensorShape shape{3, size_t(tile.h), size_t(tile.w)};
+            auto rendered = random(shape), sampled = Tensor::empty_like(rendered);
+            auto gradient = random(shape) * .00002f;
+            auto weights = random({size_t(tile.h), size_t(tile.w)});
+            if (tile_index == 0)
+                weights = weights * (weights > .2f).to(DataType::Float32);
+            else
+                weights.zero_();
+            const auto prefix = std::format("calibration.tile.{}", tile_index);
+            ops.sample(tile, field, 0, original, rendered, sampled, {empty, empty, empty, empty, empty, empty, nullptr, nullptr, nullptr, nullptr});
+            record(prefix + ".samples", sampled, kExact); // integer source coordinates
+            ops.accumulate(tile, field, 0, sampled, rendered, gradient, weights, float(rendered.numel()), 5, 1, tile_index == 0, partials);
+            // Each partial sums at most one cell; FMA rounding accumulates across its pixels.
+            record(prefix + ".partials", partials, {2e-6, 2e-5});
+            if (tile_index == 1) {
+                ops.update(tile, field, 0, partials, 1, .5f);
+                record(prefix + ".updated", field, {3e-6, 2e-5});
+            }
+        }
+        return out;
+    }
+
+    Capture capture_grouped_pose(GpuBackend backend) {
+        lfs::test::DefaultGpuBackendForTesting scope(backend);
+        const auto& ops = *lfs::training::training_ops(backend).pose;
+        constexpr size_t views = 1051, rows = 73;
+        std::mt19937 random(7812);
+        std::uniform_real_distribution<float> sample(-1.f, 1.f);
+        std::vector<float> starts(rows * 16), rotations(views * 9), offsets(rows * 6);
+        for (size_t row = 0; row < rows; ++row) {
+            for (int a = 0; a < 4; ++a)
+                starts[row * 16 + 5 * a] = 1;
+            for (int a = 0; a < 3; ++a)
+                starts[row * 16 + 4 * a + 3] = sample(random);
+        }
+        for (size_t draw = 0; draw < views; ++draw) {
+            const float angle = draw == 0 ? 0.f : sample(random);
+            float* m = rotations.data() + draw * 9;
+            m[0] = m[4] = std::cos(angle);
+            m[1] = -std::sin(angle);
+            m[3] = -m[1];
+            m[8] = 1;
+        }
+        for (auto& off : offsets)
+            off = .05f * sample(random);
+        lfs::gpu_ops::PoseTensors t{
+            Tensor::from_vector(starts, {rows, 16}, Device::GPU),
+            Tensor::from_vector(rotations, {views, 9}, Device::GPU),
+            Tensor::from_vector(offsets, {rows, 6}, Device::GPU),
+            Tensor::zeros({rows, 6}, Device::GPU), Tensor::zeros({rows, 6}, Device::GPU),
+            Tensor::zeros({rows}, Device::GPU), Tensor::empty({views, 4, 4}, Device::GPU), Tensor::empty({3}, Device::GPU)};
+        Capture result;
+        for (int iteration = 0; iteration < 3; ++iteration) {
+            std::vector<float> matrix(16), centre(3);
+            for (auto& x : matrix)
+                x = sample(random);
+            for (auto& x : centre)
+                x = sample(random);
+            if (iteration == 2)
+                matrix[0] = std::numeric_limits<float>::quiet_NaN();
+            ops.step(t, Tensor::from_vector(matrix, {16}, Device::GPU), Tensor::from_vector(centre, {3}, Device::GPU),
+                     {17, iteration == 0 ? 0 : 600, 0, int(views), .001f, .0001f});
+            const auto prefix = std::format("pose.{}.", iteration);
+            // Trigonometry and the six-component Adam update may differ by a few float ulps.
+            for (const auto& [name, value] : {std::pair{"matrix", &t.poses}, {"centre", &t.centre}, {"offset", &t.offsets}, {"moment1", &t.moment1}, {"moment2", &t.moment2}})
+                keep(result.snapshot, backend, prefix + name, *value, {3e-6, 2e-5});
+            keep(result.snapshot, backend, prefix + "steps", t.steps, kExact);
+        }
+        return result;
+    }
+
+    TEST(TrainingOpsParity, GroupedPoseGradientAndAdamWithWideDrawTable) {
+        if (!lfs::core::gpu_backend_available(GpuBackend::CUDA) || !lfs::core::gpu_backend_available(GpuBackend::Vulkan))
+            GTEST_SKIP();
+        compare_training_changes(capture_grouped_pose(GpuBackend::Vulkan), capture_grouped_pose(GpuBackend::CUDA));
+    }
+
+    TEST(TrainingOpsParity, GrowthRetirementAndConservingSplit) {
+        if (!lfs::core::gpu_backend_available(GpuBackend::CUDA) || !lfs::core::gpu_backend_available(GpuBackend::Vulkan))
+            GTEST_SKIP();
+        compare_training_changes(capture_growth_and_retire(GpuBackend::Vulkan), capture_growth_and_retire(GpuBackend::CUDA));
+    }
+    TEST(TrainingOpsParity, CalibrationAndBlurredLoss) {
+        if (!lfs::core::gpu_backend_available(GpuBackend::CUDA) || !lfs::core::gpu_backend_available(GpuBackend::Vulkan))
+            GTEST_SKIP();
+        compare_training_changes(capture_calibration_and_blur(GpuBackend::Vulkan), capture_calibration_and_blur(GpuBackend::CUDA));
+    }
+    TEST(TrainingOpsFastParity, RenderedOnlyAdamAndPerSplatBlendPeak) {
+        if (!lfs::core::gpu_backend_available(GpuBackend::CUDA) || !lfs::core::gpu_backend_available(GpuBackend::Vulkan))
+            GTEST_SKIP();
+        for (bool mip : {false, true}) {
+            const auto run = [&](GpuBackend backend) {
+                return capture_fast_nonzero(backend, 3, mip, false, true, false, DensificationType::MRNF, true, -1, false, true);
+            };
+            compare_training_changes(run(GpuBackend::Vulkan), run(GpuBackend::CUDA));
+        }
     }
 
     TEST(TrainingOpsFastParity, NonzeroImageGradientAndFusedAdamVulkan) {
