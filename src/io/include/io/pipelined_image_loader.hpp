@@ -673,6 +673,7 @@ namespace lfs::io {
         size_t adaptive_low_recommendation_windows_ = 0;
         size_t adaptive_growth_cooldown_windows_ = 0;
         size_t adaptive_occupancy_ = 0;
+        std::atomic<size_t> host_image_decodes_{0};
         std::atomic<size_t> in_flight_{0};
         std::atomic<size_t> output_image_bytes_{0};
         std::atomic<size_t> output_mask_bytes_{0};

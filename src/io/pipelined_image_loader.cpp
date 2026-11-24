@@ -547,7 +547,12 @@ namespace lfs::io {
             adaptive_max_target_);
         size_t next = adaptive_target_;
         if (window_dl_wait_ms > 0.05) {
-            next = std::min(adaptive_max_target_, std::max(next + 1, recommended));
+            // CUDA grows by one per waiting window. Host decoding measures its decode time per image, and more
+            // samples in flight than that time asks for only hold more decoded images in memory: a wait sets
+            // its target to the recommendation.
+            next = config_.backend == lfs::core::GpuBackend::CUDA
+                       ? std::min(adaptive_max_target_, std::max(next + 1, recommended))
+                       : recommended;
             adaptive_low_recommendation_windows_ = 0;
             adaptive_growth_cooldown_windows_ = 4;
         } else {
