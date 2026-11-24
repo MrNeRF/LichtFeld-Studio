@@ -294,7 +294,12 @@ namespace lfs::vis::tools {
                                                                         : "align.pair_start_either";
                 drawPointPickHud(*overlay, projection, LOC(hint),
                                  LOCF("align.pair_progress", count / 2),
-                                 services().alignPointPick().getStatusMessage());
+                                 services().alignPointPick().getStatusMessage(),
+                                 count ? LOCF("align.pair_edit_help",
+                                              pointPickShortcut(input::Action::DELETE_SELECTED),
+                                              pointPickShortcut(input::Action::UNDO),
+                                              pointPickShortcut(input::Action::CANCEL_POLYGON))
+                                       : std::string{});
             } else {
                 const auto projection = pointPickOverlayFrame(
                                             *tool_context_, alignment->composite.value_or(SplitViewPanelId::Right))

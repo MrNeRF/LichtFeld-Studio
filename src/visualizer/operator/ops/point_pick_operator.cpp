@@ -360,6 +360,7 @@ namespace lfs::vis::op {
     }
 
     void PointPickOperator::syncPickedPointsToServices() {
+        state_.setCanUndoPointEdit(!edits_.empty());
         state_.setPendingPairOnRight(pending_pair_on_right_);
         state_.setPairColorSlots(pair_color_slots_);
         state_.setPickedPoints(picked_points_);
@@ -415,6 +416,7 @@ namespace lfs::vis::op {
         press_point_index_.reset();
         drag_active_ = false;
         state_.clearPickedPoints();
+        state_.setCanUndoPointEdit(!edits_.empty());
         markOverlayDirty();
     }
 

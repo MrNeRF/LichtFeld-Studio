@@ -3225,6 +3225,8 @@
     "training_session_not_ready": "The training session is not ready to resume."
   },
   "align": {
+    "pair_edit_help": "Drag a marker to move it. {0}: delete the selected pair. {1}: undo the last edit. {2}: exit without applying.",
+    "history_unavailable": "Finish model alignment before changing scene history.",
     "apply_preview": "Apply alignment and exit.",
     "swap_unavailable": "Swap roles before picking points. The new moving model must be editable.",
     "unlink_cameras": "Navigate each view independently; keep the current cameras.",

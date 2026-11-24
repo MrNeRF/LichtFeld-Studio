@@ -3213,6 +3213,8 @@
     "training_session_not_ready": "De trainingssessie is nog niet klaar om te hervatten."
   },
   "align": {
+    "pair_edit_help": "Sleep een punt om het te verplaatsen. {0}: geselecteerd paar verwijderen. {1}: laatste wijziging ongedaan maken. {2}: afsluiten zonder toepassen.",
+    "history_unavailable": "Beëindig de modeluitlijning voordat u de scènegeschiedenis wijzigt.",
     "apply_preview": "Pas de uitlijning toe en sluit af.",
     "swap_unavailable": "Wissel de rollen voordat je punten kiest. Het nieuwe te verplaatsen model moet bewerkbaar zijn.",
     "unlink_cameras": "Navigeer onafhankelijk per weergave; behoud de huidige camera’s.",

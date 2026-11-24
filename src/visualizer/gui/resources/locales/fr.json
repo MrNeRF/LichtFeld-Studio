@@ -3213,6 +3213,8 @@
     "training_session_not_ready": "La session d’entraînement n’est pas prête à reprendre."
   },
   "align": {
+    "pair_edit_help": "Faites glisser un point pour le déplacer. {0} : supprimer la paire sélectionnée. {1} : annuler la dernière modification. {2} : quitter sans appliquer.",
+    "history_unavailable": "Terminez l’alignement des modèles avant de modifier l’historique de la scène.",
     "apply_preview": "Appliquer l’alignement et quitter.",
     "swap_unavailable": "Inverser les rôles avant de choisir des points. Le nouveau modèle mobile doit être modifiable.",
     "unlink_cameras": "Naviguer indépendamment dans chaque vue en conservant les caméras actuelles.",

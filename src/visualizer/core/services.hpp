@@ -54,11 +54,14 @@ namespace lfs::vis {
             notify_();
         }
         [[nodiscard]] const std::vector<glm::vec3>& getPickedPoints() const { return picked_points_; }
+        [[nodiscard]] bool canUndoPointEdit() const { return can_undo_point_edit_; }
+        void setCanUndoPointEdit(bool available) { can_undo_point_edit_ = available; }
         [[nodiscard]] bool pendingPairOnRight() const { return pending_pair_on_right_; }
         void setPendingPairOnRight(bool right) { pending_pair_on_right_ = right; }
         [[nodiscard]] const std::vector<size_t>& pairColorSlots() const { return pair_color_slots_; }
         void setPairColorSlots(std::vector<size_t> slots) { pair_color_slots_ = std::move(slots); }
         void clearPickedPoints() {
+            can_undo_point_edit_ = false;
             pair_color_slots_.clear();
             pending_pair_on_right_ = false;
             const bool changed = !picked_points_.empty() || !status_message_.empty();
@@ -138,6 +141,7 @@ namespace lfs::vis {
     private:
         void (*notify_)();
         bool notify_status_;
+        bool can_undo_point_edit_ = false;
         bool pending_pair_on_right_ = false;
         std::vector<size_t> pair_color_slots_;
         std::vector<glm::vec3> picked_points_;

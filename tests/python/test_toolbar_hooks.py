@@ -2784,7 +2784,7 @@ def test_model_alignment_replaces_active_tool_controls_and_refreshes_on_preview(
     def controls(action=""):
         if action:
             calls.append(action)
-        return False, -1, True
+        return False, -1, True, False, False
 
     lf.ui.model_alignment_controls = controls
     controller = module._ViewportToolbarController()
@@ -2801,11 +2801,18 @@ def test_model_alignment_replaces_active_tool_controls_and_refreshes_on_preview(
     assert "model-alignment-link" not in picking
     assert "model-alignment-separate" not in picking
     assert "align-apply" not in picking
+    assert not picking["model-alignment-delete"]["enabled"]
+    selection_signature = controller._toolbar_signature(None)
+    lf.ui.model_alignment_controls = lambda action="": (False, -1, True, True, True)
+    assert controller._toolbar_signature(None) != selection_signature
+    selected = {record["button_id"]: record for record in controller._gizmo.snapshot()["align_action_buttons"]}
+    assert selected["model-alignment-delete"]["enabled"]
+    lf.ui.model_alignment_controls = controls
     signature = controller._toolbar_signature(None)
 
     lf.ui.can_apply_align = lambda: True
     lf.ui.get_align_preview = lambda: True
-    lf.ui.model_alignment_controls = lambda action="": (True, 0, False) if not action else controls(action)
+    lf.ui.model_alignment_controls = lambda action="": (True, 0, False, False, True) if not action else controls(action)
     assert controller._toolbar_signature(None) != signature
     records = controller._gizmo.snapshot()["align_action_buttons"]
     by_value = {record["value"]: record for record in records if record["action"] == "model_alignment_control"}
@@ -2822,7 +2829,7 @@ def test_model_alignment_replaces_active_tool_controls_and_refreshes_on_preview(
     assert by_value["left"]["icon_src"] != by_value["right"]["icon_src"]
     assert by_value["link"]["tooltip_key"] == "align.unlink_cameras"
     assert [record["value"] for record in records if record["separator_before"]] == ["separate", "link", "cancel"]
-    lf.ui.model_alignment_controls = lambda action="": (False, -1, False) if not action else controls(action)
+    lf.ui.model_alignment_controls = lambda action="": (False, -1, False, False, False) if not action else controls(action)
     separate = controller._gizmo.snapshot()["align_action_buttons"]
     assert [record["value"] for record in separate
             if record["action"] == "model_alignment_control" and record["selected"]] == ["separate"]

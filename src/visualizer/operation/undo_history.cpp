@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "undo_history.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/services.hpp"
 #include "operator/operator_registry.hpp"
@@ -528,6 +529,10 @@ namespace lfs::vis::op {
                 .error = {},
             };
         }
+
+        // The dedicated session owns provisional point edits, not scene history.
+        if (const auto* renderer = services().renderingOrNull(); renderer && renderer->modelAlignmentView())
+            return HistoryResult{.error = LOC("align.history_unavailable")};
 
         // Discard the temporary alignment before replaying committed transforms.
         if (operators().activeModalId() == to_string(BuiltinOp::AlignPickPoint)) {

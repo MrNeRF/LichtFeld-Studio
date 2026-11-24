@@ -827,7 +827,7 @@ class _GizmoToolbarController:
         ]
         split_mode = lf.ui.get_split_view_mode()
         if split_mode == "model_alignment":
-            linked, composite, can_swap = lf.ui.model_alignment_controls()
+            linked, composite, can_swap, can_delete, _can_undo = lf.ui.model_alignment_controls()
             preview = lf.ui.get_align_preview()
             cancel = ("cancel", "align.cancel_session", "Cancel", "scene/x", "", False, True)
             if preview:
@@ -857,7 +857,7 @@ class _GizmoToolbarController:
                 controls = (
                     ("swap", "align.swap_roles" if can_swap else "align.swap_unavailable", "Swap roles", "",
                      "⇄", False, can_swap),
-                    ("delete", "align.delete_pair", "Delete selected pair", "scene/trash", "", False, True),
+                    ("delete", "align.delete_pair", "Delete selected pair", "scene/trash", "", False, can_delete),
                     cancel,
                 )
             return records + [

@@ -3213,6 +3213,8 @@
     "training_session_not_ready": "Die Trainingssitzung kann noch nicht fortgesetzt werden."
   },
   "align": {
+    "pair_edit_help": "Marker zum Verschieben ziehen. {0}: ausgewähltes Paar löschen. {1}: letzte Änderung rückgängig machen. {2}: ohne Anwenden beenden.",
+    "history_unavailable": "Modellausrichtung beenden, bevor der Szenenverlauf geändert wird.",
     "apply_preview": "Ausrichtung anwenden und beenden.",
     "swap_unavailable": "Rollen vor der Punktauswahl tauschen. Das neue bewegliche Modell muss bearbeitbar sein.",
     "unlink_cameras": "Ansichten unabhängig navigieren; aktuelle Kameras beibehalten.",

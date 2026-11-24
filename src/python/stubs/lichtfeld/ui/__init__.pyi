@@ -2402,8 +2402,10 @@ def apply_align() -> bool:
 def clear_align_points() -> None:
     """Request the running align modal to clear all picked points"""
 
-def model_alignment_controls(action: str = '') -> tuple[bool, int, bool]:
-    """Query or change the transient model alignment view"""
+def model_alignment_controls(action: str = '') -> tuple[bool, int, bool, bool, bool]:
+    """
+    Query or change the transient model alignment view. Returns (linked, composite panel, can swap roles, can delete pair, can undo point edit).
+    """
 
 def get_align_preview() -> bool:
     """Whether the alignment result is being previewed"""

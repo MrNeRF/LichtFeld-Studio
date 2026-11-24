@@ -263,6 +263,25 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     }
 
     edit_items = edit_mod.EditMenu().menu_items()
+    lf = sys.modules["lichtfeld"]
+    original_split_mode = lf.ui.get_split_view_mode
+    monkeypatch.setattr(lf.ui, "get_split_view_mode", lambda: "model_alignment")
+    local_actions = []
+    def alignment_controls(action=""):
+        if action:
+            local_actions.append(action)
+        return False, -1, True, False, True
+
+    monkeypatch.setattr(lf.ui, "model_alignment_controls", alignment_controls, raising=False)
+    alignment_items = edit_mod.EditMenu().menu_items()
+    assert alignment_items[0]["enabled"]
+    assert not alignment_items[1]["enabled"]
+    alignment_items[0]["callback"]()
+    assert local_actions == ["undo"]
+    assert not state["undo_called"]
+    monkeypatch.setattr(lf.ui, "model_alignment_controls", lambda action="": (False, -1, True, False, False))
+    assert not edit_mod.EditMenu().menu_items()[0]["enabled"]
+    monkeypatch.setattr(lf.ui, "get_split_view_mode", original_split_mode)
     assert [item.get("label") for item in edit_items] == [
         "Undo", "Redo", None, "tr:menu.select.cut_selection",
         "tr:menu.select.copy_selection", "tr:menu.select.paste_selection",

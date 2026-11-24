@@ -4659,23 +4659,32 @@ namespace lfs::python {
         m.def(
             "model_alignment_controls",
             [](const std::string& action) {
-                using Controls = std::tuple<bool, int, bool>;
+                using Controls = std::tuple<bool, int, bool, bool, bool>;
                 if (action == "delete") {
                     (void)dispatchPointPickUiAction(vis::op::BuiltinOp::AlignPickPoint, vis::services().alignPointPick(),
                                                     vis::PointPickState::UiAction::DeleteSelected);
-                    return Controls{false, -1, false};
+                    return Controls{false, -1, false, false, false};
                 }
                 return invoke_on_viewer([action]() -> Controls {
                     auto* renderer = get_rendering_manager();
                     auto* gui = vis::services().guiOrNull();
                     auto* viewer = gui ? gui->getViewer() : nullptr;
                     if (!renderer || !viewer || !renderer->modelAlignmentView())
-                        return {false, -1, false};
+                        return {false, -1, false, false, false};
                     if (action == "cancel") {
                         if (vis::op::operators().activeModalId() == vis::op::to_string(vis::op::BuiltinOp::AlignPickPoint))
                             vis::op::operators().cancelModalOperator();
                         renderer->endModelAlignment(viewer->getViewport());
-                        return {false, -1, false};
+                        return {false, -1, false, false, false};
+                    }
+                    if (action == "undo" && vis::op::operators().activeModalId() ==
+                                                vis::op::to_string(vis::op::BuiltinOp::AlignPickPoint)) {
+                        vis::op::ModalEvent event{};
+                        event.type = vis::op::ModalEvent::Type::ACTION;
+                        event.data = vis::op::ActionEvent{vis::input::Action::UNDO, 0, {0, 0}};
+                        (void)vis::op::operators().dispatchModalEvent(event);
+                        if (!renderer->modelAlignmentView())
+                            return {false, -1, false, false, false};
                     }
                     const auto* manager = viewer->getSceneManager();
                     const bool can_swap = manager && vis::services().alignPointPick().getPickedPoints().empty() &&
@@ -4691,11 +4700,13 @@ namespace lfs::python {
                     else if (action == "separate")
                         renderer->setModelAlignmentComposite(std::nullopt);
                     const auto& view = *renderer->modelAlignmentView();
-                    return {view.linked, view.composite ? static_cast<int>(vis::splitViewPanelIndex(*view.composite)) : -1, can_swap};
+                    return {view.linked, view.composite ? static_cast<int>(vis::splitViewPanelIndex(*view.composite)) : -1, can_swap,
+                            !view.preview && vis::services().alignPointPick().getSelectedPoint().has_value(),
+                            view.preview.has_value() || vis::services().alignPointPick().canUndoPointEdit()};
                 },
-                                        Controls{false, -1, false});
+                                        Controls{false, -1, false, false, false});
             },
-            nb::arg("action") = "", "Query or change the transient model alignment view");
+            nb::arg("action") = "", "Query or change the transient model alignment view. Returns (linked, composite panel, can swap roles, can delete pair, can undo point edit).");
 
         m.def(
             "get_align_preview", [] {

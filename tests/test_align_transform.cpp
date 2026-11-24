@@ -798,6 +798,50 @@ namespace lfs::vis::op {
         EXPECT_EQ(undoHistory().undoCount(), 0u);
     }
 
+    TEST_F(AlignPreviewTest, SceneHistoryCannotDiscardDedicatedPointEdits) {
+        pair_rendering_ = std::make_unique<RenderingManager>();
+        startPairAlignment(*pair_rendering_, false);
+        ASSERT_FALSE(HasFatalFailure());
+        const auto original_target = manager_->getNodeTransform("target");
+        auto entry = std::make_unique<SceneSnapshot>(*manager_, "transform.translate");
+        ASSERT_TRUE(entry->captureTransformsBefore({"target"}, {original_target}));
+        const auto moved_target = glm::translate(glm::mat4(1), glm::vec3(8, 0, 0));
+        ASSERT_TRUE(manager_->setNodeTransform("target", moved_target));
+        entry->captureAfter();
+        undoHistory().push(std::move(entry));
+        auto& state = services().alignPointPick();
+        EXPECT_FALSE(state.canUndoPointEdit());
+        ASSERT_TRUE(sample({1, 2, 3}, SplitViewPanelId::Left));
+        EXPECT_TRUE(state.canUndoPointEdit());
+        const auto points = state.getPickedPoints();
+        const auto mobile = manager_->getNodeTransform("mobile");
+        const auto undo_count = undoHistory().undoCount();
+        for (const auto result : {undoHistory().undo(), undoHistory().redo(), undoHistory().undoMultiple(3)}) {
+            EXPECT_FALSE(result.success);
+            EXPECT_FALSE(result.changed);
+            EXPECT_EQ(result.steps_performed, 0u);
+            EXPECT_EQ(result.error, LOC("align.history_unavailable"));
+        }
+        EXPECT_NE(pair_rendering_->modelAlignmentView(), nullptr);
+        EXPECT_EQ(state.getPickedPoints(), points);
+        EXPECT_EQ(manager_->getNodeTransform("mobile"), mobile);
+        EXPECT_EQ(undoHistory().undoCount(), undo_count);
+        EXPECT_EQ(manager_->getNodeTransform("target"), moved_target);
+        EXPECT_EQ(bound(input::Action::UNDO), OperatorResult::RUNNING_MODAL);
+        EXPECT_TRUE(state.getPickedPoints().empty());
+        EXPECT_FALSE(state.canUndoPointEdit());
+        ASSERT_TRUE(sample({4, 5, 6}, SplitViewPanelId::Right));
+        EXPECT_EQ(action(PointPickState::UiAction::Clear), OperatorResult::RUNNING_MODAL);
+        EXPECT_TRUE(state.getPickedPoints().empty());
+        EXPECT_TRUE(state.canUndoPointEdit());
+        EXPECT_EQ(bound(input::Action::UNDO), OperatorResult::RUNNING_MODAL);
+        EXPECT_EQ(state.getPickedPoints(), (std::vector<glm::vec3>{{4, 5, 6}}));
+        EXPECT_TRUE(state.pendingPairOnRight());
+        operation_.cancel(*context_);
+        ASSERT_TRUE(undoHistory().undo().success);
+        EXPECT_EQ(manager_->getNodeTransform("target"), original_target);
+    }
+
     TEST_F(AlignPreviewTest, DedicatedApplyResolvesParentTransformAndRestoresBothViews) {
         pair_rendering_ = std::make_unique<RenderingManager>();
         startPairAlignment(*pair_rendering_);
