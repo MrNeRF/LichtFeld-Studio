@@ -1077,6 +1077,62 @@ namespace lfs::io::project {
             return singleton_key(fourcc, project_uuid);
         }
 
+        // A captured checkpoint carries the preference at its training safe
+        // point. Other saves use the active PRMS preference.
+        [[nodiscard]] lfs::Result<bool> keep_all_checkpoints(const ProjectDocumentSaveOptions& options) const {
+            if (options.keep_all_checkpoints)
+                return *options.keep_all_checkpoints;
+            const auto strategy = parameters.dom().get<std::string>("active_strategy");
+            if (!strategy)
+                return false;
+            return parameters.checkpoint_retention(*strategy);
+        }
+
+        // Only a newly captured checkpoint replaces the durable training binding.
+        // A rebind, a metadata save, or a different model preserves all history.
+        // The source's scene is found under the document's own project UUID.
+        [[nodiscard]] lfs::Result<std::optional<ChunkKey>>
+        superseded_checkpoint(const std::optional<lfs::core::Uuid>& bound) const {
+            if (!source_reader || !bound || source_reader->find(FOURCC_CKPT, *bound))
+                return std::optional<ChunkKey>{};
+            const auto* old_scene = source_reader->find(key(FOURCC_SCNG));
+            if (!old_scene)
+                return std::optional<ChunkKey>{};
+            auto bytes = source_reader->read_chunk(*old_scene);
+            if (!bytes)
+                return std::move(bytes).error();
+            auto scene = SceneGraphChapter::from_bytes(*bytes);
+            if (!scene)
+                return std::move(scene).error();
+            auto old_model = scene->training_model_uuid();
+            auto new_model = scene_graph.training_model_uuid();
+            auto old_nodes = scene->nodes();
+            auto new_nodes = scene_graph.nodes();
+            if (!old_model)
+                return std::move(old_model).error();
+            if (!new_model)
+                return std::move(new_model).error();
+            if (!old_nodes)
+                return std::move(old_nodes).error();
+            if (!new_nodes)
+                return std::move(new_nodes).error();
+            std::optional<ChunkKey> superseded;
+            if (*old_model && *old_model == *new_model) {
+                for (const auto& node : *old_nodes) {
+                    if (node.uuid != **old_model || !node.payload || node.payload->fourcc != "CKPT")
+                        continue;
+                    const ChunkKey old_key{FOURCC_CKPT, node.payload->instance_uuid};
+                    const bool still_bound = std::ranges::any_of(*new_nodes, [&](const auto& current) {
+                        return current.payload && current.payload->fourcc == "CKPT" &&
+                               current.payload->instance_uuid == old_key.instance_uuid;
+                    });
+                    if (!still_bound && source_reader->find(old_key))
+                        superseded = old_key;
+                }
+            }
+            return superseded;
+        }
+
         void mark(const Fourcc fourcc) {
             dirty.insert(key(fourcc));
             ++dirty_epoch;
@@ -4733,63 +4789,17 @@ namespace lfs::io::project {
         }
 
         std::optional<ChunkKey> superseded;
-        bool keep_all = options.keep_all_checkpoints.value_or(false);
-        if (!options.keep_all_checkpoints) {
-            const auto strategy = impl_->parameters.dom().get<std::string>("active_strategy");
-            if (strategy) {
-                auto preference = impl_->parameters.checkpoint_retention(*strategy);
-                if (!preference)
-                    return std::move(preference).error();
-                keep_all = *preference;
-            }
-        }
-        // Only a newly captured checkpoint replaces the durable training binding.
-        // A rebind, a metadata save, or a different model preserves all history.
-        if (!is_autosave && !keep_all && impl_->source_reader && *bound_checkpoint &&
-            !impl_->source_reader->find(FOURCC_CKPT, **bound_checkpoint)) {
-            const auto* old_scene = impl_->source_reader->find(scene_key);
-            // Save As stages the source under the copy's project UUID, and the
-            // copied rows keep their keys: the scene is then its one SCNG row.
-            const auto is_scene = [](const ChunkInfo& row) {
-                return row.is_live() && row.key.fourcc == FOURCC_SCNG;
-            };
-            if (!old_scene && std::ranges::count_if(impl_->source_reader->chunks(), is_scene) == 1)
-                old_scene = &*std::ranges::find_if(impl_->source_reader->chunks(), is_scene);
-            if (old_scene) {
-                auto bytes = impl_->source_reader->read_chunk(*old_scene);
-                if (!bytes)
-                    return std::move(bytes).error();
-                auto scene = SceneGraphChapter::from_bytes(*bytes);
-                if (!scene)
-                    return std::move(scene).error();
-                auto old_model = scene->training_model_uuid();
-                auto new_model = impl_->scene_graph.training_model_uuid();
-                auto old_nodes = scene->nodes();
-                auto new_nodes = impl_->scene_graph.nodes();
-                if (!old_model)
-                    return std::move(old_model).error();
-                if (!new_model)
-                    return std::move(new_model).error();
-                if (!old_nodes)
-                    return std::move(old_nodes).error();
-                if (!new_nodes)
-                    return std::move(new_nodes).error();
-                if (*old_model && *old_model == *new_model) {
-                    for (const auto& node : *old_nodes) {
-                        if (node.uuid != **old_model || !node.payload || node.payload->fourcc != "CKPT")
-                            continue;
-                        const ChunkKey old_key{FOURCC_CKPT, node.payload->instance_uuid};
-                        const bool still_bound = std::ranges::any_of(*new_nodes, [&](const auto& current) {
-                            return current.payload && current.payload->fourcc == "CKPT" &&
-                                   current.payload->instance_uuid == old_key.instance_uuid;
-                        });
-                        if (!still_bound && impl_->source_reader->find(old_key)) {
-                            superseded = old_key;
-                            desired.erase(old_key);
-                        }
-                    }
-                }
-            }
+        auto keep_all_preference = impl_->keep_all_checkpoints(options);
+        if (!keep_all_preference)
+            return std::move(keep_all_preference).error();
+        const bool keep_all = *keep_all_preference;
+        if (!is_autosave && !keep_all) {
+            auto found = impl_->superseded_checkpoint(*bound_checkpoint);
+            if (!found)
+                return std::move(found).error();
+            superseded = *found;
+            if (superseded)
+                desired.erase(*superseded);
         }
         std::error_code source_error;
         const bool missing_source = !is_autosave && impl_->source_path &&
@@ -5562,6 +5572,23 @@ namespace lfs::io::project {
             options.save_as_project_uuid.is_nil()
                 ? original_project_uuid
                 : options.save_as_project_uuid;
+        // Leave out of the copy the checkpoint that a save in place would
+        // replace. save() cannot find the source's scene once the copy has its
+        // own project UUID, and dropping a copied checkpoint leaves dead bytes.
+        auto excluded_checkpoints = options.save_as_excluded_checkpoints;
+        auto keep_all = impl_->keep_all_checkpoints(options);
+        if (!keep_all)
+            return std::move(keep_all).error();
+        if (!*keep_all) {
+            auto bound = bound_checkpoint_uuid();
+            if (!bound)
+                return std::move(bound).error();
+            auto superseded = impl_->superseded_checkpoint(*bound);
+            if (!superseded)
+                return std::move(superseded).error();
+            if (*superseded)
+                excluded_checkpoints.push_back((*superseded)->instance_uuid);
+        }
 
         std::optional<detail::WriterLock>
             destination_lock;
@@ -5647,7 +5674,7 @@ namespace lfs::io::project {
             .private_staging = true,
             .progress = options.save_as_progress,
             .cancel = options.save_as_cancel,
-            .excluded_checkpoints = options.save_as_excluded_checkpoints,
+            .excluded_checkpoints = excluded_checkpoints,
         };
         const auto source_autosave =
             autosave_sidecar_path(original_path);
@@ -5694,11 +5721,11 @@ namespace lfs::io::project {
                     !planned) {
                     return planned;
                 }
-                const auto keep_row = [&options](const ChunkInfo& row) {
+                const auto keep_row = [&excluded_checkpoints](const ChunkInfo& row) {
                     return row.is_live() &&
                            !(row.key.fourcc == FOURCC_CKPT &&
-                             std::ranges::find(options.save_as_excluded_checkpoints, row.key.instance_uuid) !=
-                                 options.save_as_excluded_checkpoints.end());
+                             std::ranges::find(excluded_checkpoints, row.key.instance_uuid) !=
+                                 excluded_checkpoints.end());
                 };
                 std::uint64_t planned_bytes = 0;
                 for (const auto& row : retained_source->chunks() | std::views::filter(keep_row)) {
