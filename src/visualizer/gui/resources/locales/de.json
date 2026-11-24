@@ -3213,6 +3213,7 @@
     "training_session_not_ready": "Die Trainingssitzung kann noch nicht fortgesetzt werden."
   },
   "align": {
+    "pair_recover_help": "{0}: vorherige Punkte wiederherstellen.",
     "pair_edit_help": "Marker zum Verschieben ziehen. {0}: ausgewähltes Paar löschen. {1}: letzte Änderung rückgängig machen. {2}: ohne Anwenden beenden.",
     "history_unavailable": "Modellausrichtung beenden, bevor der Szenenverlauf geändert wird.",
     "apply_preview": "Ausrichtung anwenden und beenden.",

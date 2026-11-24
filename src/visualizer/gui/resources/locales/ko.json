@@ -3213,6 +3213,7 @@
     "training_session_not_ready": "학습 세션을 아직 재개할 수 없습니다."
   },
   "align": {
+    "pair_recover_help": "{0}: 이전 점을 복원합니다.",
     "pair_edit_help": "점을 드래그하여 이동합니다. {0}: 선택한 쌍 삭제. {1}: 마지막 편집 취소. {2}: 적용하지 않고 종료.",
     "history_unavailable": "장면 기록을 변경하기 전에 모델 정렬을 종료하세요.",
     "apply_preview": "정렬을 적용하고 종료합니다.",

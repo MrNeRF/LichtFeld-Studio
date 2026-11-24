@@ -3213,6 +3213,7 @@
     "training_session_not_ready": "De trainingssessie is nog niet klaar om te hervatten."
   },
   "align": {
+    "pair_recover_help": "{0}: herstel de vorige punten.",
     "pair_edit_help": "Sleep een punt om het te verplaatsen. {0}: geselecteerd paar verwijderen. {1}: laatste wijziging ongedaan maken. {2}: afsluiten zonder toepassen.",
     "history_unavailable": "Beëindig de modeluitlijning voordat u de scènegeschiedenis wijzigt.",
     "apply_preview": "Pas de uitlijning toe en sluit af.",

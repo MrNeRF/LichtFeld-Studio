@@ -10,6 +10,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "gui/string_keys.hpp"
+#include "operation/undo_history.hpp"
 #include "point_cloud_vulkan_renderer.hpp"
 #include "preferences.hpp"
 #include "python/python_runtime.hpp"
@@ -174,6 +175,8 @@ namespace lfs::vis {
     }
 
     RenderingManager::~RenderingManager() {
+        if (model_alignment_view_)
+            op::undoHistory().setModelAlignmentActive(false);
         event_handlers_ = lfs::event::ScopedHandler{};
         invalidateGTComparisonImageCache();
         gt_comparison_image_worker_.request_stop();

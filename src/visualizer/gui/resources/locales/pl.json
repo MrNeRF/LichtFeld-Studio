@@ -3213,6 +3213,7 @@
     "training_session_not_ready": "Sesja treningowa nie jest gotowa do wznowienia."
   },
   "align": {
+    "pair_recover_help": "{0}: przywróć poprzednie punkty.",
     "pair_edit_help": "Przeciągnij punkt, aby go przesunąć. {0}: usuń wybraną parę. {1}: cofnij ostatnią zmianę. {2}: wyjdź bez stosowania.",
     "history_unavailable": "Zakończ wyrównywanie modeli przed zmianą historii sceny.",
     "apply_preview": "Zastosuj wyrównanie i zakończ.",

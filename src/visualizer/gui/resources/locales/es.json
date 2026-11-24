@@ -3213,6 +3213,7 @@
     "training_session_not_ready": "La sesión de entrenamiento no está lista para reanudarse."
   },
   "align": {
+    "pair_recover_help": "{0}: restaura los puntos anteriores.",
     "pair_edit_help": "Arrastra un punto para moverlo. {0}: elimina la pareja seleccionada. {1}: deshaz el último cambio. {2}: sal sin aplicar.",
     "history_unavailable": "Finaliza la alineación de modelos antes de cambiar el historial de la escena.",
     "apply_preview": "Aplica la alineación y sal.",

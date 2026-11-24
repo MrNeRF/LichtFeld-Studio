@@ -226,7 +226,10 @@ namespace lfs::vis::op {
     }
 
     bool OperatorRegistry::pollImpl(const RegisteredOperator& reg, const OperatorProperties* props) const {
-        if (props != nullptr) {
+        // History availability is atomic and can change during modal teardown.
+        // Query it directly instead of invalidating this cache reentrantly.
+        if (props != nullptr || reg.descriptor.builtin_id == BuiltinOp::Undo ||
+            reg.descriptor.builtin_id == BuiltinOp::Redo) {
             if (reg.poll_fn) {
                 return reg.poll_fn();
             }

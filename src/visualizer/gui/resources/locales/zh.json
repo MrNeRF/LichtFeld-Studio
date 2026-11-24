@@ -3213,6 +3213,7 @@
     "training_session_not_ready": "训练会话尚未准备好恢复。"
   },
   "align": {
+    "pair_recover_help": "{0}：恢复之前的点。",
     "pair_edit_help": "拖动点以移动。{0}：删除选中的点对。{1}：撤销上次编辑。{2}：退出且不应用。",
     "history_unavailable": "更改场景历史前，请先结束模型对齐。",
     "apply_preview": "应用对齐并退出。",

@@ -8,6 +8,7 @@
 #include "core/logger.hpp"
 #include "core/scene.hpp"
 #include "core/services.hpp"
+#include "operation/undo_history.hpp"
 #include "rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "viewport_request_builder.hpp"
@@ -231,6 +232,7 @@ namespace lfs::vis {
             .previous_primary = primary,
             .previous_secondary = secondary,
         });
+        op::undoHistory().setModelAlignmentActive(true);
         restoreSplitViewMode(SplitViewMode::IndependentDual, primary);
         auto& secondary_viewport = projectSecondaryViewport();
         primary.ortho_scale_override = primary.ortho_scale_override.value_or(settings.ortho_scale);
@@ -257,6 +259,7 @@ namespace lfs::vis {
         restoreAlignmentCamera(primary, saved.previous_primary);
         restoreAlignmentCamera(projectSecondaryViewport(), saved.previous_secondary);
         setFocusedSplitPanel(saved.previous_focus);
+        op::undoHistory().setModelAlignmentActive(false);
         publish_align_state_generation();
         markDirty(DirtyFlag::ALL, FrameReason::SceneChange);
     }

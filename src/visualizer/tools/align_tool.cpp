@@ -299,7 +299,9 @@ namespace lfs::vis::tools {
                                               pointPickShortcut(input::Action::DELETE_SELECTED),
                                               pointPickShortcut(input::Action::UNDO),
                                               pointPickShortcut(input::Action::CANCEL_POLYGON))
-                                       : std::string{});
+                                 : point_state.canUndoPointEdit()
+                                     ? LOCF("align.pair_recover_help", pointPickShortcut(input::Action::UNDO))
+                                     : std::string{});
             } else {
                 const auto projection = pointPickOverlayFrame(
                                             *tool_context_, alignment->composite.value_or(SplitViewPanelId::Right))

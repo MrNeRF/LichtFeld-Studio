@@ -7,7 +7,9 @@
 #include "core/point_cloud.hpp"
 #include "core/services.hpp"
 #include "operation/undo_history.hpp"
+#include "operator/operator_registry.hpp"
 #include "operator/ops/align_ops.hpp"
+#include "operator/ops/edit_ops.hpp"
 #include "rendering/point_cloud_vulkan_renderer.hpp"
 #include "rendering/viewport_artifact_service.hpp"
 #include "rendering/viewport_request_builder.hpp"
@@ -537,6 +539,13 @@ namespace lfs::vis::op {
             undoHistory().clear();
             manager_ = std::make_unique<SceneManager>();
             services().set(manager_.get());
+            operators().setSceneManager(manager_.get());
+            registerEditOperators();
+            operators().registerOperator(BuiltinOp::AlignPickPoint,
+                                         OperatorDescriptor{.builtin_id = BuiltinOp::AlignPickPoint,
+                                                            .label = "Test alignment",
+                                                            .flags = OperatorFlags::REGISTER},
+                                         [] { return std::make_unique<AlignPickPointOperator>(); });
             manager_->getScene().addGroup("target");
             manager_->selectNode("target");
             context_ = std::make_unique<OperatorContext>(*manager_);
@@ -548,7 +557,11 @@ namespace lfs::vis::op {
         }
 
         void TearDown() override {
+            operators().cancelModalOperator();
             operation_.cancel(*context_);
+            operators().unregisterOperator(BuiltinOp::AlignPickPoint);
+            unregisterEditOperators();
+            operators().setSceneManager(nullptr);
             undoHistory().clear();
             services().clear();
             context_.reset();
@@ -816,6 +829,8 @@ namespace lfs::vis::op {
         const auto points = state.getPickedPoints();
         const auto mobile = manager_->getNodeTransform("mobile");
         const auto undo_count = undoHistory().undoCount();
+        EXPECT_FALSE(undoHistory().canUndo());
+        EXPECT_FALSE(undoHistory().canRedo());
         for (const auto result : {undoHistory().undo(), undoHistory().redo(), undoHistory().undoMultiple(3)}) {
             EXPECT_FALSE(result.success);
             EXPECT_FALSE(result.changed);
@@ -838,8 +853,38 @@ namespace lfs::vis::op {
         EXPECT_EQ(state.getPickedPoints(), (std::vector<glm::vec3>{{4, 5, 6}}));
         EXPECT_TRUE(state.pendingPairOnRight());
         operation_.cancel(*context_);
+        EXPECT_TRUE(undoHistory().canUndo());
         ASSERT_TRUE(undoHistory().undo().success);
+        EXPECT_TRUE(undoHistory().canRedo());
         EXPECT_EQ(manager_->getNodeTransform("target"), original_target);
+    }
+
+    TEST_F(AlignPreviewTest, HistoryPollAndModalCancellationTrackAlignmentSession) {
+        pair_rendering_ = std::make_unique<RenderingManager>();
+        startPairAlignment(*pair_rendering_, false);
+        ASSERT_FALSE(HasFatalFailure());
+        operation_.cancel(*context_);
+        const auto original = manager_->getNodeTransform("target");
+        auto entry = std::make_unique<SceneSnapshot>(*manager_, "transform.translate");
+        ASSERT_TRUE(entry->captureTransformsBefore({"target"}, {original}));
+        ASSERT_TRUE(manager_->setNodeTransform("target", glm::translate(glm::mat4(1), glm::vec3(2, 0, 0))));
+        entry->captureAfter();
+        undoHistory().push(std::move(entry));
+        EXPECT_TRUE(operators().poll(BuiltinOp::Undo));
+        const auto history_generation = undoHistory().generation();
+        auto& scene = manager_->getScene();
+        ASSERT_TRUE(pair_rendering_->beginModelAlignment(pair_primary_, scene, *scene.getNode("reference"), *scene.getNode("mobile")));
+        (void)operators().invoke(BuiltinOp::AlignPickPoint);
+        ASSERT_TRUE(operators().hasModalOperator());
+        EXPECT_FALSE(operators().poll(BuiltinOp::Undo));
+        EXPECT_FALSE(operators().poll(BuiltinOp::Redo));
+        EXPECT_EQ(undoHistory().generation(), history_generation);
+        operators().cancelModalOperator();
+        EXPECT_EQ(pair_rendering_->modelAlignmentView(), nullptr);
+        EXPECT_EQ(undoHistory().generation(), history_generation);
+        EXPECT_TRUE(operators().poll(BuiltinOp::Undo));
+        ASSERT_TRUE(undoHistory().undo().success);
+        EXPECT_TRUE(operators().poll(BuiltinOp::Redo));
     }
 
     TEST_F(AlignPreviewTest, DedicatedApplyResolvesParentTransformAndRestoresBothViews) {

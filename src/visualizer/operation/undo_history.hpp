@@ -75,6 +75,9 @@ namespace lfs::vis::op {
         void commitTransaction();
         HistoryResult rollbackTransaction();
 
+        // Publish transient alignment ownership without changing committed stacks.
+        // The alignment session calls this on the viewer thread; availability reads remain atomic.
+        void setModelAlignmentActive(bool active);
         [[nodiscard]] bool canUndo() const;
         [[nodiscard]] bool canRedo() const;
         [[nodiscard]] std::string undoName() const;
@@ -143,6 +146,7 @@ namespace lfs::vis::op {
         size_t redo_bytes_ = 0;
         size_t max_bytes_ = MAX_BYTES;
         std::atomic<uint64_t> generation_{0};
+        std::atomic<bool> model_alignment_active_{false};
         std::atomic<bool> can_undo_{false};
         std::atomic<bool> can_redo_{false};
         ObserverId next_observer_id_ = 1;

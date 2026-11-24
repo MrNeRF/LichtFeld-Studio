@@ -3213,6 +3213,7 @@
     "training_session_not_ready": "トレーニングセッションはまだ再開できません。"
   },
   "align": {
+    "pair_recover_help": "{0}：前の点を復元。",
     "pair_edit_help": "点をドラッグして移動。{0}：選択したペアを削除。{1}：直前の編集を元に戻す。{2}：適用せず終了。",
     "history_unavailable": "シーンの履歴を変更する前にモデルの位置合わせを終了してください。",
     "apply_preview": "位置合わせを適用して終了。",
