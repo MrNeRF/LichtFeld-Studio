@@ -1500,4 +1500,29 @@ namespace {
         EXPECT_EQ(loader.adaptive_prefetch_target(), 3u); // ceil(50 / 70) + 2
     }
 
+    // At startup the first windows wait while the steps are still short against the decode time, so they ask for
+    // a depth at the ring's limit. A host loader's target rises toward it by one sample per waiting window instead
+    // of jumping there, and comes down at once when longer steps ask for less.
+    TEST(PipelinedLoaderPrefetchTarget, HostDecodingRaisesTheTargetByOneSamplePerWaitingWindow) {
+        PipelinedLoaderConfig config;
+        config.backend = GpuBackend::Metal;
+        config.prefetch_count = 1;
+        PipelinedImageLoader loader(config);
+
+        size_t iter = 0;
+        const auto run_windows = [&](const size_t windows, const double decode_ms, const double step_ms) {
+            for (size_t i = 0; i < windows * 64; ++i) {
+                loader.record_decode_latency(decode_ms);
+                loader.observe_training_iteration(step_ms, 0.1, ++iter);
+            }
+        };
+        const size_t start = loader.adaptive_prefetch_target();
+        for (size_t window = 1; window <= 4; ++window) {
+            run_windows(1, 60.0, 5.0); // asks for ceil(60 / 5) + 2 = 14, clamped to the ring's limit
+            EXPECT_EQ(loader.adaptive_prefetch_target(), start + window);
+        }
+        run_windows(1, 60.0, 100.0); // asks for ceil(60 / 100) + 2 = 3
+        EXPECT_EQ(loader.adaptive_prefetch_target(), 3u);
+    }
+
 } // namespace

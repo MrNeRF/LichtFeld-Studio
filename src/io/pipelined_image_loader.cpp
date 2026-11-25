@@ -296,11 +296,11 @@ namespace lfs::io {
         }
 
         running_ = true;
-        const bool cuda_stage = attach_cuda_decode_stage();
+        cuda_decode_stage_ = attach_cuda_decode_stage();
         for (size_t i = 0; i < config_.io_threads; ++i) {
             io_threads_.emplace_back([this] { prefetch_thread_func(); });
         }
-        if (cuda_stage) {
+        if (cuda_decode_stage_) {
             start_cuda_decode_workers();
         } else {
             for (size_t i = 0; i < config_.cold_process_threads; ++i) {
@@ -551,12 +551,12 @@ namespace lfs::io {
             adaptive_max_target_);
         size_t next = adaptive_target_;
         if (window_dl_wait_ms > 0.05) {
-            // CUDA grows by one per waiting window. Host decoding measures its decode time per image, and more
-            // samples in flight than that time asks for only hold more decoded images in memory: a wait sets
-            // its target to the recommendation.
-            next = config_.backend == lfs::core::GpuBackend::CUDA
-                       ? std::min(adaptive_max_target_, std::max(next + 1, recommended))
-                       : recommended;
+            // The CUDA decode stage grows by one per waiting window. Host decoding measures its decode time per
+            // image, and more samples in flight than that time asks for only hold more decoded images in memory:
+            // a wait moves its target toward the recommendation, down at once and up by one sample per window,
+            // since the first windows at startup wait while the steps are still short.
+            next = cuda_decode_stage_ ? std::min(adaptive_max_target_, std::max(next + 1, recommended))
+                                      : std::min(recommended, adaptive_target_ + 1);
             adaptive_low_recommendation_windows_ = 0;
             adaptive_growth_cooldown_windows_ = 4;
         } else {
