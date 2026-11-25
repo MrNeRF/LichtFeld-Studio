@@ -1045,6 +1045,7 @@
     "writing_spz": "SPZ 쓰는 중"
   },
   "common": {
+    "toggle_bottom_dock": "하단 도크 표시 전환",
     "ok": "확인",
     "cancel": "취소",
     "close": "닫기",

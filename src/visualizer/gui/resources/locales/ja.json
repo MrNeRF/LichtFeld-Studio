@@ -1045,6 +1045,7 @@
     "writing_spz": "SPZを書き込み中"
   },
   "common": {
+    "toggle_bottom_dock": "下部ドックの表示を切り替え",
     "ok": "OK",
     "cancel": "キャンセル",
     "close": "閉じる",

@@ -4684,6 +4684,16 @@ namespace lfs::vis::gui {
             viewer_->projectMarkSessionChapterCommitted("GUIL");
         };
         rml_bottom_dock_.init(&rmlui_manager_);
+        rml_bottom_dock_.on_toggle = [this] {
+            panel_layout_.toggleBottomDockCollapsed();
+            if (viewer_) {
+                if (auto* rm = viewer_->getRenderingManager())
+                    rm->frameDemandLedger().request({.reason = FrameReason::GuiLayout,
+                                                     .scope = FrameScope::Gui,
+                                                     .views = 0,
+                                                     .detail = "bottom_dock_toggle"});
+            }
+        };
         rml_bottom_dock_.on_tab_changed = [this](const std::string& id) {
             if (panel_layout_.getBottomDockActiveTab() != id && viewer_) {
                 viewer_->projectMarkSessionChapterCommitted("GUIL");
@@ -6440,6 +6450,8 @@ namespace lfs::vis::gui {
         constexpr uint8_t kUiLayoutSettleFrames = 3;
         const bool python_console_visible = window_states_["python_console"];
         const bool left_dock_rendered = panel_layout_.willRenderLeftDock(show_main_panel_, ui_hidden_, screen);
+        const float bottom_dock_reserved_height =
+            panel_layout_.computeBottomDockReservedHeight(show_main_panel_, ui_hidden_, screen);
         const bool ui_layout_changed =
             std::abs(screen.work_pos.x - last_ui_layout_work_pos_.x) > 0.5f ||
             std::abs(screen.work_pos.y - last_ui_layout_work_pos_.y) > 0.5f ||
@@ -6448,7 +6460,7 @@ namespace lfs::vis::gui {
             std::abs(panel_layout_.getRightPanelWidth() - last_ui_layout_right_panel_w_) > 0.5f ||
             std::abs(panel_layout_.getScenePanelRatio() - last_ui_layout_scene_ratio_) > 0.0001f ||
             std::abs(panel_layout_.getPythonConsoleWidth() - last_ui_layout_python_console_w_) > 0.5f ||
-            std::abs(panel_layout_.getBottomDockHeight() - last_ui_layout_bottom_dock_h_) > 0.5f ||
+            std::abs(bottom_dock_reserved_height - last_ui_layout_bottom_dock_h_) > 0.5f ||
             std::abs(panel_layout_.getLeftDockWidth() - last_ui_layout_left_dock_w_) > 0.5f ||
             panel_layout_.isLeftDockCollapsed() != last_ui_layout_left_collapsed_ ||
             rightDockRendered() != last_ui_layout_right_rendered_ ||
@@ -6495,7 +6507,7 @@ namespace lfs::vis::gui {
             last_ui_layout_right_panel_w_ = panel_layout_.getRightPanelWidth();
             last_ui_layout_scene_ratio_ = panel_layout_.getScenePanelRatio();
             last_ui_layout_python_console_w_ = panel_layout_.getPythonConsoleWidth();
-            last_ui_layout_bottom_dock_h_ = panel_layout_.getBottomDockHeight();
+            last_ui_layout_bottom_dock_h_ = bottom_dock_reserved_height;
             last_ui_layout_left_dock_w_ = panel_layout_.getLeftDockWidth();
             last_ui_layout_left_collapsed_ = panel_layout_.isLeftDockCollapsed();
             last_ui_layout_right_rendered_ = rightDockRendered();
@@ -6706,7 +6718,7 @@ namespace lfs::vis::gui {
                                            });
         }
 
-        const float bottom_dock_h = std::max(panel_layout_.getBottomDockHeight(), 0.0f);
+        const float bottom_dock_h = bottom_dock_reserved_height;
         const auto bottom_dock_layout = panel_layout_.computeBottomDockHorizontalLayout(
             show_main_panel_, ui_hidden_, screen);
         const float bottom_dock_x = bottom_dock_layout.x;
@@ -6720,10 +6732,11 @@ namespace lfs::vis::gui {
                         glm::vec2{bottom_dock_x, bottom_dock_y},
                         glm::vec2{bottom_dock_w, bottom_dock_h});
         const bool pointer_over_bottom_dock_edge =
+            !panel_layout_.isBottomDockCollapsed() &&
             panel_layout_.isBottomDockVisible() &&
             panel_input.mouse_x >= bottom_dock_x &&
             panel_input.mouse_x < bottom_dock_x + bottom_dock_w &&
-            bottomDockResizeHitZone(bottom_dock_y, current_ui_scale_, bottom_dock_grip_h)
+            resizeHitZone(bottom_dock_y, current_ui_scale_)
                 .contains(panel_input.mouse_y);
         const bool pointer_targets_bottom_dock =
             pointer_over_bottom_dock || pointer_over_bottom_dock_edge;
@@ -6746,9 +6759,13 @@ namespace lfs::vis::gui {
             bottom_dock_rml_layout.pos = {bottom_dock_x, bottom_dock_y};
             bottom_dock_rml_layout.size = {bottom_dock_w, bottom_dock_h};
             bottom_dock_rml_layout.grip_h = bottom_dock_grip_h;
+            bottom_dock_rml_layout.collapsed = panel_layout_.isBottomDockCollapsed();
             bottom_dock_rml_layout.tab_bar_h = PanelLayoutManager::TAB_BAR_H * current_ui_scale_;
             bottom_dock_rml_layout.separator_h = current_ui_scale_;
-            rml_bottom_dock_.processInput(bottom_dock_rml_layout, panel_input);
+            if (reg.isPositionOverFloatingPanel(panel_input.mouse_x, panel_input.mouse_y))
+                rml_bottom_dock_.processInput(bottom_dock_rml_layout, maskInputForBlockedUi(panel_input));
+            else
+                rml_bottom_dock_.processInput(bottom_dock_rml_layout, panel_input);
             if (rml_bottom_dock_.wantsInput())
                 guiFocusState().want_capture_mouse = true;
             if (rml_bottom_dock_.wantsKeyboard())
@@ -6785,8 +6802,13 @@ namespace lfs::vis::gui {
             bottom_dock_rml_layout.pos = {bottom_dock_x, bottom_dock_y};
             bottom_dock_rml_layout.size = {bottom_dock_w, bottom_dock_h};
             bottom_dock_rml_layout.grip_h = bottom_dock_grip_h;
+            bottom_dock_rml_layout.collapsed = panel_layout_.isBottomDockCollapsed();
             bottom_dock_rml_layout.tab_bar_h = PanelLayoutManager::TAB_BAR_H * current_ui_scale_;
             bottom_dock_rml_layout.separator_h = current_ui_scale_;
+            const float reserved_height =
+                panel_layout_.computeBottomDockReservedHeight(show_main_panel_, ui_hidden_, screen);
+            bottom_dock_rml_layout.pos.y = screen.work_pos.y + screen.work_size.y - reserved_height;
+            bottom_dock_rml_layout.size.y = reserved_height;
             bottom_dock_rml_layout.grip_hovered = panel_layout_.isBottomDockHoveringEdge();
             bottom_dock_rml_layout.grip_active = panel_layout_.isBottomDockResizing();
             rml_bottom_dock_.render(bottom_dock_rml_layout, bottom_dock_tab_snaps,

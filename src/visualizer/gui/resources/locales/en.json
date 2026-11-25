@@ -1054,6 +1054,7 @@
     "writing_spz": "Writing SPZ"
   },
   "common": {
+    "toggle_bottom_dock": "Toggle bottom dock",
     "ok": "OK",
     "cancel": "Cancel",
     "close": "Close",

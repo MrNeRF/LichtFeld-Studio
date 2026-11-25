@@ -7,7 +7,6 @@
 .tab {
     border-top-left-radius: 4dp;
     border-top-right-radius: 4dp;
-    border-bottom-color: transparent;
 }
 
 .tab-close {
@@ -15,24 +14,26 @@
 }
 
 .tab {
-    background-color: transparent;
+    background-color: @{alpha(surface_bright,0.36)};
     color: @{text_dim};
+    border-color: @{border};
 }
 
 .tab:hover {
-    background-color: @{right_panel.tab_hover};
+    @{right_panel.tab_hover_decor};
 }
 
 .tab:focus-visible {
-    background-color: @{right_panel.tab_hover};
+    @{right_panel.tab_hover_decor};
     color: @{text};
-    border-bottom-color: @{primary};
+    border-color: @{primary};
 }
 
 .tab.active {
-    background-color: @{right_panel.tab_active_bg};
+    decorator: none;
+    background-color: transparent;
     color: @{text};
-    border-bottom-color: @{primary};
+    border-color: @{primary};
 }
 
 .tab-close {

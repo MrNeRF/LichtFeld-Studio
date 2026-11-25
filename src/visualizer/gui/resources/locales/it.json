@@ -1058,6 +1058,7 @@
     "writing_spz": "Scrittura SPZ"
   },
   "common": {
+    "toggle_bottom_dock": "Mostra o nascondi il dock inferiore",
     "ok": "OK",
     "cancel": "Annulla",
     "close": "Chiudi",

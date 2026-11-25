@@ -9,10 +9,19 @@
 }
 
 .dock-grip-bar {
-    background-color: @{alpha(text_dim,0.55)};
+    background-color: transparent;
 }
 
 #dock-grip.hover .dock-grip-bar,
 #dock-grip.active .dock-grip-bar {
     background-color: @{primary};
+}
+
+.dock-toggle-chevron {
+    border-color: @{text_dim};
+}
+
+#bottom-dock-toggle:hover .dock-toggle-chevron,
+#bottom-dock-toggle:focus-visible .dock-toggle-chevron {
+    border-color: @{text};
 }

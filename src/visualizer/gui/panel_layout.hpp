@@ -163,7 +163,14 @@ namespace lfs::vis::gui {
         float getPythonConsoleWidth() const { return python_console_width_; }
         float resolvePythonConsoleWidth(const ScreenState& screen) const;
         void setPythonConsoleWidth(float width) { python_console_width_ = width; }
+        float computeBottomDockReservedHeight(bool show_main_panel, bool ui_hidden,
+                                              const ScreenState& screen) const;
         float getBottomDockHeight() const { return bottom_dock_height_; }
+        void toggleBottomDockCollapsed() {
+            bottom_dock_collapsed_ = !bottom_dock_collapsed_;
+            bottom_dock_hovering_edge_ = bottom_dock_resizing_ = false;
+        }
+        bool isBottomDockCollapsed() const { return bottom_dock_collapsed_; }
         bool isBottomDockVisible() const { return bottom_dock_visible_; }
         float bottomDockTopY() const { return bottom_dock_top_y_; }
         const std::vector<PanelSummary>& bottomDockTabs() const { return bottom_dock_tabs_; }
@@ -191,7 +198,7 @@ namespace lfs::vis::gui {
         // Scene tabs, filter chips, search and footer take about 130 dp; this keeps
         // three tree rows visible under them.
         static constexpr float SCENE_PANEL_MIN_HEIGHT = 200.0f;
-        static constexpr float DOCK_GRIP_H = 8.0f;
+        static constexpr float DOCK_GRIP_H = RESIZE_GRAB_HALF_WIDTH_DP;
         static constexpr float TAB_BAR_H = 28.0f;
         static constexpr float RIGHT_TAB_BAR_W = 28.0f;
         static constexpr float RIGHT_PANEL_SECTION_GAP = 4.0f;
@@ -206,8 +213,6 @@ namespace lfs::vis::gui {
         float computeViewportWidth(bool show_main_panel, bool ui_hidden,
                                    bool python_console_visible,
                                    const ScreenState& screen) const;
-        float computeBottomDockReservedHeight(bool show_main_panel, bool ui_hidden,
-                                              const ScreenState& screen) const;
         float computeLeftDockReservedWidth(bool show_main_panel, bool ui_hidden,
                                            const ScreenState& screen) const;
         [[nodiscard]] bool shouldReserveLeftDockWidth() const;
@@ -233,6 +238,7 @@ namespace lfs::vis::gui {
         bool bottom_dock_hovering_edge_ = false;
         ResizeDrag bottom_dock_drag_{};
         bool bottom_dock_visible_ = false;
+        bool bottom_dock_collapsed_ = false;
         float bottom_dock_top_y_ = -1.0f;
 
         float left_dock_width_ = 320.0f;

@@ -1045,6 +1045,7 @@
     "writing_spz": "Escribiendo SPZ"
   },
   "common": {
+    "toggle_bottom_dock": "Mostrar u ocultar el panel inferior",
     "ok": "OK",
     "cancel": "Cancelar",
     "close": "Cerrar",

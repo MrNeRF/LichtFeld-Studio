@@ -1045,6 +1045,7 @@
     "writing_spz": "Écriture SPZ"
   },
   "common": {
+    "toggle_bottom_dock": "Afficher ou masquer le panneau inférieur",
     "ok": "OK",
     "cancel": "Annuler",
     "close": "Fermer",

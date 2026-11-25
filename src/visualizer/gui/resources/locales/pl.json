@@ -1045,6 +1045,7 @@
     "writing_spz": "Zapisywanie SPZ"
   },
   "common": {
+    "toggle_bottom_dock": "Pokaż lub ukryj dolny dok",
     "ok": "OK",
     "cancel": "Anuluj",
     "close": "Zamknij",

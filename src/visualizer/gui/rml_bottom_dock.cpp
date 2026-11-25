@@ -4,6 +4,7 @@
 
 #include "gui/rml_bottom_dock.hpp"
 
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/panel_layout.hpp"
@@ -45,6 +46,10 @@ namespace lfs::vis::gui {
         ctor.Bind("tabs_overflow", &tabs_overflow_);
         ctor.Bind("can_scroll_tabs_left", &can_scroll_tabs_left_);
         ctor.Bind("can_scroll_tabs_right", &can_scroll_tabs_right_);
+        ctor.BindEventCallback("toggle_dock", [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
+            if (on_toggle)
+                on_toggle();
+        });
         ctor.BindEventCallback("tab_click", [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& args) {
             if (!args.empty() && on_tab_changed) {
                 const auto id = args[0].Get<Rml::String>();
@@ -223,7 +228,9 @@ namespace lfs::vis::gui {
         if (!tab_bar_el_ || !tab_strip_viewport_el_)
             return false;
         bool dirty = false;
-        const bool overflow = tab_strip_viewport_el_->GetScrollWidth() > tab_bar_el_->GetClientWidth() + 0.5f;
+        auto* toggle = document_->GetElementById("bottom-dock-toggle");
+        const float available_width = toggle ? toggle->GetOffsetLeft() : tab_bar_el_->GetClientWidth();
+        const bool overflow = tab_strip_viewport_el_->GetScrollWidth() > available_width + 0.5f;
         if (tabs_overflow_ != overflow) {
             tabs_overflow_ = overflow;
             tab_model_.DirtyVariable("tabs_overflow");
@@ -321,6 +328,11 @@ namespace lfs::vis::gui {
         }
         if (input.viewport_keyboard_focus)
             blurFocus();
+        if (rml_manager_ && !input.viewport_keyboard_focus &&
+            rml_input::hasFocusedKeyboardTarget(rml_context_->GetFocusElement())) {
+            for (const auto& event : input.input_events)
+                input_dirty_ |= rml_input::processKeyboardEvent(*rml_context_, event, rml_manager_->getTextInputHandler());
+        }
         auto* focused = rml_context_->GetFocusElement();
         wants_keyboard_ = rml_input::hasFocusedKeyboardTarget(focused);
         wants_input_ = wants_input_ || (wants_keyboard_ && !over_grip);
@@ -348,6 +360,12 @@ namespace lfs::vis::gui {
         const int h = static_cast<int>(layout.grip_h + layout.tab_bar_h + layout.separator_h);
         const bool dims_changed = w != last_fbo_w_ || h != last_fbo_h_;
         const bool tabs_changed = syncTabData(tabs, active_tab);
+        if (document_->IsClassSet("collapsed") != layout.collapsed) {
+            document_->SetClass("collapsed", layout.collapsed);
+            if (auto* toggle = document_->GetElementById("bottom-dock-toggle"))
+                toggle->SetAttribute("aria-expanded", layout.collapsed ? "false" : "true");
+            render_needed_ = true;
+        }
         const bool grip_state_changed = layout.grip_hovered != last_grip_hovered_ ||
                                         layout.grip_active != last_grip_active_;
         if (grip_state_changed) {
@@ -361,6 +379,8 @@ namespace lfs::vis::gui {
         }
         const bool needs_render = render_needed_ || input_dirty_ || theme_changed || dims_changed || tabs_changed;
         if (needs_render) {
+            if (auto* toggle = document_->GetElementById("bottom-dock-toggle"))
+                toggle->SetAttribute("aria-label", LOC("common.toggle_bottom_dock"));
             if (dock_grip_el_) {
                 dock_grip_el_->SetProperty("top", "0px");
                 dock_grip_el_->SetProperty("height", std::format("{:.0f}px", layout.grip_h));
@@ -377,7 +397,7 @@ namespace lfs::vis::gui {
             for (int pass = 0; pass < 3; ++pass) {
                 rml_context_->Update();
                 syncTabNavigation();
-                if (!syncTabScrollState())
+                if (layout.collapsed || !syncTabScrollState())
                     break;
             }
             last_fbo_w_ = w;

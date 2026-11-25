@@ -1045,6 +1045,7 @@
     "writing_spz": "SPZ Schrijven"
   },
   "common": {
+    "toggle_bottom_dock": "Onderste dock tonen of verbergen",
     "ok": "OK",
     "cancel": "Annuleren",
     "close": "Sluiten",

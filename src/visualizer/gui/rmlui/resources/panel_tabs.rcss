@@ -10,7 +10,7 @@
 #tab-strip-viewport {
     position: absolute;
     left: 0;
-    right: 0;
+    right: 30dp;
     top: 0;
     bottom: 0;
     display: flex;
@@ -21,7 +21,7 @@
 
 #tab-bar.with-scroll #tab-strip-viewport {
     left: 30dp;
-    right: 30dp;
+    right: 60dp;
 }
 
 .tab-nav {
@@ -53,7 +53,7 @@
 }
 
 #tab-scroll-right {
-    right: 1dp;
+    right: 31dp;
 }
 
 #tab-separator {
@@ -77,9 +77,11 @@
     nav: auto;
     min-height: 28dp;
 
-    border-bottom-width: 2dp;
+    border-width: 1dp;
+}
 
-    transition: border-bottom-color background-color color 0.15s quadratic-out;
+.tab.active {
+    border-bottom-width: 0;
 }
 
 .tab.closeable {

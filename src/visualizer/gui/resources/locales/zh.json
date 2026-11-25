@@ -1045,6 +1045,7 @@
     "writing_spz": "写入SPZ"
   },
   "common": {
+    "toggle_bottom_dock": "显示或隐藏底部停靠区",
     "ok": "确定",
     "cancel": "取消",
     "close": "关闭",

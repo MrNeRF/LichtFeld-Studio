@@ -1045,6 +1045,7 @@
     "writing_spz": "Schreibe SPZ"
   },
   "common": {
+    "toggle_bottom_dock": "Unteres Dock ein- oder ausblenden",
     "ok": "OK",
     "cancel": "Abbrechen",
     "close": "Schließen",

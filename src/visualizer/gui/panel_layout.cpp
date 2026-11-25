@@ -641,6 +641,14 @@ namespace lfs::vis::gui {
             return;
         }
 
+        if (bottom_dock_collapsed_) {
+            bottom_dock_visible_ = true;
+            bottom_dock_top_y_ = screen.work_pos.y + screen.work_size.y -
+                                 computeBottomDockReservedHeight(show_main_panel, ui_hidden, screen);
+            bottom_dock_tab_bar_rect_ = {};
+            return;
+        }
+
         const float min_panel_h = std::min(BOTTOM_DOCK_MIN_HEIGHT * dpi, max_panel_h);
         const float default_panel_h = BOTTOM_DOCK_DEFAULT_HEIGHT * dpi;
         bottom_dock_height_ = std::clamp(
@@ -680,7 +688,7 @@ namespace lfs::vis::gui {
             !float_blocks_bottom_dock &&
             dock_input.mouse_x >= panel_x &&
             dock_input.mouse_x <= panel_x + panel_w &&
-            bottomDockResizeHitZone(panel_y, dpi, grip_h).contains(dock_input.mouse_y);
+            resizeHitZone(panel_y, dpi).contains(dock_input.mouse_y);
 
         if (bottom_dock_resizing_) {
             const float bottom_y = screen.work_pos.y + screen.work_size.y;
@@ -773,6 +781,14 @@ namespace lfs::vis::gui {
             return;
         }
 
+        if (bottom_dock_collapsed_) {
+            bottom_dock_visible_ = true;
+            bottom_dock_top_y_ = screen.work_pos.y + screen.work_size.y -
+                                 computeBottomDockReservedHeight(show_main_panel, ui_hidden, screen);
+            bottom_dock_tab_bar_rect_ = {};
+            return;
+        }
+
         const float min_panel_h = std::min(BOTTOM_DOCK_MIN_HEIGHT * dpi, max_panel_h);
         const float default_panel_h = BOTTOM_DOCK_DEFAULT_HEIGHT * dpi;
         bottom_dock_height_ = std::clamp(
@@ -788,7 +804,7 @@ namespace lfs::vis::gui {
             !float_blocks_bottom_dock &&
             input.mouse_x >= panel_x &&
             input.mouse_x <= panel_x + panel_w &&
-            bottomDockResizeHitZone(panel_y, dpi, grip_h).contains(input.mouse_y);
+            resizeHitZone(panel_y, dpi).contains(input.mouse_y);
         if (bottom_dock_hovering_edge_ || bottom_dock_resizing_)
             cursor_request_ = CursorRequest::ResizeNS;
         const float tab_bar_h = TAB_BAR_H * dpi;
@@ -1142,6 +1158,8 @@ namespace lfs::vis::gui {
             return 0.0f;
 
         const float default_panel_h = BOTTOM_DOCK_DEFAULT_HEIGHT * dpi;
+        if (bottom_dock_collapsed_)
+            return (DOCK_GRIP_H + TAB_BAR_H + 1.0f) * dpi;
         const float current_h = bottom_dock_height_ > 0.0f ? bottom_dock_height_ : default_panel_h;
         return std::clamp(current_h, 0.0f, max_panel_h);
     }
