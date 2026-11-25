@@ -928,6 +928,49 @@ namespace lfs::vis::op {
         std::unique_ptr<RenderingManager> pair_rendering_;
     };
 
+    TEST_F(ModelAlignmentTest, PollUsesRunningBuiltinInstanceUntilCancellation) {
+        constexpr auto id = BuiltinOp::ScaleDistancePickPoint;
+        class TestModal final : public Operator {
+        public:
+            const OperatorDescriptor& descriptor() const override {
+                static const OperatorDescriptor value{.builtin_id = BuiltinOp::ScaleDistancePickPoint};
+                return value;
+            }
+
+            bool poll(const OperatorContext&, const OperatorProperties*) const override { return !running_; }
+
+            OperatorResult invoke(OperatorContext&, OperatorProperties&) override {
+                running_ = true;
+                return OperatorResult::RUNNING_MODAL;
+            }
+
+        private:
+            bool running_ = false;
+        };
+
+        auto& registry = operators();
+        registry.registerOperator(id, TestModal{}.descriptor(), [] { return std::make_unique<TestModal>(); });
+        EXPECT_TRUE(registry.poll(id)); // Warm the idle poll cache.
+        EXPECT_EQ(registry.invoke(id).status, OperatorResult::RUNNING_MODAL);
+        EXPECT_FALSE(registry.poll(id));
+        EXPECT_FALSE(registry.poll(to_string(id)));
+
+        const std::string callback_id = "test.modal_poll.precedence";
+        registry.registerCallbackOperator(
+            OperatorDescriptor{.python_class_id = callback_id},
+            CallbackOperator{.invoke = [](OperatorProperties&) { return OperatorResult::RUNNING_MODAL; },
+                             .modal = [](const ModalEvent&, OperatorProperties&) { return OperatorResult::FINISHED; }});
+        EXPECT_EQ(registry.invoke(callback_id).status, OperatorResult::RUNNING_MODAL);
+        EXPECT_EQ(registry.activeModalId(), callback_id);
+        EXPECT_TRUE(registry.poll(id));
+        registry.cancelModalOperator();
+        registry.unregisterOperator(callback_id);
+        EXPECT_FALSE(registry.poll(id));
+        registry.cancelModalOperator();
+        EXPECT_TRUE(registry.poll(id));
+        registry.unregisterOperator(id);
+    }
+
     TEST_F(ModelAlignmentTest, PairedPreviewRestoresAndApplyOnlyMovesTheMobileSplat) {
         pair_rendering_ = std::make_unique<RenderingManager>();
         startPairAlignment(*pair_rendering_);
