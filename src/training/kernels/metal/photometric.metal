@@ -1063,7 +1063,10 @@ kernel void photo_blur_backward(constant PhotoBlurBackwardParams& p [[buffer(0)]
                                 uint rank [[thread_index_in_threadgroup]]) {
     threadgroup half4 data[kPhotoSpan * kBlurDataPitch];
     threadgroup float4 conv[kPhotoSpan * kPhotoTile];
-    threadgroup float2 source[(kPhotoTile + 2 * kBlurMaxRadius) * kBlurFootPitch];
+    // The blur's footprint, 4 bytes a pixel: the gradient pass's (v, u) as half2 (their stored precision), the
+    // branch pass's keep raw as float with keep as a byte (keep_bytes is unused in the gradient pass).
+    threadgroup uint source[(kPhotoTile + 2 * kBlurMaxRadius) * kBlurFootPitch];
+    threadgroup uchar keep_bytes[(kPhotoTile + 2 * kBlurMaxRadius) * kBlurFootPitch];
     threadgroup float2 rows[(kPhotoTile + 2 * kBlurMaxRadius) * kPhotoTile];
     threadgroup atomic_uint weighted;
     const bool gradient = kBlurGradient != 0;
@@ -1117,14 +1120,17 @@ kernel void photo_blur_backward(constant PhotoBlurBackwardParams& p [[buffer(0)]
         for (uint i = rank; i < uint(F * F); i += uint(kPhotoTile * kPhotoTile)) {
             const int yy = int(i) / F, xx = int(i) % F;
             const int gy = y0 + yy - R, gx = x0 + xx - R;
-            float2 value = float2(0.0f);
+            const int cell = yy * kBlurFootPitch + xx;
             if (gradient) {
+                half2 value = half2(0.0h);
                 if (gx >= 0 && gx < W && gy >= 0 && gy < H)
-                    value = float2(p.vu[base + uint(gy) * uint(W) + uint(gx)]);
-            } else if (blur_weight(p.mask, gy, gx, H, W) > 0.0f) {
-                value = float2(p.raw[base + uint(gy) * uint(W) + uint(gx)], 1.0f);
+                    value = p.vu[base + uint(gy) * uint(W) + uint(gx)];
+                source[cell] = as_type<uint>(value);
+            } else {
+                const bool keep = blur_weight(p.mask, gy, gx, H, W) > 0.0f;
+                source[cell] = as_type<uint>(keep ? p.raw[base + uint(gy) * uint(W) + uint(gx)] : 0.0f);
+                keep_bytes[cell] = keep ? 1 : 0;
             }
-            source[yy * kBlurFootPitch + xx] = value;
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
         for (uint o = rank; o < uint(kPhotoSpan * kPhotoTile); o += uint(kPhotoTile * kPhotoTile)) {
@@ -1137,8 +1143,12 @@ kernel void photo_blur_backward(constant PhotoBlurBackwardParams& p [[buffer(0)]
         for (uint o = rank; o < uint(F * kPhotoTile); o += uint(kPhotoTile * kPhotoTile)) {
             const int r = int(o) / kPhotoTile, q = int(o) % kPhotoTile;
             float2 a = float2(0.0f);
-            for (int d = -R; d <= R; ++d)
-                a += p.taps[abs(d)] * source[r * kBlurFootPitch + q + R + d];
+            for (int d = -R; d <= R; ++d) {
+                const int cell = r * kBlurFootPitch + q + R + d;
+                const float2 v = gradient ? float2(as_type<half2>(source[cell]))
+                                          : float2(as_type<float>(source[cell]), float(keep_bytes[cell]));
+                a += p.taps[abs(d)] * v;
+            }
             rows[o] = a;
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
