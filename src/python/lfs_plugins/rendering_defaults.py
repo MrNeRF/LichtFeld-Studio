@@ -221,6 +221,11 @@ class RenderingDefaultsSection:
             self._values = read_defaults()
             self._text.pop(prop, None)
             self._invalid_props.discard(prop)
+            if prop == "selection_outline" and not value:
+                # Apply must not be blocked by drafts whose inputs are now hidden.
+                for draft in tuple(self._text):
+                    if draft.startswith("selection_outline_"):
+                        self._discard(draft)
         except (ValueError, TypeError, OverflowError):
             self._invalid_props.add(prop)
         self._dirty_value(prop)

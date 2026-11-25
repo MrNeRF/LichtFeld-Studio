@@ -228,6 +228,38 @@ def test_preferences_invalid_pending_default_cannot_apply_old_values(preferences
     assert applied == [True]
 
 
+def test_disabling_selection_outline_discards_only_hidden_drafts(preferences_panel_module):
+    module, state = preferences_panel_module
+    state.rendering_defaults = {"selection_outline": True, "selection_outline_opacity": 1.0, "grid_opacity": 0.5}
+    section = module.PreferencesPanel()._rendering_defaults
+    model = _BindingModelStub()
+    section.bind(model)
+    dialogs = []
+    module.lf.ui.confirm_dialog = lambda *args: dialogs.append(args)
+
+    opacity, set_opacity = model.bindings["default_selection_outline_opacity"]
+    grid, set_grid = model.bindings["default_grid_opacity"]
+    set_opacity("7")
+    section._commit_text("selection_outline_opacity")
+    set_grid("2")
+    section._commit_text("grid_opacity")
+    model.bindings["default_selection_outline"][1](False)
+
+    assert opacity() == 1.0
+    assert grid() == "2"
+    assert model.func_bindings["rendering_defaults_error"]()
+    section._confirm_apply()
+    assert dialogs == []
+
+    set_grid("0.6")
+    section._confirm_apply()
+    assert len(dialogs) == 1
+    assert not model.func_bindings["rendering_defaults_error"]()
+    assert state.rendering_defaults == {
+        "selection_outline": False, "selection_outline_opacity": 1.0, "grid_opacity": 0.6,
+    }
+
+
 def test_preferences_exposes_explicit_project_apply_and_translates_it_everywhere():
     root = ET.parse(RESOURCES / "preferences.rml").getroot()
     viewport = root.find('.//*[@data-if="show_viewport"]')
