@@ -497,9 +497,10 @@ static void gsplat_sh_basis(const float3 dir, const uint degree, thread float* b
 }
 
 // Float index of SH-rest value (coeff, channel) in swizzled float storage.
-static uint gsplat_sh_float_index(const uint g, const uint coeff, const uint channel, const uint layout_rest) {
+// 64-bit: with 12 float4 slots (degree 3) a 32-bit float index wraps past 89.5M primitives.
+static ulong gsplat_sh_float_index(const uint g, const uint coeff, const uint channel, const uint layout_rest) {
     const uint offset = coeff * 3u + channel;
-    return sh_swizzled_index(g, offset / 4u, layout_rest) * 4u + offset % 4u;
+    return ulong(sh_swizzled_index(g, offset / 4u, layout_rest)) * 4u + offset % 4u;
 }
 
 // ---------------------------------------------------------------------------

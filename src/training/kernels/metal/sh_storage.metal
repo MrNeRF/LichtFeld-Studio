@@ -27,8 +27,9 @@ static uint sh_swizzled_index(const uint primitive, const uint slot, const uint 
 }
 
 // Index of a primitive's cell in swizzled Q16 storage with `cells` per primitive.
-static uint sh_q16_index(const uint primitive, const uint cell, const uint cells) {
-    return sh_slot_index(primitive, cell, cells);
+// 64-bit: with 45 cells (degree 3) a 32-bit index wraps past 95.4M primitives.
+static ulong sh_q16_index(const uint primitive, const uint cell, const uint cells) {
+    return ulong(primitive / kShReorder) * ulong(cells * kShReorder) + cell * kShReorder + primitive % kShReorder;
 }
 
 static float sh_q16_decode(const ushort q, const float lo, const float hi) {

@@ -129,7 +129,7 @@ static float3 fast_sh_rest(device const uchar* shN, device const float2* bounds,
     float3 result;
     for (uint c = 0; c < 3u; ++c) {
         const uint linear = coeff * 3u + c;
-        const uint index = sh_swizzled_index(p, linear / 4u, layout_rest) * 4u + linear % 4u;
+        const ulong index = ulong(sh_swizzled_index(p, linear / 4u, layout_rest)) * 4u + linear % 4u;
         result[c] = storage == kFastShFloat16 ? float(reinterpret_cast<device const half*>(shN)[index])
                                               : reinterpret_cast<device const float*>(shN)[index];
     }
