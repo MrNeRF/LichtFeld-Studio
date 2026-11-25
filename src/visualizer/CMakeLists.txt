@@ -37,7 +37,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         $<$<BOOL:${LFS_OPENXR_BUILD}>:vr/openxr_service.cpp>
         vr/openxr_runtimes.cpp
         $<$<BOOL:${LFS_OPENXR_BUILD}>:vr/vr_hand_renderer.cpp>
-        vr/vr_tracked_hands.cpp
+        $<$<BOOL:${LFS_OPENXR_BUILD}>:vr/vr_tracked_hands.cpp>
         $<$<NOT:$<BOOL:${LFS_OPENXR_BUILD}>>:vr/openxr_service_unavailable.cpp>
 
         # Geometry node modifiers
