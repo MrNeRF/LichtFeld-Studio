@@ -1476,4 +1476,28 @@ namespace {
         GTEST_FLAG_SET(death_test_style, style);
     }
 
+    // A loader that decodes on the host: windows whose steps waited for the loader raise the prefetch target to
+    // the depth its decode time asks for, ceil(decode / step) + 2, not by one sample per window up to the ring's
+    // limit, and a shorter decode time brings it down again. Drives the controller directly; Metal's workers need
+    // no device before the first request, so no GPU is involved.
+    TEST(PipelinedLoaderPrefetchTarget, HostDecodingWaitsRaiseTheTargetOnlyToTheDecodeDepth) {
+        PipelinedLoaderConfig config;
+        config.backend = GpuBackend::Metal;
+        config.prefetch_count = 1;
+        PipelinedImageLoader loader(config);
+
+        size_t iter = 0;
+        const auto run_windows = [&](const size_t windows, const double decode_ms, const double step_ms) {
+            for (size_t i = 0; i < windows * 64; ++i) {
+                loader.record_decode_latency(decode_ms);
+                // Every window waits a little, as when the decoders only just keep up with short steps.
+                loader.observe_training_iteration(step_ms, 0.1, ++iter);
+            }
+        };
+        run_windows(20, 200.0, 70.0);
+        EXPECT_EQ(loader.adaptive_prefetch_target(), 5u); // ceil(200 / 70) + 2
+        run_windows(4, 50.0, 70.0);
+        EXPECT_EQ(loader.adaptive_prefetch_target(), 3u); // ceil(50 / 70) + 2
+    }
+
 } // namespace

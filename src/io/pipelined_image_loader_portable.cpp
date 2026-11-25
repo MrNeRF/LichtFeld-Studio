@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -714,6 +715,23 @@ namespace lfs::io {
             queue_scope = std::make_unique<lfs::core::TensorWorkQueue::Scope>(*queue);
         }
         lfs::core::TensorUpload upload;
+        // An image records the decoder's time per image for the prefetch target, as the CUDA workers record a
+        // batch's time per image: its preparation time divided by the images in preparation at once. The time
+        // alone grows with the images in preparation, so it would raise the recommendation with the depth it sets.
+        struct ImageDecodeTimer {
+            explicit ImageDecodeTimer(PipelinedImageLoader& owner)
+                : loader(owner),
+                  decoding(owner.host_image_decodes_.fetch_add(1, std::memory_order_relaxed) + 1) {}
+            ~ImageDecodeTimer() {
+                loader.host_image_decodes_.fetch_sub(1, std::memory_order_relaxed);
+                loader.record_decode_latency(
+                    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() /
+                    static_cast<double>(decoding));
+            }
+            PipelinedImageLoader& loader;
+            const size_t decoding;
+            const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+        };
         while (running_) {
             PrefetchedImage item;
             try {
@@ -721,6 +739,9 @@ namespace lfs::io {
             } catch (const std::runtime_error&) {
                 break;
             }
+            std::optional<ImageDecodeTimer> decode_timer;
+            if (!item.is_mask && !item.is_depth && !item.is_normal)
+                decode_timer.emplace(*this);
             LoadParams params = item.params;
             params.undistort = item.undistort;
             std::optional<MaskedImageFill> fill;
