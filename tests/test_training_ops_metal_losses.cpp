@@ -1725,6 +1725,65 @@ namespace {
         EXPECT_EQ(bytes.allocated, 0u);
     }
 
+    // Catches the blur path handing a calibration fit another denominator than its loss divides by: the caller's
+    // denominator when it passes one, else the mask sum the reduction formed; the loss times it is the same sum
+    // either way.
+    TEST_P(PortableLosses, CalibrationFitGetsTheBlurredLossDenominator) {
+        const Shape4 s{1, 3, 32, 40};
+        for (const ops::PhotoPath path : {ops::PhotoPath::MaskedFused, ops::PhotoPath::MaskedDecoupled}) {
+            const bool decoupled = path == ops::PhotoPath::MaskedDecoupled;
+            const PhotoInputs in = photo_inputs({path, s}, 7);
+            double mask_sum = 0.0;
+            for (const double m : in.hmask)
+                mask_sum += m;
+            const double computed = static_cast<float>(mask_sum) * s.n * s.c + 1e-8;
+            double weighted_sum[2] = {};
+            for (const int fixed : {0, 1}) {
+                SCOPED_TRACE(std::format("decoupled {} fixed denominator {}", decoupled, fixed));
+                const float denominator = fixed ? 4321.5f : 0.0f;
+                ops::PhotoSaved saved{.backend = table_->photometric->create()};
+                Tensor loss, grad, grad_raw;
+                table_->photometric->evaluate(saved, in.x, decoupled ? in.raw : Tensor{}, in.y, in.mask,
+                                              {.path = path, .ssim_weight = 0.2f, .valid_padding = true, .denominator = denominator, .blur_sigma = 1.5f, .calibration_fit = true},
+                                              loss, grad, grad_raw);
+                if (fixed)
+                    EXPECT_EQ(saved.mask_denominator, denominator);
+                else
+                    EXPECT_NEAR(saved.mask_denominator, computed, 1e-6 * computed);
+                weighted_sum[fixed] = static_cast<double>(download(loss)[0]) * saved.mask_denominator;
+            }
+            EXPECT_NEAR(weighted_sum[1], weighted_sum[0], 1e-5 * std::abs(weighted_sum[0]));
+        }
+    }
+
+    // Catches the blur path waiting for the GPU to hand the calibration fit a denominator its caller passed: with 40
+    // chained 2048x2048 products queued ahead of it, evaluate returns while they still run.
+    TEST_P(PortableLosses, CalibrationFitOnTheBlurPathDoesNotWaitForTheGpu) {
+        if (GetParam() != GpuBackend::Metal)
+            GTEST_SKIP() << "Metal's queue";
+        const Shape4 s{1, 3, 32, 40};
+        const PhotoInputs in = photo_inputs({ops::PhotoPath::MaskedDecoupled, s}, 7);
+        const ops::PhotoParams params{.path = ops::PhotoPath::MaskedDecoupled, .ssim_weight = 0.2f, .valid_padding = true, .denominator = 4321.5f, .blur_sigma = 1.5f, .calibration_fit = true};
+        ops::PhotoSaved saved{.backend = table_->photometric->create()};
+        Tensor loss, grad, grad_raw;
+        // Pipelines and workspace first, so the timed call only encodes.
+        table_->photometric->evaluate(saved, in.x, in.raw, in.y, in.mask, params, loss, grad, grad_raw);
+        download(loss);
+        constexpr size_t n = 2048;
+        Tensor product = Tensor::ones({n, n}, Device::GPU);
+        const Tensor identity = Tensor::eye(n, Device::GPU);
+        for (int i = 0; i < 40; ++i)
+            product = product.mm(identity);
+        lfs::core::TensorFence queued(GpuBackend::Metal);
+        queued.record(lfs::core::TensorExecutionTarget::current());
+        if (queued.ready())
+            GTEST_SKIP() << "the GPU finished the queued work before the evaluate";
+        table_->photometric->evaluate(saved, in.x, in.raw, in.y, in.mask, params, loss, grad, grad_raw);
+        EXPECT_FALSE(queued.ready()) << "the evaluate waited for the GPU";
+        EXPECT_EQ(saved.mask_denominator, params.denominator);
+        download(loss);
+    }
+
     // The thin-structure denominator is read back once per camera and kept while what its weight was made from
     // stays the same; new inputs, another size or a cleared cache read the weight again.
     TEST_P(PortableLosses, StructureDenominatorCacheReadsEachCameraOnce) {

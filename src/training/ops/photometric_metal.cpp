@@ -635,9 +635,10 @@ namespace lfs::training {
                          &ws.grad, &raw_out},
                         grid, {kTile, kTile, 1}, blur_constants(images, masked, taps.radius, true));
 
-            // A calibration fit scales its masked equations by the loss's denominator, as on Vulkan.
+            // A calibration fit scales its masked equations by the loss's denominator, as on Vulkan. A denominator the
+            // caller passes is the one the reduction used, so it needs no read that waits for the GPU.
             if (params.calibration_fit && masked)
-                saved.mask_denominator = ws.mask_sum.item();
+                saved.mask_denominator = params.denominator > 0.0f ? params.denominator : ws.mask_sum.item();
             loss = ws.result;
             grad_corrected = ws.grad;
             squeeze_like(grad_corrected, corrected);
