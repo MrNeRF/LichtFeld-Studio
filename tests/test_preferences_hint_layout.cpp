@@ -159,7 +159,7 @@ namespace {
         ASSERT_NE(markup.find("data-event-click=\"apply_viewport_defaults\""), std::string::npos);
         // Render the actual Viewport section without starting unrelated Python models.
         // Retain the floating-window template and the complete flex ancestor chain.
-        markup = std::regex_replace(markup, std::regex(R"re(data-if="show_(general|appearance|input|interface|file_associations|mcp|portal)")re"),
+        markup = std::regex_replace(markup, std::regex(R"re(data-if="show_(?!viewport")[a-z_]+")re"),
                                     "style=\"display: none;\"");
         markup = std::regex_replace(markup, std::regex(R"re( data-[a-z-]+="[^"]*")re"), "");
         for (const auto* locale : {"de", "en", "es", "fr", "it", "ja", "ko", "nl", "pl", "zh"}) {
@@ -175,6 +175,9 @@ namespace {
                     auto translated = markup;
                     const std::string token = "@tr:preferences.apply_viewport_defaults";
                     translated.replace(translated.find(token), token.size(), label);
+                    const std::string hint_token = "@tr:preferences.viewport_defaults_hint";
+                    translated.replace(translated.find(hint_token), hint_token.size(),
+                                       json.at("preferences").at("viewport_defaults_hint").get<std::string>());
                     auto* doc = context_->LoadDocumentFromMemory(translated, (resources / "preferences.rml").string());
                     ASSERT_NE(doc, nullptr);
                     doc->SetClass("floating-panel", true);
@@ -184,6 +187,14 @@ namespace {
                     context_->Update();
                     auto* button = doc->QuerySelector(".preferences-apply-defaults");
                     ASSERT_NE(button, nullptr);
+                    auto* scroll = doc->QuerySelector(".preferences-content");
+                    ASSERT_NE(scroll, nullptr);
+                    const auto scroll_top = scroll->GetAbsoluteOffset(Rml::BoxArea::Content).y;
+                    const auto button_top = button->GetAbsoluteOffset(Rml::BoxArea::Border).y;
+                    EXPECT_GE(button_top, scroll_top - 0.5f);
+                    EXPECT_LE(button_top + button->GetBox().GetSize(Rml::BoxArea::Border).y,
+                              scroll_top + scroll->GetClientHeight() + 0.5f);
+
                     auto* container = button->GetParentNode();
                     const auto left = container->GetAbsoluteOffset(Rml::BoxArea::Content).x;
                     const auto button_size = button->GetBox().GetSize(Rml::BoxArea::Border);

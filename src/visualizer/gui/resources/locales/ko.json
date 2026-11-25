@@ -1247,7 +1247,7 @@
     "viewport": "뷰",
     "apply_viewport_defaults": "이 프로젝트에 기본값 적용…",
     "viewport_defaults": "새 프로젝트 기본값",
-    "viewport_defaults_hint": "새 프로젝트에 적용됩니다. 기존 프로젝트는 저장된 값을 유지합니다. 열려 있는 프로젝트를 업데이트하려면 아래의 이 프로젝트에 기본값 적용을 사용하세요.",
+    "viewport_defaults_hint": "새 프로젝트에는 이 뷰포트 기본값이 사용됩니다. 저장하지 않은 프로젝트를 포함해 현재 열린 프로젝트를 변경하려면 ‘이 프로젝트에 기본값 적용’을 사용하세요.",
     "viewport_style_defaults": "가이드 및 선택 스타일",
     "viewport_performance_defaults": "LOD 캐시 제한",
     "viewport_defaults_invalid": "지원 범위 내의 올바른 값을 입력하세요.",
@@ -2590,7 +2590,7 @@
     "apply_defaults": "기본값 적용…",
     "save_defaults_hint": "현재 가이드 스타일과 LOD 캐시 제한을 새 프로젝트의 기본값으로 저장합니다.",
     "apply_defaults_hint": "이 프로젝트에만 기본값을 적용합니다. 다른 렌더링 설정은 유지됩니다.",
-    "apply_defaults_confirm": "이 프로젝트의 가이드 스타일과 LOD 캐시 제한을 기본값으로 바꾸시겠습니까?"
+    "apply_defaults_confirm": "열린 프로젝트의 가이드 및 선택 스타일과 LOD 캐시 제한을 저장된 기본값으로 바꿉니다."
   },
   "scripts_panel": {
     "title": "Python 스크립트",

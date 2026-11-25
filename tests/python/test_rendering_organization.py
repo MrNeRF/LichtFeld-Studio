@@ -87,13 +87,16 @@ def test_default_text_saves_on_commit_not_per_keystroke(preferences_panel_module
     assert getter() == "15"
     section._commit("axes_size")
     assert state.rendering_defaults["axes_size"] == 9.0
-    assert section._error and getter() == 9.0
+    assert section._error and getter() == "15"
     setter("4")
     section._commit("axes_size")
     assert state.rendering_defaults["axes_size"] == 4.0
     assert not section._error
-    setter("7")
+    setter("15")
+    section._commit("axes_size")
+    assert section._error
     section._discard("axes_size")
+    assert not section._error and getter() == 4.0
     section._commit("axes_size")
     assert state.rendering_defaults["axes_size"] == 4.0
 
@@ -128,7 +131,8 @@ def test_apply_defaults_requires_explicit_confirmation(rendering_panel_module):
     module.lf.ui.confirm_dialog = lambda *args: dialogs.append(args)
     panel._confirm_apply_defaults()
     assert applied == []
-    title, text, buttons, callback = dialogs.pop()
+    title, _, buttons, callback = dialogs.pop()
+    assert title == "preferences.apply_viewport_defaults"
     callback(buttons[1])
     assert applied == []
     callback(buttons[0])
@@ -196,10 +200,64 @@ def test_preferences_invalid_pending_default_cannot_apply_old_values(preferences
     dialogs, applied = [], []
     module.lf.ui.confirm_dialog = lambda *args: dialogs.append(args)
     module.lf.ui.apply_rendering_defaults = lambda: applied.append(True)
-    model.bindings["default_axes_size"][1]("nan")
+    state.rendering_defaults = {"selection_outline_opacity": 1.0}
+    getter, setter = model.bindings["default_selection_outline_opacity"]
+    setter("7")
+    section._commit_text("selection_outline_opacity")
+    assert getter() == "7"
     section._confirm_apply()
-    assert section._error
+    assert model.func_bindings["rendering_defaults_error"]() == "preferences.viewport_defaults_invalid"
     assert dialogs == [] and applied == []
+
+    root = ET.parse(RESOURCES / "preferences.rml").getroot()
+    viewport = root.find('.//*[@data-if="show_viewport"]')
+    action = viewport.find('.//*[@data-event-click="apply_viewport_defaults"]/..')
+    adjacent_error = list(viewport)[list(viewport).index(action) + 1]
+    assert adjacent_error.get("data-if") == "rendering_defaults_error != ''"
+    assert adjacent_error.text == "{{rendering_defaults_error}}"
+    assert sum(element.text == "{{rendering_defaults_error}}" for element in viewport.iter("span")) == 1
+    assert state.rendering_defaults["selection_outline_opacity"] == 1.0
+
+    setter("0.75")
+    section._confirm_apply()
+    assert state.rendering_defaults["selection_outline_opacity"] == 0.75
+    assert model.func_bindings["rendering_defaults_error"]() == ""
+    assert len(dialogs) == 1 and applied == []
+    _, _, buttons, callback = dialogs.pop()
+    callback(buttons[0])
+    assert applied == [True]
+
+
+def test_disabling_selection_outline_discards_only_hidden_drafts(preferences_panel_module):
+    module, state = preferences_panel_module
+    state.rendering_defaults = {"selection_outline": True, "selection_outline_opacity": 1.0, "grid_opacity": 0.5}
+    section = module.PreferencesPanel()._rendering_defaults
+    model = _BindingModelStub()
+    section.bind(model)
+    dialogs = []
+    module.lf.ui.confirm_dialog = lambda *args: dialogs.append(args)
+
+    opacity, set_opacity = model.bindings["default_selection_outline_opacity"]
+    grid, set_grid = model.bindings["default_grid_opacity"]
+    set_opacity("7")
+    section._commit_text("selection_outline_opacity")
+    set_grid("2")
+    section._commit_text("grid_opacity")
+    model.bindings["default_selection_outline"][1](False)
+
+    assert opacity() == 1.0
+    assert grid() == "2"
+    assert model.func_bindings["rendering_defaults_error"]()
+    section._confirm_apply()
+    assert dialogs == []
+
+    set_grid("0.6")
+    section._confirm_apply()
+    assert len(dialogs) == 1
+    assert not model.func_bindings["rendering_defaults_error"]()
+    assert state.rendering_defaults == {
+        "selection_outline": False, "selection_outline_opacity": 1.0, "grid_opacity": 0.6,
+    }
 
 
 def test_preferences_exposes_explicit_project_apply_and_translates_it_everywhere():

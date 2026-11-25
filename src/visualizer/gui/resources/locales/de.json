@@ -1247,7 +1247,7 @@
     "viewport": "Ansicht",
     "apply_viewport_defaults": "Standardwerte auf dieses Projekt anwenden…",
     "viewport_defaults": "Vorgaben für neue Projekte",
-    "viewport_defaults_hint": "Diese Vorgaben gelten für neue Projekte. Bestehende Projekte behalten ihre gespeicherten Werte. Verwende unten Standardwerte auf dieses Projekt anwenden, um das geöffnete Projekt zu aktualisieren.",
+    "viewport_defaults_hint": "Neue Projekte verwenden diese Vorgaben für die Ansicht. Um das geöffnete Projekt zu aktualisieren, wählen Sie „Standardwerte auf dieses Projekt anwenden“. Das gilt auch für ungespeicherte Projekte.",
     "viewport_style_defaults": "Hilfen und Auswahlstil",
     "viewport_performance_defaults": "LOD-Cache-Grenzen",
     "viewport_defaults_invalid": "Geben Sie einen gültigen Wert im unterstützten Bereich ein.",
@@ -2590,7 +2590,7 @@
     "apply_defaults": "Vorgaben anwenden…",
     "save_defaults_hint": "Aktuellen Hilfenstil und LOD-Cache-Grenzen für neue Projekte speichern.",
     "apply_defaults_hint": "Vorgaben nur auf dieses Projekt anwenden. Andere Rendering-Einstellungen bleiben unverändert.",
-    "apply_defaults_confirm": "Hilfenstil und LOD-Cache-Grenzen dieses Projekts durch Ihre Vorgaben ersetzen?"
+    "apply_defaults_confirm": "Der Stil für Hilfen und Auswahl sowie die LOD-Cache-Grenzen des geöffneten Projekts werden durch Ihre gespeicherten Vorgaben ersetzt."
   },
   "scripts_panel": {
     "title": "Python-Skripte",

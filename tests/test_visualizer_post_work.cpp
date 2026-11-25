@@ -3735,11 +3735,16 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
             std::string json;
             ~Restore() { (void)UserPreferences::instance().setRenderingDefaults(json); }
         } restore{preferences.renderingDefaults()};
-        ASSERT_TRUE(preferences.setRenderingDefaults(R"({"show_grid":false,"axes_size":4.5})"));
+        ASSERT_TRUE(preferences.setRenderingDefaults(R"({"show_grid":false,"axes_size":4.5,"selection_outline":true,"hide_outside_depth_box":true})"));
         VisualizerImpl viewer(projectOptions());
         auto* const rendering = viewer.getRenderingManager();
         ASSERT_NE(rendering, nullptr);
         auto settings = rendering->getSettings();
+        EXPECT_TRUE(settings.selection_outline);
+        EXPECT_TRUE(settings.hide_outside_depth_box);
+        EXPECT_FALSE(settings.show_grid);
+        EXPECT_FLOAT_EQ(settings.axes_size, 4.5f);
+
         settings.show_grid = true;
         settings.axes_size = 2.0f;
         settings.scene_upscaler = "spatial";

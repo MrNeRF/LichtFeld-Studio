@@ -1247,7 +1247,7 @@
     "viewport": "Weergave",
     "apply_viewport_defaults": "Standaardwaarden op dit project toepassen…",
     "viewport_defaults": "Standaarden voor nieuwe projecten",
-    "viewport_defaults_hint": "Deze waarden gelden voor nieuwe projecten. Bestaande projecten behouden hun opgeslagen waarden. Gebruik hieronder Standaardwaarden op dit project toepassen om het geopende project bij te werken.",
+    "viewport_defaults_hint": "Nieuwe projecten gebruiken deze standaardinstellingen voor de weergave. Gebruik ‘Standaardwaarden op dit project toepassen’ om het geopende project bij te werken, ook als het nog niet is opgeslagen.",
     "viewport_style_defaults": "Hulplijnen en selectiestijl",
     "viewport_performance_defaults": "LOD-cachelimieten",
     "viewport_defaults_invalid": "Voer een geldige waarde binnen het ondersteunde bereik in.",
@@ -2590,7 +2590,7 @@
     "apply_defaults": "Standaarden toepassen…",
     "save_defaults_hint": "Huidige hulplijnstijl en LOD-cachelimieten opslaan voor nieuwe projecten.",
     "apply_defaults_hint": "Standaarden alleen op dit project toepassen. Andere renderinstellingen blijven gelijk.",
-    "apply_defaults_confirm": "Hulplijnstijl en LOD-cachelimieten van dit project vervangen door uw standaarden?"
+    "apply_defaults_confirm": "De hulplijnen en selectiestijl en de LOD-cachelimieten van het geopende project worden vervangen door je opgeslagen standaardwaarden."
   },
   "scripts_panel": {
     "title": "Python-scripts",
