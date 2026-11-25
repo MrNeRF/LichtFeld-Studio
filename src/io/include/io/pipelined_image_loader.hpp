@@ -702,6 +702,8 @@ namespace lfs::io {
         size_t adaptive_growth_cooldown_windows_ = 0;
         size_t adaptive_occupancy_ = 0;
         std::atomic<size_t> host_image_decodes_{0};
+        // The CUDA decode stage is attached: the decode workers run on the device, not the host.
+        bool cuda_decode_stage_ = false;
         std::atomic<size_t> in_flight_{0};
         std::atomic<size_t> output_image_bytes_{0};
         std::atomic<size_t> output_mask_bytes_{0};
