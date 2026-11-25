@@ -3171,12 +3171,12 @@ namespace lfs::training::kernels {
         template <int K, int R, int SV, int Rows, int Cols, typename Tap, typename Source, typename RowSums, typename Store>
         __device__ __forceinline__ void separable(const Tap tap, const Source& source, RowSums& rows, const Store& store) {
             filter_pass<K, R, 2, false, 0, R, Rows + 2 * R, Cols>(
-                tap, [&](const int y, const int x, float (&v)[K]) { unpack(source[y][x], v); },
-                [&](const int y, const int x, const float (&a)[K]) { rows[y][x - R] = pack(a); });
+                tap, [&](const int y, const int x, float(&v)[K]) { unpack(source[y][x], v); },
+                [&](const int y, const int x, const float(&a)[K]) { rows[y][x - R] = pack(a); });
             __syncthreads();
             filter_pass<K, R, SV, true, R, 0, Rows, Cols>(
-                tap, [&](const int y, const int x, float (&v)[K]) { unpack(rows[y][x], v); },
-                [&](const int y, const int x, const float (&a)[K]) { store(y - R, x, a); });
+                tap, [&](const int y, const int x, float(&v)[K]) { unpack(rows[y][x], v); },
+                [&](const int y, const int x, const float(&a)[K]) { store(y - R, x, a); });
         }
 
         // Row sums of five window moments, column-major for conflict-free row writes and column reads.
@@ -3189,15 +3189,15 @@ namespace lfs::training::kernels {
         template <typename Sample>
         __device__ __forceinline__ void window_moments(MomentRows& rows, const Sample& sample, const float inv_window, float (&m)[5]) {
             filter_pass<5, HALO, 4, false, 0, HALO, SHARED_Y, BLOCK_X>(
-                WindowTaps{}, sample, [&](const int y, const int x, const float (&a)[5]) {
+                WindowTaps{}, sample, [&](const int y, const int x, const float(&a)[5]) {
                     rows.a[x - HALO][y] = make_float4(a[0], a[1], a[2], a[3]);
                     rows.b[x - HALO][y] = a[4]; });
             __syncthreads();
             filter_pass<5, HALO, 1, true, HALO, 0, BLOCK_Y, BLOCK_X>(
-                WindowTaps{}, [&](const int y, const int x, float (&v)[5]) {
+                WindowTaps{}, [&](const int y, const int x, float(&v)[5]) {
                     unpack(rows.a[x][y], reinterpret_cast<float (&)[4]>(v));
                     v[4] = rows.b[x][y]; },
-                [&](int, int, const float (&a)[5]) {
+                [&](int, int, const float(&a)[5]) {
 #pragma unroll
                     for (int k = 0; k < 5; ++k)
                         m[k] = a[k] * inv_window; });
@@ -3271,7 +3271,7 @@ namespace lfs::training::kernels {
             });
             const bool all_kept = __syncthreads_and(region_kept);
             if (!all_kept)
-                separable<2, R, 2, SHARED_Y, SHARED_X>(taps, source, s.rows, [&](const int r, const int q, const float (&a)[2]) {
+                separable<2, R, 2, SHARED_Y, SHARED_X>(taps, source, s.rows, [&](const int r, const int q, const float(&a)[2]) {
                     support[r][q] = at.inside(r - HALO, q - HALO) && a[0] > 1.0e-30f ? 1.f / a[0] : 0.f;
                 });
 
@@ -3290,16 +3290,16 @@ namespace lfs::training::kernels {
                 // Sharp moments: corrected, raw, raw^2, raw photo, photo; blurred: photo^2, G corrected, G raw,
                 // (G raw)^2, G raw photo.
                 float ms[5], mb[5];
-                window_moments(s.moments, [&](const int r, const int q, float (&v)[5]) {
+                window_moments(s.moments, [&](const int r, const int q, float(&v)[5]) {
                     const float2 x = source[r + R][q + R];
                     const float py = photo[r][q], w = Masked ? weights[r][q] : 1.f;
                     v[0] = w * x.x, v[1] = w * x.y, v[2] = w * (x.y * x.y), v[3] = w * (x.y * py), v[4] = w * py; }, inv_window, ms);
-                separable<2, R, 2, SHARED_Y, SHARED_X>(taps, source, s.rows, [&](const int r, const int q, const float (&a)[2]) {
+                separable<2, R, 2, SHARED_Y, SHARED_X>(taps, source, s.rows, [&](const int r, const int q, const float(&a)[2]) {
                     const float n = all_kept ? 1.f : support[r][q];
                     source[r + R][q + R] = make_float2(a[0] * n, a[1] * n);
                 });
                 __syncthreads();
-                window_moments(s.moments, [&](const int r, const int q, float (&v)[5]) {
+                window_moments(s.moments, [&](const int r, const int q, float(&v)[5]) {
                     const float2 g = source[r + R][q + R];
                     const float py = photo[r][q], w = Masked ? weights[r][q] : 1.f;
                     v[0] = w * (py * py), v[1] = w * g.x, v[2] = w * g.y, v[3] = w * (g.y * g.y), v[4] = w * (g.y * py); }, inv_window, mb);
@@ -3389,12 +3389,12 @@ namespace lfs::training::kernels {
                 });
                 __syncthreads();
                 float m[4], t[2]; // W(partials), T(source) at this pixel
-                separable<4, HALO, 1, BLOCK_Y, BLOCK_X>(WindowTaps{}, data, conv, [&](int, int, const float (&a)[4]) {
+                separable<4, HALO, 1, BLOCK_Y, BLOCK_X>(WindowTaps{}, data, conv, [&](int, int, const float(&a)[4]) {
 #pragma unroll
                     for (int k = 0; k < 4; ++k)
                         m[k] = a[k];
                 });
-                separable<2, R, 1, BLOCK_Y, BLOCK_X>(taps, source, rows, [&](int, int, const float (&a)[2]) { t[0] = a[0], t[1] = a[1]; });
+                separable<2, R, 1, BLOCK_Y, BLOCK_X>(taps, source, rows, [&](int, int, const float(&a)[2]) { t[0] = a[0], t[1] = a[1]; });
                 if (!in_image)
                     continue;
                 const int q = plane + pix;

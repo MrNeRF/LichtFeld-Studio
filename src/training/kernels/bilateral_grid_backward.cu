@@ -899,7 +899,7 @@ namespace lfs::training::kernels {
         const int fx_cap, const int fy_cap) {
         accumulate_slice_grid_grad<12, kCHW>(
             rgb, grad_output, grad_grid, L, H, W, h, w, fx_cap, fy_cap,
-            [](const GridGradPixel& s, float (&dL)[12]) {
+            [](const GridGradPixel& s, float(&dL)[12]) {
 #pragma unroll
                 for (int ci = 0; ci < 12; ++ci) {
                     const int si = ci % 4, di = ci / 4;
@@ -1020,7 +1020,7 @@ namespace lfs::training::kernels {
         const int fx_cap, const int fy_cap) {
         accumulate_slice_grid_grad<9, kCHW>(
             rgb, grad_output, grad_grid, L, H, W, h, w, fx_cap, fy_cap,
-            [=](const GridGradPixel& s, float (&dL)[9]) {
+            [=](const GridGradPixel& s, float(&dL)[9]) {
                 float sampled[9];
                 sample_exposure_chroma_grid_bwd(
                     grid, L, H, W, s.x0, s.y0, s.z0, s.x1, s.y1, s.z1, s.fx, s.fy, s.fz, shared_offset, sampled);
