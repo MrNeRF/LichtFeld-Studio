@@ -1243,10 +1243,11 @@ packet bytes, including fields outside this interpretation.
 
 Packet clocks, sensor counters and per-sample times are distinct. This API
 reports the available observations; it does not assign sample times from the
-packet rate. Unsupported layouts are reported per stream with the stream key,
-`status: unsupported` and a reason. Supported observations from the same packet
-are still returned. Malformed records, incomplete numeric components, invalid
-scales and nonfinite values fail interpretation. Unknown records
-are retained in the raw observation without interpreting their contents. A separate
-128 MiB retained-decoded-data budget bounds expansion; adjust it with
+packet rate. A stream with an unsupported layout contains `key`,
+`status: "unsupported"` and `reason`. Check `status` before reading
+`samples`, which is absent from unsupported entries. Supported observations
+from the same packet are still returned. Malformed records, incomplete numeric
+components, invalid scales and nonfinite values fail interpretation. Unknown
+records are retained in the raw observation without interpreting their contents.
+A separate 128 MiB retained-decoded-data budget bounds expansion; adjust it with
 `--gpmf-max-decoded-bytes N`, Python's `decoded_byte_limit`, or the native argument.
