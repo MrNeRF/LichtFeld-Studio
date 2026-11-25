@@ -136,9 +136,9 @@ void storeUS(Params p, uint64_t cell, float2 us, float4 mm) {
     }
 }
 uint shSlot(uint row, uint k, uint slots) { return (row / 32 * slots + k) * 32 + row % 32; }
-uint shQ16Index(Params p, uint row, uint k, uint c) {
+uint64_t shQ16Index(Params p, uint row, uint k, uint c) {
     uint cell = k * 4 + c;
-    return ((row / 32 * p.valueCells + cell) * 32 + row % 32);
+    return ((uint64_t(row / 32) * p.valueCells + cell) * 32 + row % 32);
 }
 float loadShValue(Params p, uint row, uint slot, uint k, uint c, float2 bounds) {
     if (p.valueBits == 16 && p.valueBounds != 0 && p.valueCells > 0) {
@@ -148,8 +148,8 @@ float loadShValue(Params p, uint row, uint slot, uint k, uint c, float2 bounds) 
         return fma(bounds.y - bounds.x, float(code) * (1.0f / 65535.0f), bounds.x);
     }
     if (p.valueBits == 16)
-        return f16tof32(((Ptr<uint16_t, Access.Read>)p.parameter)[slot * 4 + c]);
-    return ((Ptr<float, Access.Read>)p.parameter)[slot * 4 + c];
+        return f16tof32(((Ptr<uint16_t, Access.Read>)p.parameter)[uint64_t(slot) * 4 + c]);
+    return ((Ptr<float, Access.Read>)p.parameter)[uint64_t(slot) * 4 + c];
 }
 void storeShValue(Params p, uint row, uint slot, uint k, uint c, float value, float2 bounds) {
     if (p.valueBits == 16 && p.valueBounds != 0 && p.valueCells > 0) {
@@ -158,9 +158,9 @@ void storeShValue(Params p, uint row, uint slot, uint k, uint c, float value, fl
         uint code = qCode(value, bounds.x, bounds.y, 16);
         ((Ptr<uint16_t, Access.ReadWrite>)p.parameter)[shQ16Index(p, row, k, c)] = uint16_t(code);
     } else if (p.valueBits == 16) {
-        ((Ptr<uint16_t, Access.ReadWrite>)p.parameter)[slot * 4 + c] = uint16_t(f32tof16(value));
+        ((Ptr<uint16_t, Access.ReadWrite>)p.parameter)[uint64_t(slot) * 4 + c] = uint16_t(f32tof16(value));
     } else {
-        ((Ptr<float, Access.ReadWrite>)p.parameter)[slot * 4 + c] = value;
+        ((Ptr<float, Access.ReadWrite>)p.parameter)[uint64_t(slot) * 4 + c] = value;
     }
 }
 float rowScale(Params p, uint row, bool sh) {
@@ -250,7 +250,7 @@ void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uniform Push pu
         uint n=p.layout==0?p.attributes:p.slots*4;
         bool selected=((Ptr<uint,Access.Read>)p.scratch)[row]!=0;
         for(uint a=0;a<n;++a) {
-            uint64_t cell=p.layout==0?uint64_t(row)*n+a:uint64_t(shSlot(row,a/4,p.slots)*4+a%4);
+            uint64_t cell=p.layout==0?uint64_t(row)*n+a:uint64_t(shSlot(row,a/4,p.slots))*4+a%4;
             if(selected) storeUS(p,cell,float2(0),newMomentBounds);
             else if (any(oldmm != newMomentBounds)) storeUS(p,cell,loadUS(p,cell,oldmm),newMomentBounds);
         }

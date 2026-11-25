@@ -21,8 +21,8 @@ struct ReencodeParams {
     uint sortedCount, primitives, decodeRows, rest;
     uint reserved0, reserved1, reserved2, reserved3;
 };
-uint q16Offset(uint row, uint cell, uint rest) {
-    return ((row / 32 * (rest * 3) + cell) * 32 + row % 32);
+uint64_t q16Offset(uint row, uint cell, uint rest) {
+    return ((uint64_t(row / 32) * (rest * 3) + cell) * 32 + row % 32);
 }
 
 [numthreads(256, 1, 1)]
@@ -116,10 +116,10 @@ void main(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex, uniform Parameters 
     }
     if (operation == 1) { // Q16 -> fp32 float4 swizzle
         uint width = ((sourceRest * 3 + 3) / 4) * 4;
-        uint total = ((p.count + 31) / 32) * 32 * width;
-        for (uint i = gid.x * 256 + lane; i < total; i += groups.x * 256) {
-            uint row = (i / (width * 32)) * 32 + (i / 4) % 32;
-            uint c = ((i / 128) % (width / 4)) * 4 + i % 4;
+        uint64_t total = uint64_t((p.count + 31) / 32) * 32 * width;
+        for (uint64_t i = uint64_t(gid.x) * 256 + lane; i < total; i += uint64_t(groups.x) * 256) {
+            uint row = uint((i / (width * 32)) * 32 + (i / 4) % 32);
+            uint c = uint(((i / 128) % (width / 4)) * 4 + i % 4);
             float v = c < sourceRest * 3 ? readCell(p, row, c) : 0.0f;
             ((Ptr<float, Access.ReadWrite>)p.destination)[i] = v;
         }
@@ -159,7 +159,7 @@ void main(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex, uniform Parameters 
                     source.sourceRows = p.count;
                     value = readCell(source, row, cell);
                 }
-                else if (sourceFormat == 0) value = ((Ptr<float, Access.Read>)p.source)[row * layoutRestCount * 3 + cell];
+                else if (sourceFormat == 0) value = ((Ptr<float, Access.Read>)p.source)[uint64_t(row) * (layoutRestCount * 3) + cell];
                 else if (sourceFormat == 2) value = f16tof32(((Ptr<uint16_t, Access.Read>)p.source)[shOffset(row, cell, layoutRestCount, false)]);
                 else value = ((Ptr<float, Access.Read>)p.source)[shOffset(row, cell, layoutRestCount, false)];
             }
@@ -180,13 +180,13 @@ void main(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex, uniform Parameters 
         uint srcRest = sourceRest, dstRest = destinationRest;
         uint srcWidth = sourceFormat == 0 ? srcRest * 3 : ((srcRest * 3 + 3) / 4) * 4;
         uint dstWidth = destinationFormat == 0 ? dstRest * 3 : ((dstRest * 3 + 3) / 4) * 4;
-        uint logical = p.count * dstWidth;
-        for (uint i = gid.x * 256 + lane; i < logical; i += groups.x * 256) {
-            uint outRow = i / dstWidth, c = i % dstWidth;
+        uint64_t logical = uint64_t(p.count) * dstWidth;
+        for (uint64_t i = uint64_t(gid.x) * 256 + lane; i < logical; i += uint64_t(groups.x) * 256) {
+            uint outRow = uint(i / dstWidth), c = uint(i % dstWidth);
             uint srcRow = uint(indexAt(p, outRow));
             uint dstRow = p.destinationOffset + outRow;
-            uint srcOff = sourceFormat == 0 ? srcRow * srcWidth + c : shOffset(srcRow, c, srcRest, false);
-            uint dstOff = destinationFormat == 0 ? dstRow * dstWidth + c : shOffset(dstRow, c, dstRest, false);
+            uint64_t srcOff = sourceFormat == 0 ? uint64_t(srcRow) * srcWidth + c : shOffset(srcRow, c, srcRest, false);
+            uint64_t dstOff = destinationFormat == 0 ? uint64_t(dstRow) * dstWidth + c : shOffset(dstRow, c, dstRest, false);
             if (sourceFormat == 4) {
                 ((Ptr<uint8_t, Access.ReadWrite>)p.destination)[dstOff] = c < srcWidth
                     ? ((Ptr<uint8_t, Access.Read>)p.source)[srcOff] : uint8_t(0);
@@ -200,17 +200,17 @@ void main(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex, uniform Parameters 
     if (operation == 7 || operation == 8 || operation == 9) { // canonical gather / append / scatter
         uint srcRest = sourceRest, dstRest = destinationRest;
         uint width = operation == 7 ? dstRest*3 : ((dstRest*3+3)/4)*4;
-        uint total = p.count * width;
-        for (uint i = gid.x * 256 + lane; i < total; i += groups.x * 256) {
-            uint row = i / width;
-            uint cell = i % width;
+        uint64_t total = uint64_t(p.count) * width;
+        for (uint64_t i = uint64_t(gid.x) * 256 + lane; i < total; i += uint64_t(groups.x) * 256) {
+            uint row = uint(i / width);
+            uint cell = uint(i % width);
             uint srcRow = operation == 7 ? uint(((Ptr<int64_t, Access.Read>)p.indices)[row]) : row;
             uint dstRow = operation == 7 ? row : operation == 8 ? p.destinationOffset + row : uint(((Ptr<int, Access.Read>)p.indices)[row]);
             if (operation == 7) {
                 ((Ptr<float, Access.ReadWrite>)p.destination)[i] = cell < srcRest * 3
                     ? ((Ptr<float, Access.Read>)p.source)[shOffset(srcRow, cell, srcRest, false)] : 0.0f;
             } else {
-                ((Ptr<float, Access.ReadWrite>)p.destination)[shOffset(dstRow, cell, dstRest, false)] = cell < srcRest*3 ? ((Ptr<float, Access.Read>)p.source)[row*srcRest*3+cell] : 0.0f;
+                ((Ptr<float, Access.ReadWrite>)p.destination)[shOffset(dstRow, cell, dstRest, false)] = cell < srcRest*3 ? ((Ptr<float, Access.Read>)p.source)[uint64_t(row)*(srcRest*3)+cell] : 0.0f;
             }
         }
         return;
