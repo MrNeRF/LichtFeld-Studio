@@ -860,23 +860,51 @@ static void blur_forward_tile(constant PhotoBlurForwardParams& p, const uint til
         // A common scale cancels from normalised moments and centre/mass (load_mask_window).
         const int anchor_x = min(x0 + kPhotoTile / 2, W - 1), anchor_y = min(y0 + kPhotoTile / 2, H - 1);
         const float scale = 1.0f / fmax(1.0f, photo_mask(p.mask, uint(anchor_y) * uint(W) + uint(anchor_x)));
-        for (uint i = rank; i < kPhotoSpanCells; i += uint(kPhotoTile * kPhotoTile)) {
-            const int gy = y0 + int(i / kPhotoSpan) - kPhotoHalo, gx = x0 + int(i % kPhotoSpan) - kPhotoHalo;
-            const bool in = gx >= 0 && gx < W && gy >= 0 && gy < H;
-            const float value = (in ? photo_mask(p.mask, uint(gy) * uint(W) + uint(gx)) : 1.0f) * scale;
-            weights[i] = value;
-            partial_support = partial_support || value != 1.0f;
+        constexpr int kSpanQuads = (kPhotoSpan + 3) / 4;
+        if (rank < uint(kPhotoSpan * kSpanQuads)) {
+            const int yy = int(rank) / kSpanQuads, xx = 4 * (int(rank) % kSpanQuads);
+            const int gy = y0 + yy - kPhotoHalo, gx = x0 + xx - kPhotoHalo;
+            threadgroup float* out = weights + yy * kPhotoSpan + xx;
+            if (xx + 4 <= kPhotoSpan && gy >= 0 && gy < H && gx >= 0 && gx + 4 <= W) {
+                const float4 value = blur_mask4(p.mask, uint(gy) * uint(W) + uint(gx)) * scale;
+                out[0] = value.x;
+                out[1] = value.y;
+                out[2] = value.z;
+                out[3] = value.w;
+                partial_support = partial_support || any(value != 1.0f);
+            } else {
+                for (int k = 0; k < 4 && xx + k < kPhotoSpan; ++k) {
+                    const bool in = gx + k >= 0 && gx + k < W && gy >= 0 && gy < H;
+                    const float value = (in ? photo_mask(p.mask, uint(gy) * uint(W) + uint(gx + k)) : 1.0f) * scale;
+                    out[k] = value;
+                    partial_support = partial_support || value != 1.0f;
+                }
+            }
         }
         if (simd_any(inside && photo_mask(p.mask, pixel) != 0.0f) && simd_is_first())
             atomic_fetch_or_explicit(&flags[2], 1u, memory_order_relaxed);
         if (simd_any(partial_support) && simd_is_first())
             atomic_fetch_or_explicit(&flags[0], 1u, memory_order_relaxed);
     }
-    for (uint i = rank; i < uint(E * E); i += uint(kPhotoTile * kPhotoTile)) {
-        const int yy = int(i) / E, xx = int(i) % E;
-        const bool keep = blur_weight(p.mask, y0 + yy - kPhotoHalo - R, x0 + xx - kPhotoHalo - R, H, W) > 0.0f;
-        src[yy * kBlurReachPitch + xx] = float2(keep ? 1.0f : 0.0f, 0.0f);
-        dropped = dropped || !keep;
+    const int reach_quads = (E + 3) / 4;
+    for (uint i = rank; i < uint(E * reach_quads); i += uint(kPhotoTile * kPhotoTile)) {
+        const int yy = int(i) / reach_quads, xx = 4 * (int(i) % reach_quads);
+        const int gy = y0 + yy - kPhotoHalo - R, gx = x0 + xx - kPhotoHalo - R;
+        threadgroup float2* out = src + yy * kBlurReachPitch + xx;
+        if (xx + 4 <= E && gy >= 0 && gy < H && gx >= 0 && gx + 4 <= W) {
+            const bool4 keep = kPhotoMaskedWindow ? blur_mask4(p.mask, uint(gy) * uint(W) + uint(gx)) > 0.0f : bool4(true);
+            out[0] = float2(keep.x ? 1.0f : 0.0f, 0.0f);
+            out[1] = float2(keep.y ? 1.0f : 0.0f, 0.0f);
+            out[2] = float2(keep.z ? 1.0f : 0.0f, 0.0f);
+            out[3] = float2(keep.w ? 1.0f : 0.0f, 0.0f);
+            dropped = dropped || !all(keep);
+        } else {
+            for (int k = 0; k < 4 && xx + k < E; ++k) {
+                const bool keep = blur_weight(p.mask, gy, gx + k, H, W) > 0.0f;
+                out[k] = float2(keep ? 1.0f : 0.0f, 0.0f);
+                dropped = dropped || !keep;
+            }
+        }
     }
     if (simd_any(dropped) && simd_is_first())
         atomic_fetch_or_explicit(&flags[1], 1u, memory_order_relaxed);
