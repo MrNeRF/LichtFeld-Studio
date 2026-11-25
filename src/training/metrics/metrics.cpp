@@ -11,6 +11,7 @@
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/events.hpp"
+#include "core/filename_key.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
@@ -124,16 +125,30 @@ namespace lfs::training {
         }
 
         // Saved evaluation images are named after their camera; a repeated stem keeps its view index.
-        std::vector<std::string> eval_image_stems(const CameraDataset& dataset) {
+        std::vector<std::string> eval_image_stems(const CameraDataset& dataset, const std::filesystem::path& directory) {
             std::vector<std::string> stems;
             stems.reserve(dataset.size());
-            std::unordered_set<std::string> used;
             for (size_t i = 0; i < dataset.size(); ++i) {
-                auto stem = lfs::core::path_to_utf8(
-                    lfs::core::utf8_to_path(dataset.get_camera(i)->image_name()).stem());
-                if (stem.empty() || !used.insert(stem).second)
-                    stem = stem.empty() ? std::to_string(i) : std::format("{}_{}", stem, i);
-                stems.push_back(std::move(stem));
+                stems.push_back(lfs::core::path_to_utf8(
+                    lfs::core::utf8_to_path(dataset.get_camera(i)->image_name()).stem()));
+            }
+            // Preserve original stems even if a generated suffix would match a later image.
+            const bool case_sensitive = lfs::core::detail::artifact_directory_case_sensitive(directory);
+            const auto key = [case_sensitive](const std::string& stem) {
+                return lfs::core::detail::artifact_filename_key(lfs::core::utf8_to_path(stem + ".png"), case_sensitive);
+            };
+            std::unordered_set<std::filesystem::path> original;
+            for (const auto& stem : stems)
+                original.insert(key(stem));
+            std::unordered_set<std::filesystem::path> used;
+            for (size_t i = 0; i < stems.size(); ++i) {
+                auto& stem = stems[i];
+                if (!stem.empty() && used.insert(key(stem)).second)
+                    continue;
+                const auto base = stem.empty() ? std::to_string(i) : std::format("{}_{}", stem, i);
+                stem = base;
+                for (size_t suffix = 1; original.contains(key(stem)) || !used.insert(key(stem)).second; ++suffix)
+                    stem = std::format("{}_{}", base, suffix);
             }
             return stems;
         }
@@ -1723,7 +1738,7 @@ namespace lfs::training {
         }
 
         const size_t val_dataset_size = val_dataset->size();
-        const auto image_stems = _params.optimization.enable_save_eval_images ? eval_image_stems(*val_dataset)
+        const auto image_stems = _params.optimization.enable_save_eval_images ? eval_image_stems(*val_dataset, eval_dir)
                                                                               : std::vector<std::string>{};
         size_t skipped_images = 0;
         size_t evaluated_images = 0;
