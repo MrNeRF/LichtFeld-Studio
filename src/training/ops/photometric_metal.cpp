@@ -514,6 +514,9 @@ namespace lfs::training {
                 ssim_backward(images, images.prediction, ws.dm_mu, ws.dm_sigma1, ws.dm_sigma12, mask_sum, ws.grad, weight,
                               padding);
             }
+            // A calibration fit scales its masked equations by the loss's denominator, as on Vulkan.
+            if (params.calibration_fit && masked)
+                saved.mask_denominator = ws.mask_sum.item();
             loss = ws.result;
             grad_corrected = ws.grad;
             squeeze_like(grad_corrected, corrected);

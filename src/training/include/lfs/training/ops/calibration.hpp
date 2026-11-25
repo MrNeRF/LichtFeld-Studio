@@ -25,5 +25,5 @@ namespace lfs::gpu_ops {
 } // namespace lfs::gpu_ops
 namespace lfs::training {
     const gpu_ops::CalibrationOps& cuda_calibration_ops();
-    const gpu_ops::CalibrationOps& vulkan_calibration_ops();
+    const gpu_ops::CalibrationOps& portable_calibration_ops();
 } // namespace lfs::training

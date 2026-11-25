@@ -2885,6 +2885,17 @@ namespace {
             GTEST_SKIP();
         compare_training_changes(capture_calibration_and_blur(GpuBackend::Vulkan), capture_calibration_and_blur(GpuBackend::CUDA));
     }
+    TEST(TrainingOpsParity, CalibrationMetalMatchesVulkan) {
+        if (!lfs::core::gpu_backend_available(GpuBackend::Metal) || !lfs::core::gpu_backend_available(GpuBackend::Vulkan))
+            GTEST_SKIP();
+        // Metal has no blur-tolerant SSIM yet (blur_sigma is MRNF's); compare the calibration fields.
+        const auto calibration = [](Capture capture) {
+            std::erase_if(capture.snapshot.fields, [](const auto& field) { return !field.name.starts_with("calibration."); });
+            return capture;
+        };
+        compare_training_changes(calibration(capture_calibration_and_blur(GpuBackend::Metal)),
+                                 calibration(capture_calibration_and_blur(GpuBackend::Vulkan)));
+    }
     TEST(TrainingOpsFastParity, RenderedOnlyAdamAndPerSplatBlendPeak) {
         if (!lfs::core::gpu_backend_available(GpuBackend::CUDA) || !lfs::core::gpu_backend_available(GpuBackend::Vulkan))
             GTEST_SKIP();

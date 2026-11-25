@@ -37,6 +37,8 @@ namespace lfs::training {
 
             .ppisp = &metal_ppisp_ops(),
 
+            .calibration = &portable_calibration_ops(),
+
             .controller = &metal_controller_ops(),
 
             .gsplat = &metal_gsplat_ops(),

@@ -632,3 +632,23 @@ TEST(CalibrationCorrectionTest, PriorsFollowThePhotoThroughTheField) {
                     << x << ", " << y;
         }
 }
+// A masked fit scales its equations by the loss's own denominator, the mask's sum over every channel.
+TEST(CalibrationCorrectionTest, MaskedLossPublishesTheDenominatorTheFitUses) {
+    const auto& ops = *training_ops(default_gpu_backend()).photometric;
+    lfs::gpu_ops::PhotoSaved saved{.backend = ops.create()};
+    constexpr size_t h = 37, w = 53;
+    std::vector<float> pixels(3 * h * w), weights(h * w);
+    double total = 0;
+    for (size_t i = 0; i < pixels.size(); ++i)
+        pixels[i] = static_cast<float>(i % 97) / 96.f;
+    for (size_t i = 0; i < weights.size(); ++i)
+        total += weights[i] = (i % 5) / 4.f;
+    const auto render = Tensor::from_vector(pixels, {3, h, w}, Device::GPU);
+    std::ranges::reverse(pixels);
+    const auto target = Tensor::from_vector(pixels, {3, h, w}, Device::GPU), mask = Tensor::from_vector(weights, {h, w}, Device::GPU);
+    Tensor loss, gradient, raw_gradient;
+    ops.evaluate(saved, render, {}, target, mask,
+                 {.path = lfs::gpu_ops::PhotoPath::MaskedFused, .ssim_weight = .2f, .valid_padding = true, .calibration_fit = true},
+                 loss, gradient, raw_gradient);
+    EXPECT_NEAR(saved.mask_denominator, 3 * total, 1e-5 * 3 * total);
+}
