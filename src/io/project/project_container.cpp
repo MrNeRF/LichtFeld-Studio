@@ -64,12 +64,26 @@ namespace lfs::io::project {
         // non-payload-class materialize). Declared logical size is still
         // cross-checked against the zstd frame content size before allocation.
         constexpr std::uint64_t MAX_MATERIALIZED_CHUNK_BYTES = 512ull * 1024 * 1024;
-        // TENSOR_PAYLOAD / lazy-binary (CKPT, PPIS, ByteShuffleZstdFramed): decoded
-        // size is declared in the chunk header and CRC-validated, so the
-        // bomb-guard property does not need a small blanket cap. 16 GiB is
-        // still size_t-bounded via the framed decoder / read_vector.
-        constexpr std::uint64_t MAX_PAYLOAD_MATERIALIZED_BYTES =
+        // TENSOR_PAYLOAD / lazy-binary (CKPT, PPIS, SFMO) chunks have no size
+        // ceiling: their decoded size is declared in the chunk header, checked
+        // against the framed record table and every frame, and a buffer that
+        // cannot be allocated fails as ResourceExhausted. Readers that can
+        // stream them instead (bounded streams, deferred geometry) do so above
+        // this size, which keeps peak memory down; it is not a limit.
+        constexpr std::uint64_t PAYLOAD_STREAMING_THRESHOLD_BYTES =
             16ull * 1024 * 1024 * 1024;
+        // A zstd block regenerates at most ZSTD_BLOCKSIZE_MAX bytes from at
+        // least 4 stored bytes (a 3-byte header and one RLE byte), so a frame
+        // cannot decode to more than this many times its stored size.
+        constexpr std::uint64_t MAX_ZSTD_EXPANSION = ZSTD_BLOCKSIZE_MAX / 4;
+
+        // A framed record declaring more than its stored frame can decode is
+        // rejected before its declared size is allocated.
+        [[nodiscard]] constexpr bool
+        record_decoded_size_possible(const std::uint64_t stored_bytes,
+                                     const std::uint64_t decoded_bytes) noexcept {
+            return decoded_bytes / MAX_ZSTD_EXPANSION <= stored_bytes;
+        }
 
         bool is_payload_class_chunk(const ChunkInfo& row) noexcept {
             return (row.flags & TENSOR_PAYLOAD) != 0 ||
@@ -3427,29 +3441,97 @@ namespace lfs::io::project {
                 "commit.read_compatibility"));
         }
 
+        // One record of a framed payload: its zstd frame's offset and size in the
+        // stored bytes, and the offset and size of what it decodes to.
+        struct FramedRecordRange {
+            std::uint64_t so, sb, uo, ub;
+        };
+
+        // Bytes of a framed payload's header and record table, read from its header
+        // (the first FRAMED_HEADER_BYTES of `header`; `stored_size` is the stored
+        // size of the whole payload), or why the header is invalid.
+        lfs::Result<std::uint64_t> framed_table_bytes(const std::filesystem::path& path,
+                                                      const std::uint64_t offset,
+                                                      const std::span<const std::byte> header,
+                                                      const std::uint64_t stored_size) {
+            if (header.size() < detail::FRAMED_HEADER_BYTES || stored_size < detail::FRAMED_HEADER_BYTES ||
+                !std::equal(detail::FRAMED_MAGIC.begin(), detail::FRAMED_MAGIC.end(), header.begin())) {
+                return format_error(path, offset, "payload.framed", "framed header", "invalid magic");
+            }
+            const auto count = read_u32(header, 12);
+            // At most 2^32 - 1 records, so the table size fits in 64 bits.
+            const std::uint64_t table = detail::FRAMED_HEADER_BYTES +
+                                        std::uint64_t{count} * detail::FRAMED_RECORD_BYTES;
+            if constexpr (sizeof(std::size_t) < sizeof(std::uint64_t)) {
+                if (table > std::numeric_limits<std::size_t>::max()) {
+                    return format_error(path, offset, "payload.framed.header",
+                                        "representable record table", std::to_string(count));
+                }
+            }
+            if (read_u16(header, 8) != detail::FRAMED_VERSION || read_u16(header, 10) != 0 ||
+                count == 0 || table > stored_size) {
+                return format_error(path, offset, "payload.framed.header", "valid header", "invalid header");
+            }
+            return table;
+        }
+
+        // The records of a framed payload from its header and record table (`table`,
+        // framed_table_bytes long). Each record is nonempty and decodable from its
+        // frame, and together they cover exactly `stored_size` stored and
+        // `expected_size` decoded bytes.
+        lfs::Result<std::vector<FramedRecordRange>> parse_framed_records(
+            const std::filesystem::path& path, const std::uint64_t offset,
+            const std::span<const std::byte> table, const std::uint64_t stored_size,
+            const std::uint64_t expected_size) {
+            const auto count = read_u32(table, 12);
+            if (count > expected_size || stored_size - table.size() < count) {
+                return format_error(path, offset, "payload.framed.records",
+                                    "at least one byte per record", "invalid record count");
+            }
+            std::vector<FramedRecordRange> records;
+            try {
+                records.reserve(count);
+            } catch (const std::bad_alloc&) {
+                return detail::project_error(
+                    lfs::ErrorCode::ResourceExhausted,
+                    "There is not enough memory to decode this project region.",
+                    std::format("allocation of {} record descriptors failed", count),
+                    path, offset, "payload.framed.records");
+            } catch (const std::length_error& error) {
+                return detail::project_error(
+                    lfs::ErrorCode::ResourceExhausted,
+                    "The framed project region cannot be represented by this build.",
+                    std::format("allocation of {} record descriptors failed: {}", count,
+                                error.what()),
+                    path, offset, "payload.framed.records");
+            }
+            std::uint64_t so = table.size(), uo = 0;
+            for (std::size_t i = 0; i < count; ++i) {
+                const auto at = detail::FRAMED_HEADER_BYTES + i * detail::FRAMED_RECORD_BYTES;
+                const auto sb = read_u64(table, at), ub = read_u64(table, at + 8);
+                if (sb == 0 || ub == 0 || sb > stored_size - so || ub > expected_size - uo ||
+                    !record_decoded_size_possible(sb, ub)) {
+                    return format_error(path, offset + at, "payload.framed.record", "valid record range", "invalid range");
+                }
+                records.push_back({so, sb, uo, ub});
+                so += sb;
+                uo += ub;
+            }
+            if (so != stored_size || uo != expected_size) {
+                return format_error(path, offset, "payload.framed.records", "exact stored and decoded sizes", "size mismatch");
+            }
+            return records;
+        }
+
         lfs::Result<void> decompress_framed_zstd(
             const std::filesystem::path& path, const std::uint64_t offset,
             const std::span<const std::byte> stored, const std::uint64_t expected_size,
             const std::uint64_t maximum_decoded_size,
             const std::span<std::byte> decoded,
             const std::function<void(std::size_t, std::size_t)>& progress = {}) {
-            if (stored.size() < detail::FRAMED_HEADER_BYTES ||
-                !std::equal(detail::FRAMED_MAGIC.begin(), detail::FRAMED_MAGIC.end(), stored.begin())) {
-                return status_failure(format_error(path, offset, "payload.framed", "framed header", "invalid magic"));
-            }
-            const auto count = read_u32(stored, 12);
-            if (count > (std::numeric_limits<std::size_t>::max() -
-                         detail::FRAMED_HEADER_BYTES) /
-                            detail::FRAMED_RECORD_BYTES) {
-                return status_failure(format_error(path, offset, "payload.framed.header",
-                                                   "representable record table", std::to_string(count)));
-            }
-            const auto table = detail::FRAMED_HEADER_BYTES +
-                               static_cast<std::size_t>(count) * detail::FRAMED_RECORD_BYTES;
-            if (read_u16(stored, 8) != detail::FRAMED_VERSION || read_u16(stored, 10) != 0 ||
-                count == 0 || table > stored.size()) {
-                return status_failure(format_error(path, offset, "payload.framed.header", "valid header", "invalid header"));
-            }
+            auto table = framed_table_bytes(path, offset, stored, stored.size());
+            if (!table)
+                return status_failure(std::move(table).error());
             if (expected_size > maximum_decoded_size || expected_size > std::numeric_limits<std::size_t>::max()) {
                 return status_failure(detail::project_error(lfs::ErrorCode::ResourceExhausted,
                                                             "The project payload is too large to decode.",
@@ -3457,46 +3539,11 @@ namespace lfs::io::project {
                                                                         expected_size, maximum_decoded_size),
                                                             path, offset, "payload.framed"));
             }
-            if (count > expected_size || stored.size() - table < count) {
-                return status_failure(format_error(path, offset, "payload.framed.records",
-                                                   "at least one byte per record", "invalid record count"));
-            }
-            struct Record {
-                std::size_t so, sb, uo, ub;
-            };
-            std::vector<Record> records;
-            try {
-                records.reserve(count);
-            } catch (const std::bad_alloc&) {
-                return status_failure(detail::project_error(
-                    lfs::ErrorCode::ResourceExhausted,
-                    "There is not enough memory to decode this project region.",
-                    std::format("allocation of {} record descriptors failed", count),
-                    path, offset, "payload.framed.records"));
-            } catch (const std::length_error& error) {
-                return status_failure(detail::project_error(
-                    lfs::ErrorCode::ResourceExhausted,
-                    "The framed project region cannot be represented by this build.",
-                    std::format("allocation of {} record descriptors failed: {}", count,
-                                error.what()),
-                    path, offset, "payload.framed.records"));
-            }
-            std::size_t so = table, uo = 0;
-            for (std::size_t i = 0; i < count; ++i) {
-                const auto at = detail::FRAMED_HEADER_BYTES + i * detail::FRAMED_RECORD_BYTES;
-                const auto sb64 = read_u64(stored, at), ub64 = read_u64(stored, at + 8);
-                if (sb64 == 0 || ub64 == 0 || sb64 > stored.size() - so ||
-                    ub64 > expected_size - uo || sb64 > std::numeric_limits<std::size_t>::max() ||
-                    ub64 > std::numeric_limits<std::size_t>::max()) {
-                    return status_failure(format_error(path, offset + at, "payload.framed.record", "valid record range", "invalid range"));
-                }
-                records.push_back({so, static_cast<std::size_t>(sb64), uo, static_cast<std::size_t>(ub64)});
-                so += static_cast<std::size_t>(sb64);
-                uo += static_cast<std::size_t>(ub64);
-            }
-            if (so != stored.size() || uo != expected_size) {
-                return status_failure(format_error(path, offset, "payload.framed.records", "exact stored and decoded sizes", "size mismatch"));
-            }
+            auto parsed = parse_framed_records(path, offset, stored.first(static_cast<std::size_t>(*table)),
+                                               stored.size(), expected_size);
+            if (!parsed)
+                return status_failure(std::move(parsed).error());
+            const std::vector<FramedRecordRange> records = std::move(*parsed);
             std::atomic<std::size_t> next{0}, done{0};
             std::mutex mutex;
             std::optional<lfs::Error> error;
@@ -3584,7 +3631,201 @@ namespace lfs::io::project {
             return {};
         }
 
+        using StoredReader =
+            std::function<lfs::Result<void>(std::uint64_t, std::span<std::byte>)>;
+
+        // The checks of decompress_framed_zstd without holding the payload:
+        // the table is read alone, and each record streams through bounded
+        // input and output buffers that are overwritten. `read_stored` reads
+        // at an offset in the stored bytes and may be called concurrently.
+        lfs::Result<void> verify_framed_zstd_records(
+            const std::filesystem::path& path, const std::uint64_t offset,
+            const std::uint64_t stored_size, const std::uint64_t expected_size,
+            const StoredReader& read_stored) {
+            std::array<std::byte, detail::FRAMED_HEADER_BYTES> header{};
+            if (stored_size >= header.size()) {
+                if (auto read = read_stored(0, byte_span(header)); !read) {
+                    return read;
+                }
+            }
+            auto table = framed_table_bytes(path, offset, byte_span(header), stored_size);
+            if (!table)
+                return status_failure(std::move(table).error());
+            std::vector<std::byte> table_bytes;
+            try {
+                table_bytes.resize(static_cast<std::size_t>(*table));
+            } catch (const std::bad_alloc&) {
+                return status_failure(detail::project_error(
+                    lfs::ErrorCode::ResourceExhausted,
+                    "There is not enough memory to decode this project region.",
+                    std::format("allocation of a {}-byte record table failed", *table),
+                    path, offset, "payload.framed.records"));
+            } catch (const std::length_error& error) {
+                return status_failure(detail::project_error(
+                    lfs::ErrorCode::ResourceExhausted,
+                    "The framed project region cannot be represented by this build.",
+                    std::format("allocation of a {}-byte record table failed: {}", *table, error.what()),
+                    path, offset, "payload.framed.records"));
+            }
+            std::memcpy(table_bytes.data(), header.data(), header.size());
+            if (auto read = read_stored(header.size(), std::span<std::byte>(table_bytes).subspan(header.size()));
+                !read) {
+                return read;
+            }
+            auto parsed = parse_framed_records(path, offset, table_bytes, stored_size, expected_size);
+            if (!parsed)
+                return status_failure(std::move(parsed).error());
+            const std::vector<FramedRecordRange> records = std::move(*parsed);
+
+            const auto input_bytes = static_cast<std::size_t>(
+                std::min<std::uint64_t>(BLOCK_CRC_BYTES, stored_size));
+            constexpr std::size_t OUTPUT_BYTES = 1024 * 1024;
+            // Same checks as decompress_framed_zstd: the frame declares the
+            // record's size and decodes to exactly that many bytes.
+            const auto verify_record = [&](ZSTD_DCtx* const context, const std::span<std::byte> input,
+                                           const std::span<std::byte> output,
+                                           const FramedRecordRange& record) -> lfs::Result<void> {
+                const auto invalid_frame = [&] {
+                    return status_failure(format_error(path, offset + record.so, "payload.framed.record", "valid zstd frame", "decode failed"));
+                };
+                ZSTD_DCtx_reset(context, ZSTD_reset_session_only);
+                ZSTD_inBuffer in{input.data(), 0, 0};
+                std::uint64_t consumed = 0, produced = 0;
+                std::size_t pending = 1;
+                while (true) {
+                    if (in.pos == in.size && consumed < record.sb) {
+                        const auto n = static_cast<std::size_t>(
+                            std::min<std::uint64_t>(input.size(), record.sb - consumed));
+                        if (auto read = read_stored(record.so + consumed, input.first(n)); !read) {
+                            return read;
+                        }
+                        if (consumed == 0 && ZSTD_getFrameContentSize(input.data(), n) != record.ub) {
+                            return invalid_frame();
+                        }
+                        consumed += n;
+                        in = {input.data(), n, 0};
+                    }
+                    const bool input_done = in.pos == in.size;
+                    if (input_done && pending == 0) {
+                        break;
+                    }
+                    ZSTD_outBuffer out{output.data(), output.size(), 0};
+                    pending = ZSTD_decompressStream(context, &out, &in);
+                    if (ZSTD_isError(pending)) {
+                        return invalid_frame();
+                    }
+                    produced += out.pos;
+                    // A frame that still waits for input after the record ends is truncated.
+                    if (produced > record.ub || (input_done && out.pos == 0)) {
+                        return invalid_frame();
+                    }
+                }
+                return produced == record.ub ? lfs::Result<void>{} : invalid_frame();
+            };
+
+            std::atomic<std::size_t> next{0};
+            std::atomic<bool> failed{false};
+            std::mutex mutex;
+            std::optional<lfs::Error> error;
+            const auto publish_error = [&](lfs::Error published) noexcept {
+                try {
+                    std::scoped_lock lock(mutex);
+                    if (!error)
+                        error = std::move(published);
+                } catch (...) {
+                    // LFS-CENSUS-OK(empty-catch): keep the first worker error if recording another fails.
+                }
+                failed.store(true, std::memory_order_relaxed);
+            };
+            const auto publish_worker_error = [&](const lfs::ErrorCode code,
+                                                  const std::string_view message,
+                                                  const std::string_view detail) noexcept {
+                try {
+                    publish_error(detail::project_error(code, std::string(message), std::string(detail),
+                                                        path, offset, "payload.framed.worker"));
+                } catch (...) {
+                    // LFS-CENSUS-OK(empty-catch): stop the workers even if formatting the error fails.
+                    failed.store(true, std::memory_order_relaxed);
+                }
+            };
+            const auto run_worker = [&]() noexcept {
+                try {
+                    struct ContextGuard {
+                        ZSTD_DCtx* context;
+                        ~ContextGuard() { ZSTD_freeDCtx(context); }
+                    } guard{ZSTD_createDCtx()};
+                    if (guard.context == nullptr) {
+                        publish_worker_error(lfs::ErrorCode::ResourceExhausted,
+                                             "There is not enough memory to decode this project region.",
+                                             "zstd stream context allocation failed");
+                        return;
+                    }
+                    std::vector<std::byte> input(input_bytes);
+                    std::vector<std::byte> output(OUTPUT_BYTES);
+                    for (auto i = next.fetch_add(1); i < records.size() && !failed.load(std::memory_order_relaxed);
+                         i = next.fetch_add(1)) {
+                        if (auto verified = verify_record(guard.context, input, output, records[i]); !verified) {
+                            publish_error(std::move(verified).error());
+                            return;
+                        }
+                    }
+                } catch (const std::bad_alloc&) {
+                    publish_worker_error(lfs::ErrorCode::ResourceExhausted,
+                                         "There is not enough memory to decode this project region.",
+                                         "framed verify worker allocation failed");
+                } catch (const std::exception& exception) {
+                    // LFS-CENSUS-OK(empty-catch): report the worker exception as the first payload error.
+                    publish_worker_error(lfs::ErrorCode::Internal,
+                                         "The framed project payload could not be decoded.",
+                                         exception.what());
+                } catch (...) {
+                    // LFS-CENSUS-OK(empty-catch): report an unknown worker exception as the first payload error.
+                    publish_worker_error(lfs::ErrorCode::Internal,
+                                         "The framed project payload could not be decoded.",
+                                         "unknown worker exception");
+                }
+            };
+            if (records.size() == 1) {
+                run_worker();
+            } else {
+                std::vector<std::jthread> workers;
+                try {
+                    const auto worker_count = std::min<std::size_t>(
+                        records.size(), std::max(1u, std::thread::hardware_concurrency()));
+                    workers.reserve(worker_count);
+                    for (std::size_t w = 0; w < worker_count; ++w)
+                        workers.emplace_back(run_worker);
+                } catch (const std::exception& exception) {
+                    // LFS-CENSUS-OK(empty-catch): stop the started workers and report the failed start.
+                    publish_worker_error(lfs::ErrorCode::Internal,
+                                         "The framed project payload could not be decoded.",
+                                         exception.what());
+                }
+                workers.clear();
+            }
+            if (error)
+                return status_failure(std::move(*error));
+            return {};
+        }
+
     } // namespace
+
+    lfs::Result<void> detail::verify_framed_zstd_for_testing(
+        const std::filesystem::path& path, const std::uint64_t offset,
+        const std::span<const std::byte> stored, const std::uint64_t expected_size) {
+        return verify_framed_zstd_records(
+            path, offset, stored.size(), expected_size,
+            [stored](const std::uint64_t relative, const std::span<std::byte> destination)
+                -> lfs::Result<void> {
+                if (relative > stored.size() || destination.size() > stored.size() - relative) {
+                    return status_failure(detail::project_error(
+                        lfs::ErrorCode::BoundsViolation, "The test payload read is out of range.",
+                        std::format("{} bytes at {} of {}", destination.size(), relative, stored.size())));
+                }
+                std::memcpy(destination.data(), stored.data() + relative, destination.size());
+                return {};
+            });
+    }
 
     lfs::Result<std::vector<std::byte>>
     detail::decompress_framed_zstd_for_testing(
@@ -3633,9 +3874,16 @@ namespace lfs::io::project {
     std::uint64_t detail::max_materialized_bytes_for(const ChunkInfo& row) noexcept {
         if (is_payload_class_chunk(row)) {
             return payload_materialized_bytes_override.value_or(
-                MAX_PAYLOAD_MATERIALIZED_BYTES);
+                std::numeric_limits<std::uint64_t>::max());
         }
         return MAX_MATERIALIZED_CHUNK_BYTES;
+    }
+
+    std::uint64_t detail::preferred_materialized_bytes_for(const ChunkInfo& row) noexcept {
+        const auto maximum = max_materialized_bytes_for(row);
+        return is_payload_class_chunk(row)
+                   ? std::min(maximum, PAYLOAD_STREAMING_THRESHOLD_BYTES)
+                   : maximum;
     }
 
     lfs::Result<void>
@@ -3938,6 +4186,31 @@ namespace lfs::io::project {
         if (auto verified = verify_stored_payload_crc32c(*impl_->state, row);
             !verified) {
             return verified;
+        }
+        if ((row.compression == Compression::ZstdFramed ||
+             row.compression == Compression::ByteShuffleZstdFramed) &&
+            is_payload_class_chunk(row)) {
+            // Payload-class chunks have no size ceiling: check them record by
+            // record instead of decoding them into one buffer. Like
+            // read_logical_prefix, this streams within zstd's default window
+            // limit (128 MiB); the writer's level 3 uses 2 MiB.
+            const auto& file = *impl_->state->file;
+            if (auto verified = verify_framed_zstd_records(
+                    path(), row.payload_offset, row.stored_bytes, row.uncompressed_bytes,
+                    [&file, &row](const std::uint64_t relative, const std::span<std::byte> destination) {
+                        return file.read_exact(row.payload_offset + relative, destination);
+                    });
+                !verified) {
+                return verified;
+            }
+            if (row.compression == Compression::ByteShuffleZstdFramed &&
+                row.uncompressed_bytes % 4 != 0) {
+                return status_failure(format_error(
+                    path(), row.payload_offset, "payload.byteshuffle",
+                    "decoded size multiple of 4",
+                    std::to_string(row.uncompressed_bytes)));
+            }
+            return {};
         }
         if (row.compression == Compression::ZstdFramed ||
             row.compression == Compression::ByteShuffleZstdFramed) {
@@ -4393,7 +4666,9 @@ namespace lfs::io::project {
                                 row.uncompressed_bytes - decoded_offset ||
                             stored_bytes > std::numeric_limits<std::size_t>::max() ||
                             decoded_bytes >
-                                std::numeric_limits<std::size_t>::max()) {
+                                std::numeric_limits<std::size_t>::max() ||
+                            !record_decoded_size_possible(stored_bytes,
+                                                          decoded_bytes)) {
                             return format_error(path, row.payload_offset + at,
                                                 "payload.framed.record",
                                                 "valid record range",
@@ -5408,7 +5683,8 @@ namespace lfs::io::project {
                     if (sb64 == 0 || ub64 == 0 || sb64 > row_.stored_bytes - so ||
                         ub64 > size_ - uo ||
                         sb64 > std::numeric_limits<std::size_t>::max() ||
-                        ub64 > std::numeric_limits<std::size_t>::max()) {
+                        ub64 > std::numeric_limits<std::size_t>::max() ||
+                        !record_decoded_size_possible(sb64, ub64)) {
                         return false;
                     }
                     records.push_back({so, sb64, uo, ub64});

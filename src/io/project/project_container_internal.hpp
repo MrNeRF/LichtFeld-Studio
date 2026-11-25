@@ -37,14 +37,26 @@ namespace lfs::io::project::detail {
         std::span<const std::byte> stored, std::uint64_t expected_size,
         std::uint64_t maximum_decoded_size);
 
-    // Test-only override of MAX_PAYLOAD_MATERIALIZED_BYTES for payload-class
-    // chunks (TENSOR_PAYLOAD / CKPT / PPIS). nullopt restores the production cap.
+    // Runs verify_chunk's record-by-record check of a framed payload over
+    // stored bytes held in memory.
+    [[nodiscard]] lfs::Result<void>
+    verify_framed_zstd_for_testing(
+        const std::filesystem::path& path, std::uint64_t offset,
+        std::span<const std::byte> stored, std::uint64_t expected_size);
+
+    // Test-only materialize ceiling for payload-class chunks (TENSOR_PAYLOAD /
+    // CKPT / PPIS / SFMO), which have none in production. nullopt removes it.
     void set_max_payload_materialized_bytes_for_testing(
         std::optional<std::uint64_t> maximum_decoded_size);
 
-    // Same cap read_chunk uses for a materialized decode of `row`.
+    // Largest size read_chunk materializes for `row`.
     [[nodiscard]] std::uint64_t
     max_materialized_bytes_for(const ChunkInfo& row) noexcept;
+
+    // Largest size worth materializing for a caller that can stream `row`
+    // instead; streaming larger payloads keeps peak memory down.
+    [[nodiscard]] std::uint64_t
+    preferred_materialized_bytes_for(const ChunkInfo& row) noexcept;
 
     // errno, or the Win32 error code on Windows.
     [[nodiscard]] bool native_disk_full(std::int64_t error) noexcept;

@@ -7772,6 +7772,111 @@ namespace {
         EXPECT_NE(copied->payload_offset, source_payload_offset);
     }
 
+    // Saves that verify the file they wrote (an unbound save, Save As, an
+    // autosave) check a checkpoint record by record, so they succeed when it is
+    // larger than any payload the reader may decode into one buffer.
+    TEST(ProjectDocumentTest, VerifiedSavesKeepCheckpointLargerThanMaterializeCap) {
+        TemporaryDirectory temporary;
+        const fs::path unbound = temporary.path / "large-ckpt-unbound.licht";
+        const fs::path source = temporary.path / "large-ckpt.licht";
+        const fs::path copy = temporary.path / "large-ckpt-copy.licht";
+        const Uuid project_uuid = fixed_uuid(19'700);
+        const Uuid training_uuid = fixed_uuid(19'701);
+        const std::array checkpoint_uuids{fixed_uuid(19'702), fixed_uuid(19'703),
+                                          fixed_uuid(19'704)};
+        // A save reads only the bound checkpoint's header. The rest is half
+        // noise and half zeros, so the stored chunk is smaller than the cap
+        // and only its decoded size is above it, as in a real checkpoint.
+        std::vector<std::vector<std::byte>> payloads;
+        for (std::uint32_t state = 1; const auto& uuid : checkpoint_uuids) {
+            (void)uuid;
+            auto& bytes = payloads.emplace_back(256 * 1024);
+            for (std::size_t index = 0; index < bytes.size() / 2; ++index) {
+                state = state * 1664525u + 1013904223u;
+                bytes[index] = static_cast<std::byte>(state >> 24);
+            }
+            const lfs::core::CheckpointHeader header{
+                .iteration = static_cast<std::int32_t>(100 * payloads.size()),
+                .num_gaussians = 1,
+            };
+            std::memcpy(bytes.data(), &header, sizeof(header));
+        }
+        const auto bind_checkpoint = [&](ProjectDocument& document, const std::size_t index) {
+            require_status(document.edit_scene_graph().upsert_node(SceneNodeRecord{
+                .uuid = training_uuid,
+                .type = "splat",
+                .name = "Training",
+                .child_order = 0,
+                .payload = PayloadBinding{
+                    .fourcc = "CKPT",
+                    .instance_uuid = checkpoint_uuids[index],
+                    .source_kind = "training",
+                },
+            }));
+            require_status(document.edit_scene_graph().set_training_model_uuid(training_uuid));
+            require_status(document.set_checkpoint(
+                checkpoint_uuids[index],
+                require_result(LazyChunkValue::from_owned(payloads[index], checkpoint_uuids[index]))));
+        };
+        const auto options_for = [&](const std::size_t index, const std::uint64_t tag) {
+            auto options = save_options(tag, 1000 + tag);
+            options.commit.snapshot_uuid = checkpoint_uuids[index];
+            return options;
+        };
+        const auto expect_checkpoint = [&](const fs::path& path, const std::size_t index) {
+            ProjectReader reader = require_result(ProjectReader::open(path));
+            require_status(reader.verify_all());
+            const ChunkInfo* row = reader.find(FOURCC_CKPT, checkpoint_uuids[index]);
+            ASSERT_NE(row, nullptr) << lfs::core::path_to_utf8(path);
+            auto whole = reader.read_chunk(*row);
+            ASSERT_FALSE(whole) << "the lowered cap must refuse a whole-payload read";
+            EXPECT_EQ(whole.error().code(), lfs::ErrorCode::ResourceExhausted);
+            auto bounded = require_result(reader.open_bounded_stream(*row));
+            std::vector<std::byte> read(static_cast<std::size_t>(bounded.size()));
+            bounded.stream().read(reinterpret_cast<char*>(read.data()),
+                                  static_cast<std::streamsize>(read.size()));
+            EXPECT_EQ(bounded.stream().gcount(), static_cast<std::streamsize>(read.size()));
+            EXPECT_EQ(read, payloads[index]);
+        };
+        const PayloadCapGuard cap(payloads.front().size() - 1);
+
+        {
+            auto document = make_empty_document(project_uuid, 100);
+            bind_checkpoint(*document, 0);
+            auto options = options_for(0, 19'710);
+            options.leave_unbound = true;
+            auto saved = document->save(unbound, options);
+            ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+        }
+        expect_checkpoint(unbound, 0);
+
+        {
+            auto document = make_empty_document(project_uuid, 100);
+            bind_checkpoint(*document, 0);
+            auto saved = document->save(source, options_for(0, 19'711));
+            ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+        }
+        auto document = require_result_ptr(ProjectDocument::open(source));
+        bind_checkpoint(*document, 1);
+        auto saved_as = document->save_as(copy, options_for(1, 19'712));
+        ASSERT_TRUE(saved_as) << lfs::format_for_developer(saved_as.error());
+        expect_checkpoint(copy, 1);
+
+        bind_checkpoint(*document, 2);
+        const fs::path sidecar = autosave_sidecar_path(copy);
+        auto autosaved = document->save_autosave(
+            sidecar, ProjectDocumentAutosaveOptions{
+                         .file_uuid = fixed_uuid(19'713),
+                         .base_explicit_commit_uuid = saved_as->commit_uuid,
+                         .autosave_sequence = 1,
+                         .snapshot_uuid = checkpoint_uuids[2],
+                         .index_compression = IndexCompression::StoredForDeterministicTests,
+                         .disk_reserve_bytes = 0,
+                     });
+        ASSERT_TRUE(autosaved) << lfs::format_for_developer(autosaved.error());
+        expect_checkpoint(sidecar, 2);
+    }
+
     TEST(ProjectDocumentTest,
          HeadlessOpenWithoutRecoverKeepsSidecarUntilExplicitHeadAdvances) {
         TemporaryDirectory temporary;

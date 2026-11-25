@@ -799,6 +799,8 @@ namespace {
             auto result = detail::decompress_framed_zstd_for_testing(
                 "framed-corruption.licht", 0, bytes, expected, 64ull * 1024 * 1024);
             EXPECT_FALSE(result);
+            EXPECT_FALSE(detail::verify_framed_zstd_for_testing(
+                "framed-corruption.licht", 0, bytes, expected));
         };
 
         auto bad_magic = raw_framed(1, {{1, 1}}, 1);
@@ -821,6 +823,11 @@ namespace {
             "framed-corruption.licht", 0, count_bomb, 1, 64ull * 1024 * 1024);
         ASSERT_FALSE(count_result);
         EXPECT_NE(lfs::format_for_developer(count_result.error()).find("invalid record count"),
+                  std::string::npos);
+        auto count_verified = detail::verify_framed_zstd_for_testing(
+            "framed-corruption.licht", 0, count_bomb, 1);
+        ASSERT_FALSE(count_verified);
+        EXPECT_NE(lfs::format_for_developer(count_verified.error()).find("invalid record count"),
                   std::string::npos);
 
         auto table_too_large = raw_framed(2, {}, 0);
@@ -1466,6 +1473,176 @@ namespace {
         };
         check(Compression::ZstdFramed, "zstd-framed");
         check(Compression::ByteShuffleZstdFramed, "byteshuffle-framed");
+    }
+
+    // Every save that verifies its file goes through verify_chunk, which checks
+    // a payload-class chunk record by record: it passes above the materialize
+    // ceiling and still catches a changed byte.
+    TEST(ProjectContainerReader, VerifyChecksPayloadClassChunkBeyondMaterializeCap) {
+        const auto payload = patterned_payload(detail::FRAMED_RECORD_TARGET_BYTES + 4096);
+        std::uint64_t tag = 1300;
+        for (const auto compression : {Compression::ZstdFramed, Compression::ByteShuffleZstdFramed}) {
+            for (const bool block_crcs : {false, true}) {
+                const auto name = std::format("compression {}, block CRCs {}",
+                                              static_cast<int>(compression), block_crcs);
+                TemporaryDirectory temporary;
+                const fs::path path = temporary.path / "verify-beyond-cap.licht";
+                write_framed_fixture(path, FOURCC_CKPT, tag, payload, compression, true,
+                                     block_crcs, tag);
+                tag += 10;
+                ProjectReader reader = require_result(ProjectReader::open(path));
+                const ChunkInfo& chunk = reader.chunks().front();
+                EXPECT_EQ(chunk.compression, compression) << name;
+                EXPECT_EQ(chunk.block_crc_table.has_value(), block_crcs) << name;
+                const PayloadCapGuard cap(chunk.uncompressed_bytes - 1);
+                auto materialized = reader.read_chunk(chunk);
+                ASSERT_FALSE(materialized) << name;
+                EXPECT_EQ(materialized.error().code(), lfs::ErrorCode::ResourceExhausted) << name;
+                auto verified = reader.verify_chunk(chunk);
+                EXPECT_TRUE(verified)
+                    << name << ": " << (verified ? "" : lfs::format_for_developer(verified.error()));
+                EXPECT_TRUE(reader.verify_all()) << name;
+
+                const std::uint64_t corrupt_offset =
+                    chunk.payload_offset + chunk.stored_bytes - 2;
+                const auto original = read_file_range(path, corrupt_offset, 1);
+                write_file_range(path, corrupt_offset,
+                                 std::array{original.front() ^ std::byte{0x5a}});
+                auto corrupt = reader.verify_chunk(chunk);
+                ASSERT_FALSE(corrupt) << name;
+                EXPECT_EQ(corrupt.error().code(), lfs::ErrorCode::DataLoss) << name;
+            }
+        }
+    }
+
+    // The record-by-record check accepts and rejects exactly what the
+    // materializing decoder does, records of several input reads included.
+    TEST(ProjectContainerReader, RecordByRecordVerifyAgreesWithFramedDecoder) {
+        const auto compress = [](const std::span<const std::byte> piece) {
+            std::vector<std::byte> frame(ZSTD_compressBound(piece.size()));
+            const auto size = ZSTD_compress(frame.data(), frame.size(), piece.data(),
+                                            piece.size(), 3);
+            EXPECT_FALSE(ZSTD_isError(size));
+            frame.resize(ZSTD_isError(size) ? 0 : size);
+            return frame;
+        };
+        struct Record {
+            std::vector<std::byte> stored;
+            std::uint64_t decoded = 0;
+        };
+        const auto framed = [](const std::vector<Record>& records) {
+            std::vector<std::pair<std::uint64_t, std::uint64_t>> table;
+            std::size_t tail = 0;
+            for (const auto& record : records) {
+                table.emplace_back(record.stored.size(), record.decoded);
+                tail += record.stored.size();
+            }
+            auto bytes = raw_framed(static_cast<std::uint32_t>(records.size()), table, tail);
+            auto cursor = bytes.begin() + 16 + 16 * static_cast<std::ptrdiff_t>(records.size());
+            for (const auto& record : records) {
+                cursor = std::copy(record.stored.begin(), record.stored.end(), cursor);
+            }
+            return bytes;
+        };
+        // The middle record stores more than one 4 MiB input read.
+        std::vector<std::byte> noise(5 * 1024 * 1024 + 3);
+        for (std::uint32_t state = 7; auto& value : noise) {
+            state = state * 1664525u + 1013904223u;
+            value = static_cast<std::byte>(state >> 24);
+        }
+        const std::array pieces{patterned_payload(300 * 1024), noise, patterned_payload(4096)};
+        std::vector<std::byte> logical;
+        std::vector<Record> valid;
+        for (const auto& piece : pieces) {
+            logical.insert(logical.end(), piece.begin(), piece.end());
+            valid.push_back({compress(piece), piece.size()});
+        }
+        ASSERT_GT(valid[1].stored.size(), 4u * 1024 * 1024);
+        const auto expect_agree = [&](const std::vector<Record>& records, const bool accepted,
+                                      const std::string_view name) {
+            const auto bytes = framed(records);
+            auto decoded = detail::decompress_framed_zstd_for_testing(
+                "framed-verify.licht", 0, bytes, logical.size(),
+                std::numeric_limits<std::uint64_t>::max());
+            auto verified = detail::verify_framed_zstd_for_testing(
+                "framed-verify.licht", 0, bytes, logical.size());
+            EXPECT_EQ(static_cast<bool>(decoded), accepted) << name;
+            EXPECT_EQ(static_cast<bool>(verified), accepted)
+                << name << ": " << (verified ? "" : lfs::format_for_developer(verified.error()));
+            if (decoded && accepted) {
+                EXPECT_EQ(*decoded, logical) << name;
+            }
+        };
+        expect_agree(valid, true, "valid");
+
+        auto skippable = valid;
+        const std::array skip_frame{std::byte{0x50}, std::byte{0x2a}, std::byte{0x4d},
+                                    std::byte{0x18}, std::byte{2},    std::byte{0},
+                                    std::byte{0},    std::byte{0},    std::byte{0xab},
+                                    std::byte{0xcd}};
+        skippable[1].stored.insert(skippable[1].stored.end(), skip_frame.begin(), skip_frame.end());
+        expect_agree(skippable, true, "skippable frame after a record's frame");
+
+        auto bad_magic = valid;
+        bad_magic[1].stored[0] ^= std::byte{0xff};
+        expect_agree(bad_magic, false, "frame magic");
+
+        auto size_mismatch = valid;
+        size_mismatch[0].decoded += 1;
+        size_mismatch[2].decoded -= 1;
+        expect_agree(size_mismatch, false, "table and frame disagree on a record's size");
+
+        auto truncated = valid;
+        truncated[1].stored.pop_back();
+        expect_agree(truncated, false, "truncated frame");
+
+        auto second_frame = valid;
+        const auto extra = compress(std::array{std::byte{7}});
+        second_frame[0].stored.insert(second_frame[0].stored.end(), extra.begin(), extra.end());
+        expect_agree(second_frame, false, "second frame in a record");
+
+        auto trailing = valid;
+        trailing[2].stored.push_back(std::byte{0});
+        expect_agree(trailing, false, "trailing byte after a frame");
+
+        // A zstd block decodes to at most 128 KiB from at least 4 bytes, so a
+        // record cannot declare more than 32768 times its stored size.
+        constexpr std::uint64_t max_expansion = ZSTD_BLOCKSIZE_MAX / 4;
+        const auto impossible = raw_framed(1, {{4, 5 * max_expansion}}, 4);
+        EXPECT_FALSE(detail::decompress_framed_zstd_for_testing(
+            "framed-verify.licht", 0, impossible, 5 * max_expansion,
+            std::numeric_limits<std::uint64_t>::max()));
+        for (const std::uint64_t declared : {5 * max_expansion, std::uint64_t{1} << 50}) {
+            auto refused = detail::verify_framed_zstd_for_testing(
+                "framed-verify.licht", 0, raw_framed(1, {{4, declared}}, 4), declared);
+            ASSERT_FALSE(refused) << declared;
+            const auto detail = lfs::format_for_developer(refused.error());
+            EXPECT_NE(detail.find("payload.framed.record"), std::string::npos) << detail;
+            EXPECT_NE(detail.find("invalid range"), std::string::npos) << detail;
+        }
+    }
+
+    // Payload-class chunks have no materialize ceiling in production; readers
+    // that can stream still prefer to above 16 GiB. The test hook sets one.
+    TEST(ProjectContainerReader, PayloadClassChunksHaveNoMaterializeCeiling) {
+        ChunkInfo checkpoint;
+        checkpoint.key.fourcc = FOURCC_CKPT;
+        ChunkInfo splat;
+        splat.key.fourcc = FOURCC_SPLT;
+        splat.flags = TENSOR_PAYLOAD;
+        ChunkInfo chapter;
+        chapter.key.fourcc = FOURCC_PROJ;
+        for (const auto* row : {&checkpoint, &splat}) {
+            EXPECT_EQ(detail::max_materialized_bytes_for(*row),
+                      std::numeric_limits<std::uint64_t>::max());
+            EXPECT_EQ(detail::preferred_materialized_bytes_for(*row), 16ull << 30);
+        }
+        EXPECT_EQ(detail::max_materialized_bytes_for(chapter), 512ull << 20);
+        EXPECT_EQ(detail::preferred_materialized_bytes_for(chapter), 512ull << 20);
+        const PayloadCapGuard cap(4096);
+        EXPECT_EQ(detail::max_materialized_bytes_for(checkpoint), 4096u);
+        EXPECT_EQ(detail::preferred_materialized_bytes_for(checkpoint), 4096u);
+        EXPECT_EQ(detail::max_materialized_bytes_for(chapter), 512ull << 20);
     }
 
     TEST(ProjectContainerReader, BoundedStreamRejectsNoTableFramedPayloadCrcMismatch) {
