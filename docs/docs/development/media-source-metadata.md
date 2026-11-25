@@ -1213,3 +1213,41 @@ as `DjiObservation`. The CLI equivalent is `extract --dji-stream INDEX`.
 Association uses exact container PTS, including equivalent rational time bases.
 Missing or non-increasing packet timestamps are refused. Resume checks the
 selected track, packet clocks and raw payloads before continuing an export.
+
+
+### GoPro GPMF observations
+
+`probe --timed-stream INDEX --gpmf-metadata` interprets ACCL, GYRO, GPS5 and GPS9
+records from a selected `gpmd` track. In Python, call
+`observed.gpmf_metadata_json()` on the result of
+`media.MediaIngest.probe(path, timed_metadata_stream=INDEX)`; C++ uses
+`interpretGpmfMetadata(observation)`.
+
+Each packet retains its PTS and duration. Streams contain SCAL-scaled samples,
+device identifiers/names, units, TSMP/STMP counters and declared MTRX/ORIN/ORIO
+calibration/axis descriptors. Sample order and axes remain as recorded. GPS5
+also carries GPSF, raw GPSP and GPSU when present. Each GPS9 row contains
+latitude, longitude, altitude, ground speed, 3D speed, days since 2000,
+seconds since midnight, DOP and fix status. GPS5 and GPS9 are kept as
+separate observations when both are recorded; they are not joined into
+one trajectory. The retained-data budget excludes JSON serialization. Text byte
+fields preserve original labels. Unit labels of GPMF type `c` are displayed as
+Latin-1 decoded to UTF-8. Other invalid UTF-8 text uses replacement characters.
+Units are arrays: one entry applies to every
+component, or entries correspond to the recorded components. Display labels omit
+trailing NUL padding; the matching `units_bytes` entries preserve it. A FourCC
+device ID is represented by its unsigned big-endian integer value. STMP counters
+are in microseconds and are not converted into container timestamps.
+The collected observation retains all original
+packet bytes, including fields outside this interpretation.
+
+Packet clocks, sensor counters and per-sample times are distinct. This API
+reports the available observations; it does not assign sample times from the
+packet rate. A stream with an unsupported layout contains `key`,
+`status: "unsupported"` and `reason`. Check `status` before reading
+`samples`, which is absent from unsupported entries. Supported observations
+from the same packet are still returned. Malformed records, incomplete numeric
+components, invalid scales and nonfinite values fail interpretation. Unknown
+records are retained in the raw observation without interpreting their contents.
+A separate 128 MiB retained-decoded-data budget bounds expansion; adjust it with
+`--gpmf-max-decoded-bytes N`, Python's `decoded_byte_limit`, or the native argument.

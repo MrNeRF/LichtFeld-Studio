@@ -741,6 +741,11 @@ class MediaDescription:
         Bind collected DJI packets to their container PTS for frames from the same source.
         """
 
+    def gpmf_metadata_json(self, decoded_byte_limit: int = 134217728) -> str:
+        """
+        Interpret collected GPMF ACCL, GYRO, GPS5 and GPS9 samples. SCAL is applied in recorded axis order; packet clocks, sensor counters and calibration descriptors are retained.
+        """
+
 class FrameLayout:
     @property
     def width(self) -> int: ...

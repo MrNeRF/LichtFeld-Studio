@@ -5,6 +5,7 @@
 #include "core/source_metadata.hpp"
 #include "media/decoded_video_frame_ffmpeg.hpp"
 #include "media/dji_timed_metadata.hpp"
+#include "media/gpmf_metadata.hpp"
 #include "media/image_sequence.hpp"
 #include "media/media_ingest.hpp"
 #include "media/media_json.hpp"
@@ -15,6 +16,7 @@ extern "C" {
 #include <libavutil/display.h>
 }
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <cstring>
 #include <fstream>
@@ -544,6 +546,213 @@ namespace {
         require(shared.lookup({-1001, {1, 60000}})->value() == 0 && shared.samples()[0].metadata.sequence == 0,
                 "immutable frame binding owns its data after input release and sibling reassignment");
     }
+    void gpmfContracts() {
+        using namespace lfs::media;
+        using lfs::ErrorCode;
+        using Bytes = std::vector<std::uint8_t>;
+        const auto integer = [](std::uint64_t value, unsigned size) {
+            Bytes result;
+            while (size)
+                result.push_back(static_cast<std::uint8_t>(value >> (8 * --size)));
+            return result;
+        };
+        const auto append = [](Bytes& target, const Bytes& value) { target.insert(target.end(), value.begin(), value.end()); };
+        const auto record = [](std::string_view key, std::uint8_t type, std::uint8_t size, std::uint16_t count, const Bytes& data) {
+            Bytes result(key.begin(), key.end());
+            result.insert(result.end(), {type, size, static_cast<std::uint8_t>(count >> 8), static_cast<std::uint8_t>(count)});
+            result.insert(result.end(), data.begin(), data.end());
+            while (result.size() % 4)
+                result.push_back(0);
+            return result;
+        };
+        const auto nest = [&](std::string_view key, const Bytes& children) { return record(key, 0, 1, static_cast<std::uint16_t>(children.size()), children); };
+        Bytes numbers;
+        for (int value : {-100, 0, 100, 200, 300, 400})
+            append(numbers, integer(static_cast<std::uint16_t>(value), 2));
+        const auto gyro = record("GYRO", 's', 6, 2, numbers);
+        Bytes descriptors = record("SCAL", 'l', 4, 1, integer(100, 4));
+        append(descriptors, record("SIUN", 'c', 5, 1, {'r', 'a', 'd', '/', 's'}));
+        append(descriptors, record("TSMP", 'L', 4, 1, integer(2, 4)));
+        append(descriptors, record("STMP", 'J', 8, 1, integer(1234567890123456789ULL, 8)));
+        auto stream = descriptors;
+        append(stream, gyro);
+        TimedMetadataObservation observed;
+        observed.codec_tag = 'g' | std::uint32_t('p') << 8 | std::uint32_t('m') << 16 | std::uint32_t('d') << 24;
+        observed.packets.resize(1);
+        observed.packets[0].bytes = nest("DEVC", nest("STRM", stream));
+        observed.packets[0].pts = Timestamp{-10, {1, 1000}};
+        observed.packets[0].duration = Timestamp{1000, {1, 1000}};
+        const auto decoded = interpretGpmfMetadata(observed);
+        require(decoded && decoded->size() == 1 && decoded->front().streams.size() == 1, "GPMF owns one result per packet");
+        const auto& actual = decoded->front().streams.front();
+        require(actual.key == "GYRO" && actual.components == 3 && actual.values == std::vector<double>{-1, 0, 1, 2, 3, 4}, "GPMF applies declared scaling to every sample");
+        require(actual.units == std::vector<std::string>{"rad/s"} && actual.total_samples == 2 && actual.sensor_timestamp == 1234567890123456789ULL, "GPMF retains descriptors and exact integer sensor counters");
+        require(decoded->front().pts->ticks == -10 && decoded->front().duration->ticks == 1000, "packet clocks remain distinct from sample timing");
+        auto broken = observed;
+        const auto expect_error = [&](const Bytes& payload, lfs::ErrorCode code) {
+            broken.packets[0].bytes = payload;
+            const auto result = interpretGpmfMetadata(broken);
+            require(!result && result.error().code() == code, "GPMF refusal preserves its specific error code");
+        };
+        broken.codec_tag = 0;
+        const auto wrong_track = interpretGpmfMetadata(broken);
+        require(!wrong_track && wrong_track.error().code() == ErrorCode::Unsupported, "GPMF requires the selected gpmd track");
+        broken = observed;
+        broken.packets[0].bytes[7] = 255;
+        expect_error(broken.packets[0].bytes, ErrorCode::DataLoss);
+        Bytes gps9_values, gps9_scales;
+        for (const int value : {510000000, -12000000, 1250, 300, 400, 9000, 43210123})
+            append(gps9_values, integer(static_cast<std::uint32_t>(value), 4));
+        append(gps9_values, integer(125, 2));
+        append(gps9_values, integer(3, 2));
+        for (const auto divisor : {10000000, 10000000, 10, 100, 100, 1, 1000, 100, 1})
+            append(gps9_scales, integer(divisor, 4));
+        auto gps9_stream = record("SCAL", 'l', 4, 9, gps9_scales);
+        append(gps9_stream, record("TYPE", 'c', 1, 9, {'l', 'l', 'l', 'l', 'l', 'l', 'l', 'S', 'S'}));
+        append(gps9_stream, record("GPS9", '?', 32, 1, gps9_values));
+        broken.packets[0].bytes = nest("DEVC", nest("STRM", gps9_stream));
+        const auto gps9 = interpretGpmfMetadata(broken);
+        require(gps9 && gps9->front().streams.size() == 1, "GPS9 is read without GPS5");
+        const auto& point = gps9->front().streams.front();
+        require(point.key == "GPS9" && point.components == 9 &&
+                    point.values == std::vector<double>{51, -1.2, 125, 3, 4, 9000, 43210.123, 1.25, 3},
+                "GPS9 retains all nine scaled fields in recorded order");
+        auto unsupported_layout = record("TYPE", 'c', 9, 1, {'L', 'l', 'l', 'l', 'l', 'l', 'l', 'S', 'S'});
+        append(unsupported_layout, record("GPS9", '?', 32, 1, gps9_values));
+        auto mixed = nest("STRM", unsupported_layout);
+        append(mixed, nest("STRM", gyro));
+        broken.packets[0].bytes = nest("DEVC", mixed);
+        const auto partial = interpretGpmfMetadata(broken);
+        require(partial && partial->front().streams.size() == 2 &&
+                    partial->front().streams[0].unsupported_reason &&
+                    partial->front().streams[1].values.size() == 6,
+                "unsupported GPS9 layout preserves supported gyroscope data in the same packet");
+        const auto serialized = json_detail::gpmfMetadata(*partial)["packets"][0]["streams"];
+        require(serialized[0]["key"] == "GPS9" && serialized[0]["status"] == "unsupported" &&
+                    serialized[1]["samples"].size() == 2,
+                "GPMF JSON distinguishes an unsupported stream from decoded samples");
+
+        Bytes coexist = nest("STRM", gps9_stream);
+        append(coexist, nest("STRM", record("GPS5", 'l', 20, 1, Bytes(20))));
+        broken.packets[0].bytes = nest("DEVC", coexist);
+        const auto both = interpretGpmfMetadata(broken);
+        require(both && both->front().streams.size() == 2 &&
+                    both->front().streams[0].key == "GPS9" && both->front().streams[1].key == "GPS5",
+                "GPS5 and GPS9 remain separate observations");
+        Bytes scales;
+        for (unsigned i = 0; i < 257; ++i)
+            append(scales, integer(1, 4));
+        stream = record("SCAL", 'l', 4, 257, scales);
+        append(stream, gyro);
+        broken.packets[0].bytes = nest("DEVC", nest("STRM", stream));
+        expect_error(broken.packets[0].bytes, ErrorCode::DataLoss);
+        stream = record("SCAL", 'l', 4, 1, integer(0, 4));
+        append(stream, gyro);
+        broken.packets[0].bytes = nest("DEVC", nest("STRM", stream));
+        expect_error(broken.packets[0].bytes, ErrorCode::DataLoss);
+        stream = record("SCAL", 'l', 4, 1, integer(1, 4));
+        Bytes doubles;
+        for (double value : {1.0, 2.0, 3.0})
+            append(doubles, integer(std::bit_cast<std::uint64_t>(value), 8));
+        append(stream, record("GYRO", 'd', 24, 1, doubles));
+        broken.packets[0].bytes = nest("DEVC", nest("STRM", stream));
+        const auto unaligned = interpretGpmfMetadata(broken);
+        require(unaligned && unaligned->front().streams.front().values == std::vector<double>{1, 2, 3}, "double samples support GPMF four-byte record alignment");
+        stream = record("SCAL", 'l', 4, 1, integer(1, 4));
+        append(stream, record("ORIN", 'c', 3, 1, {'Y', 'x', 'Z'}));
+        append(stream, record("ORIO", 'c', 3, 1, {'Z', 'X', 'Y'}));
+        Bytes matrix;
+        for (float value : {0.0f, 0.0f, 1.0f, 0.0f, -1.0f, 0.0f, 1.0f, 0.0f, 0.0f})
+            append(matrix, integer(std::bit_cast<std::uint32_t>(value), 4));
+        append(stream, record("MTRX", 'f', 4, 9, matrix));
+        append(stream, gyro);
+        broken.packets[0].bytes = nest("DEVC", nest("STRM", stream));
+        const auto oriented = interpretGpmfMetadata(broken);
+        require(oriented && oriented->front().streams.front().values.front() == -100 &&
+                    oriented->front().streams.front().orientation_in == "YxZ" &&
+                    oriented->front().streams.front().orientation_out == "ZXY" &&
+                    oriented->front().streams.front().calibration_matrix == std::vector<double>{0, 0, 1, 0, -1, 0, 1, 0, 0},
+                "calibration and axes are preserved without silently transforming recorded samples");
+        stream = record("SCAL", 'l', 4, 1, integer(100, 4));
+        append(stream, gyro);
+        append(stream, record("SCAL", 'l', 4, 1, integer(200, 4)));
+        append(stream, gyro);
+        broken.packets[0].bytes = nest("DEVC", nest("STRM", stream));
+        const auto changed_scale = interpretGpmfMetadata(broken);
+        require(changed_scale && changed_scale->front().streams.size() == 2 &&
+                    changed_scale->front().streams[0].values.front() == -1 && changed_scale->front().streams[1].values.front() == -0.5,
+                "GPMF modifiers apply forward within their stream");
+        Bytes nonfinite;
+        for (unsigned i = 0; i < 3; ++i)
+            append(nonfinite, integer(std::bit_cast<std::uint32_t>(std::numeric_limits<float>::quiet_NaN()), 4));
+        broken.packets[0].bytes = nest("DEVC", nest("STRM", record("GYRO", 'f', 12, 1, nonfinite)));
+        expect_error(broken.packets[0].bytes, ErrorCode::DataLoss);
+        stream.clear();
+        for (unsigned i = 0; i < 2000; ++i)
+            append(stream, record("JUNK", '!', 1, 1, {0}));
+        append(stream, gyro);
+        broken.packets[0].bytes = nest("DEVC", nest("STRM", stream));
+        const auto future = interpretGpmfMetadata(broken);
+        require(future && future->front().streams.front().values.front() == -100, "unknown field types preserve traversal to known samples");
+        for (std::size_t length = 0; length < observed.packets[0].bytes.size(); ++length)
+            expect_error(Bytes(observed.packets[0].bytes.begin(), observed.packets[0].bytes.begin() + length), ErrorCode::DataLoss);
+        expect_error(nest("DEVC", nest("STRM", record("GYRO", 's', 3, 1, {0, 1, 0}))), ErrorCode::DataLoss);
+        Bytes invalid_counter = record("TSMP", 'L', 4, 2, integer(2, 8));
+        append(invalid_counter, gyro);
+        expect_error(nest("DEVC", nest("STRM", invalid_counter)), ErrorCode::DataLoss);
+        expect_error(record("JUNK", 'B', 1, 1, {0}), ErrorCode::DataLoss);
+
+        auto first_stream = descriptors;
+        append(first_stream, gyro);
+        auto streams = nest("STRM", first_stream);
+        append(streams, nest("STRM", gyro));
+        auto device = record("DVID", 'F', 4, 1, {'F', 'O', 'V', 'L'});
+        append(device, streams);
+        auto devices = nest("DEVC", device);
+        append(devices, nest("DEVC", nest("STRM", gyro)));
+        broken.packets[0].bytes = devices;
+        const auto isolated = interpretGpmfMetadata(broken);
+        require(isolated && isolated->front().streams.size() == 3, "multiple devices and streams are preserved");
+        const auto& isolated_streams = isolated->front().streams;
+        require(isolated_streams[0].device_id == 0x464f564c && isolated_streams[1].device_id == 0x464f564c && !isolated_streams[2].device_id,
+                "FourCC device identifiers retain their big-endian value without leaking across devices");
+        require(isolated_streams[0].values.front() == -1 && isolated_streams[1].values.front() == -100 && isolated_streams[2].values.front() == -100 &&
+                    isolated_streams[1].units.empty() && !isolated_streams[1].total_samples,
+                "stream modifiers do not leak between streams or devices");
+        device = record("DVID", 'F', 3, 1, {'B', 'A', 'D'});
+        append(device, nest("STRM", gyro));
+        expect_error(nest("DEVC", device), ErrorCode::DataLoss);
+
+        for (const auto type : {'q', 'Q', 'B', 'S', 'L', 'J'}) {
+            const auto width = type == 'B' ? 1u : type == 'S'                ? 2u
+                                              : (type == 'J' || type == 'Q') ? 8u
+                                                                             : 4u;
+            const auto one = type == 'q' ? std::uint64_t{65536} : type == 'Q' ? std::uint64_t{4294967296}
+                                                                              : std::uint64_t{1};
+            const bool fixed_point = type == 'q' || type == 'Q';
+            Bytes values;
+            for (unsigned i = 1; i <= 3; ++i)
+                append(values, integer(i == 1 && fixed_point ? std::uint64_t{0} - one : i * one, width));
+            broken.packets[0].bytes = nest("DEVC", nest("STRM", record("GYRO", type, static_cast<std::uint8_t>(width * 3), 1, values)));
+            const auto numeric = interpretGpmfMetadata(broken);
+            require(numeric && numeric->front().streams.front().values == std::vector<double>{fixed_point ? -1.0 : 1.0, 2, 3}, "fixed-point and unsigned values preserve independent known magnitudes");
+        }
+        broken.packets[0].bytes = nest("DEVC", nest("STRM", record("GYRO", 's', 6, 0, {})));
+        const auto empty_samples = interpretGpmfMetadata(broken);
+        require(empty_samples && empty_samples->front().streams.front().values.empty(), "empty sample records remain empty");
+
+        device = record("DVNM", 'c', 1, 4096, Bytes(4096, 'N'));
+        append(device, nest("STRM", gyro));
+        broken.packets[0].bytes = nest("DEVC", device);
+        require(interpretGpmfMetadata(broken, 7000).has_value(), "one retained large descriptor fits the output budget");
+        append(device, nest("STRM", gyro));
+        broken.packets[0].bytes = nest("DEVC", device);
+        const auto amplified = interpretGpmfMetadata(broken, 7000);
+        require(!amplified && amplified.error().code() == ErrorCode::ResourceExhausted, "repeated descriptor copies consume the cumulative decoded budget");
+        const auto detail = amplified.error().detail();
+        require(detail.find("GPMF packet 0:") != std::string_view::npos && detail.find("record=GYRO") != std::string_view::npos,
+                "decoded budget error identifies the packet and record");
+    }
     void timedPacketContracts() {
         using namespace lfs::media;
         const auto path = std::filesystem::temp_directory_path() / ("lfs-timed-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".mp4");
@@ -677,6 +886,7 @@ int runProbeUnitContracts() {
     sourceExifContracts();
     timedPacketContracts();
     djiProfileContracts();
+    gpmfContracts();
     using namespace lfs::media;
     const auto* dav1d = avcodec_find_decoder_by_name("libdav1d");
     require(detail::softwareVideoDecoder(AV_CODEC_ID_AV1) ==

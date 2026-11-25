@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include "media/dji_timed_metadata.hpp"
+#include "media/gpmf_metadata.hpp"
 #include "media/media_probe.hpp"
 #include "media/metadata_observation.hpp"
 #include "media/source_exif.hpp"
@@ -369,6 +370,58 @@ namespace lfs::media::json_detail {
         auto result = djiFrameBinding(binding);
         result["query"] = timestamp(query);
         result["match"] = *match ? djiFrameSample(binding.samples()[**match]) : json(nullptr);
+        return result;
+    }
+    inline json gpmfMetadata(const std::vector<GpmfPacket>& packets) {
+        json result{{"packets", json::array()}};
+        for (const auto& packet : packets) {
+            json streams = json::array();
+            for (const auto& stream : packet.streams) {
+                if (stream.unsupported_reason) {
+                    streams.push_back({{"key", stream.key}, {"status", "unsupported"}, {"reason", *stream.unsupported_reason}});
+                    continue;
+                }
+                json values = json::array();
+                for (std::size_t i = 0; i < stream.values.size(); i += stream.components) {
+                    json row = json::array();
+                    for (std::size_t j = 0; j < stream.components; ++j)
+                        row.push_back(stream.values[i + j]);
+                    values.push_back(std::move(row));
+                }
+                json units = json::array(), unit_bytes = json::array();
+                for (const auto& unit : stream.units) {
+                    std::string_view label = unit;
+                    while (!label.empty() && label.back() == '\0')
+                        label.remove_suffix(1);
+                    std::string display;
+                    if (stream.units_latin1) {
+                        for (const unsigned char byte : label) {
+                            if (byte >= 0x80) {
+                                display += static_cast<char>(0xc0 | (byte >> 6));
+                                display += static_cast<char>(0x80 | (byte & 0x3f));
+                            } else {
+                                display += static_cast<char>(byte);
+                            }
+                        }
+                    } else {
+                        display = label;
+                    }
+                    units.push_back(std::move(display));
+                    unit_bytes.push_back(hexBytes(unit));
+                }
+                json item{{"key", stream.key}, {"device_id", optional(stream.device_id)}, {"device_name", stream.device_name}, {"device_name_bytes", hexBytes(stream.device_name)}, {"name", stream.name}, {"name_bytes", hexBytes(stream.name)}, {"units", std::move(units)}, {"units_bytes", std::move(unit_bytes)}, {"orientation_in", stream.orientation_in}, {"orientation_in_bytes", hexBytes(stream.orientation_in)}, {"orientation_out", stream.orientation_out}, {"orientation_out_bytes", hexBytes(stream.orientation_out)}, {"total_samples", optional(stream.total_samples)}, {"sensor_timestamp", optional(stream.sensor_timestamp)}, {"samples", std::move(values)}};
+                if (!stream.calibration_matrix.empty())
+                    item["calibration_matrix"] = stream.calibration_matrix;
+                if (stream.key == "GPS5") {
+                    item["gps_fix"] = optional(stream.gps_fix);
+                    item["gps_precision_raw"] = optional(stream.gps_precision);
+                    item["gps_utc"] = stream.gps_utc;
+                    item["gps_utc_bytes"] = hexBytes(stream.gps_utc);
+                }
+                streams.push_back(std::move(item));
+            }
+            result["packets"].push_back({{"pts", timestamp(packet.pts)}, {"duration", timestamp(packet.duration)}, {"streams", std::move(streams)}});
+        }
         return result;
     }
     inline json timedMetadata(const TimedMetadataObservation& observation) {
