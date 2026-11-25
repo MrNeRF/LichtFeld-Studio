@@ -1577,8 +1577,8 @@ namespace {
 
         auto skippable = valid;
         const std::array skip_frame{std::byte{0x50}, std::byte{0x2a}, std::byte{0x4d},
-                                    std::byte{0x18}, std::byte{2},    std::byte{0},
-                                    std::byte{0},    std::byte{0},    std::byte{0xab},
+                                    std::byte{0x18}, std::byte{2}, std::byte{0},
+                                    std::byte{0}, std::byte{0}, std::byte{0xab},
                                     std::byte{0xcd}};
         skippable[1].stored.insert(skippable[1].stored.end(), skip_frame.begin(), skip_frame.end());
         expect_agree(skippable, true, "skippable frame after a record's frame");
