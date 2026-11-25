@@ -28,6 +28,7 @@
 #include <format>
 #include <limits>
 #include <optional>
+#include <random>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -1191,6 +1192,537 @@ namespace {
             EXPECT_EQ(got[i].x, want[i].first) << i;
             EXPECT_NEAR(got[i].y, want[i].second, 1e-6) << i;
         }
+    }
+
+    // ---- Blur-tolerant SSIM reference (ssim.cu blurTolerantForwardCUDA / blurTolerantBackwardCUDA) ----------
+    // MRNF's loss for photos with a short side of 1,200 pixels or more, in double: the sharp and the blurred
+    // decoupled SSIM branch of each window from the same photo statistics, their soft maximum, the blurred branch's
+    // backward and the gradient with the adjoint blur. Partials and the branch pass's (v, u) are rounded to half
+    // where the GPU stores them.
+
+    // The host blur taps of a sigma (centre first), rounded to float as the kernels read them.
+    std::vector<double> blur_taps_reference(const float sigma) {
+        const int radius = static_cast<int>(std::ceil(3.0 * sigma));
+        std::vector<double> raw(radius + 1), taps(2 * radius + 1);
+        double sum = 0.0;
+        for (int d = 0; d <= radius; ++d) {
+            raw[d] = std::exp(-0.5 * d * d / (static_cast<double>(sigma) * sigma));
+            sum += d == 0 ? raw[d] : 2.0 * raw[d];
+        }
+        for (int d = -radius; d <= radius; ++d)
+            taps[d + radius] = static_cast<float>(raw[std::abs(d)] / sum);
+        return taps;
+    }
+
+    // Separable filter with symmetric taps (2R+1) over one [H,W] plane; samples outside the image read `outside`.
+    Field filter(const Field& f, const int H, const int W, const std::vector<double>& taps, const double outside = 0.0) {
+        const int R = static_cast<int>(taps.size() / 2);
+        Field horizontal(static_cast<size_t>(H + 2 * R) * W, 0.0), out(static_cast<size_t>(H) * W, 0.0);
+        for (int y = -R; y < H + R; ++y)
+            for (int x = 0; x < W; ++x) {
+                double sum = 0.0;
+                for (int d = -R; d <= R; ++d) {
+                    const bool in = y >= 0 && y < H && x + d >= 0 && x + d < W;
+                    sum += taps[d + R] * (in ? f[static_cast<size_t>(y) * W + x + d] : outside);
+                }
+                horizontal[static_cast<size_t>(y + R) * W + x] = sum;
+            }
+        for (int y = 0; y < H; ++y)
+            for (int x = 0; x < W; ++x)
+                for (int d = -R; d <= R; ++d)
+                    out[static_cast<size_t>(y) * W + x] += taps[d + R] * horizontal[static_cast<size_t>(y + d + R) * W + x];
+        return out;
+    }
+
+    std::vector<double> window_taps() { return {kGauss.begin(), kGauss.end()}; }
+
+    // One decoupled branch (bt_branch): returns S; cs and the partials {raw mean, raw sigma^2, raw sigma12,
+    // corrected mean}.
+    double blur_branch_reference(const double mc, const double mr, const double mrr, const double my, const double myy,
+                                 const double mry, const double weight, double& cs, std::array<double, 4>& partial) {
+        const double A = mc * mc + my * my + kC1, C = 2 * mc * my + kC1, lum = C / A;
+        const double B = (mrr - mr * mr) + (myy - my * my) + kC2, D = 2 * (mry - mr * my) + kC2;
+        cs = D / B;
+        const double ds1 = weight * (-(lum * D) / (B * B)), ds12 = weight * (2 * lum / B);
+        partial = {ds1 * (-2 * mr) + ds12 * (-my), ds1, ds12, cs * (2 * (my * A - mc * C) / (A * A))};
+        return lum * cs;
+    }
+
+    struct BlurCase {
+        Shape4 shape;
+        bool decoupled = false;
+        int mask = 0; // 0 none, 1 soft float weights (some above one), 2 8-bit
+        bool target_bytes = false;
+        float sigma = 1.5f;
+        float weight = 0.22f;
+        float denominator = 0.f;
+        int photo = 0; // 0 noisy copy of the render, 1 a blur of the render, 2 noisy copy with a constant block
+    };
+
+    struct BlurRef : PhotoRef {
+        // [N,H,W]: in every channel the soft maximum is decided (|d| >= 5, the smaller weight below 0.7%) and the
+        // photo window is not within 1e-4 of the flat threshold.
+        std::vector<uint8_t> decided;
+    };
+
+    BlurRef blur_reference(const BlurCase& bc, const PhotoInputs& in) {
+        const Shape4& s = bc.shape;
+        const bool masked = bc.mask != 0;
+        const double sw = bc.weight;
+        const std::vector<double> T = blur_taps_reference(bc.sigma), Wn = window_taps();
+        const size_t P = s.plane();
+        const Field& x = in.hx;
+        const Field& raw = bc.decoupled ? in.hraw : in.hx;
+        const Field& y = in.hy;
+        const auto inside_valid = [&](const int py, const int px) {
+            return masked || ((s.h <= 10 || (py >= 5 && py < s.h - 5)) && (s.w <= 10 || (px >= 5 && px < s.w - 5)));
+        };
+        Field weight(P, 1.0), keep(P, 1.0);
+        if (masked)
+            for (size_t i = 0; i < P; ++i) {
+                weight[i] = in.hmask[i];
+                keep[i] = in.hmask[i] > 0.0 ? 1.0 : 0.0;
+            }
+        // Window mass with unit weight outside the image (masked); unmasked windows are not normalised.
+        Field inv_window(P, 1.0);
+        if (masked) {
+            const Field mass = filter(weight, s.h, s.w, Wn, 1.0);
+            for (size_t i = 0; i < P; ++i)
+                inv_window[i] = mass[i] >= 1e-30 ? 1.0 / mass[i] : 0.0;
+        }
+        const Field keep_sum = filter(keep, s.h, s.w, T);
+        Field support(P);
+        for (size_t i = 0; i < P; ++i)
+            support[i] = keep_sum[i] > 1e-30 ? 1.0 / keep_sum[i] : 0.0;
+        const auto moment = [&](const Field& v) {
+            Field out = filter(masked ? product(v, weight) : v, s.h, s.w, Wn);
+            for (size_t i = 0; i < P; ++i)
+                out[i] *= inv_window[i];
+            return out;
+        };
+        const auto blurred = [&](const Field& v) {
+            Field out = filter(product(v, keep), s.h, s.w, T);
+            for (size_t i = 0; i < P; ++i)
+                out[i] *= support[i];
+            return out;
+        };
+
+        BlurRef ref;
+        ref.grad.assign(s.numel(), 0.0);
+        ref.grad_raw.assign(bc.decoupled ? s.numel() : 0, 0.0);
+        ref.ssim_map.assign(static_cast<size_t>(s.n) * P, 0.0);
+        ref.cs_map.assign(static_cast<size_t>(s.n) * P, 0.0);
+        Field blend_map(static_cast<size_t>(s.n) * P, 0.0);
+        ref.decided.assign(static_cast<size_t>(s.n) * P, 1);
+        std::vector<std::array<Field, 4>> sharp(static_cast<size_t>(s.n) * s.c), soft(static_cast<size_t>(s.n) * s.c);
+        for (int n = 0; n < s.n; ++n)
+            for (int c = 0; c < s.c; ++c) {
+                const Field px = product(plane_of(x, s, n, c), keep), pr = product(plane_of(raw, s, n, c), keep);
+                const Field py = plane_of(y, s, n, c);
+                const Field gx = blurred(plane_of(x, s, n, c)), gr = blurred(plane_of(raw, s, n, c));
+                const Field mx = moment(px), mr = moment(pr), mrr = moment(product(pr, pr)), mry = moment(product(pr, py));
+                const Field my = moment(py), myy = moment(product(py, py));
+                const Field bx = moment(gx), br = moment(gr), brr = moment(product(gr, gr)), bry = moment(product(gr, py));
+                auto& sp = sharp[static_cast<size_t>(n) * s.c + c];
+                auto& bp = soft[static_cast<size_t>(n) * s.c + c];
+                for (auto& f : sp)
+                    f.assign(P, 0.0);
+                for (auto& f : bp)
+                    f.assign(P, 0.0);
+                for (size_t i = 0; i < P; ++i) {
+                    double cs0, cs1;
+                    std::array<double, 4> p0, p1;
+                    const double s0 = blur_branch_reference(mx[i], mr[i], mrr[i], my[i], myy[i], mry[i], sw, cs0, p0);
+                    const double s1 = blur_branch_reference(bx[i], br[i], brr[i], my[i], myy[i], bry[i], sw, cs1, p1);
+                    const double d = 50.0 * (s0 - s1), e = std::exp(-std::abs(d));
+                    const double high = 1.0 / (1.0 + e), low = e * high;
+                    const bool flat = myy[i] - my[i] * my[i] < 0.0005;
+                    const double w0 = flat ? 1.0 : (d >= 0 ? high : low), w1 = flat ? 0.0 : (d >= 0 ? low : high);
+                    if (std::abs(d) < 5.0 || std::abs(myy[i] - my[i] * my[i] - 0.0005) < 1e-4)
+                        ref.decided[n * P + i] = 0;
+                    ref.ssim_map[n * P + i] += s0 / s.c;
+                    ref.cs_map[n * P + i] += (w0 * cs0 + w1 * cs1) / s.c;
+                    blend_map[n * P + i] += (flat ? s0 : std::max(s0, s1) + (std::log1p(e) - std::log(2.0)) / 50.0) / s.c;
+                    const double dw = (masked ? weight[i] : 1.0) * inv_window[i];
+                    for (int k = 0; k < 4; ++k) {
+                        const double scale = masked && k == 0 ? dw / 16.0 : dw;
+                        sp[k][i] = to_half(p0[k] * (w0 * scale));
+                        bp[k][i] = to_half(p1[k] * (w1 * scale) * (k == 3 ? sw : 1.0));
+                    }
+                }
+            }
+        if (masked)
+            for (int n = 0; n < s.n; ++n)
+                for (size_t i = 0; i < P; ++i)
+                    if (weight[i] <= 0.0)
+                        ref.ssim_map[n * P + i] = ref.cs_map[n * P + i] = blend_map[n * P + i] = 1.0;
+
+        // Loss and chain.
+        double chain = 0.0;
+        if (masked) {
+            double mask_sum = 0.0;
+            for (const double m : weight)
+                mask_sum += m;
+            const double normalized = bc.denominator > 0.f ? bc.denominator : static_cast<float>(mask_sum) * s.n * s.c + 1e-8;
+            chain = 1.0 / normalized;
+        } else {
+            const double count = static_cast<double>(s.n) * s.c * (s.h > 10 ? s.h - 10 : s.h) * (s.w > 10 ? s.w - 10 : s.w);
+            chain = 1.0f / static_cast<float>(count);
+        }
+        for (int n = 0; n < s.n; ++n)
+            for (int c = 0; c < s.c; ++c)
+                for (int py = 0; py < s.h; ++py)
+                    for (int px = 0; px < s.w; ++px) {
+                        const size_t i = static_cast<size_t>(py) * s.w + px;
+                        const size_t e = (static_cast<size_t>(n) * s.c + c) * P + i;
+                        const double term = (1 - sw) * std::abs(x[e] - y[e]) + sw * (1 - blend_map[n * P + i]);
+                        if (masked)
+                            ref.loss += term * weight[i] * chain;
+                        else if (inside_valid(py, px))
+                            ref.loss += term * chain;
+                    }
+
+        // Branch pass (v, u), then both gradients.
+        const auto adjoint = [&](const Field& partial) {
+            Field valid_only(P, 0.0);
+            for (int py = 0; py < s.h; ++py)
+                for (int px = 0; px < s.w; ++px)
+                    if (inside_valid(py, px))
+                        valid_only[static_cast<size_t>(py) * s.w + px] = partial[static_cast<size_t>(py) * s.w + px];
+            return filter(valid_only, s.h, s.w, Wn);
+        };
+        for (int n = 0; n < s.n; ++n)
+            for (int c = 0; c < s.c; ++c) {
+                const auto& sp = sharp[static_cast<size_t>(n) * s.c + c];
+                const auto& bp = soft[static_cast<size_t>(n) * s.c + c];
+                const Field pr = plane_of(raw, s, n, c), py = plane_of(y, s, n, c), pc = plane_of(x, s, n, c);
+                const Field t_raw = filter(product(pr, keep), s.h, s.w, T);
+                std::array<Field, 4> mb, ms;
+                for (int k = 0; k < 4; ++k) {
+                    mb[k] = adjoint(bp[k]);
+                    ms[k] = adjoint(sp[k]);
+                }
+                Field v(P), u(P);
+                for (size_t i = 0; i < P; ++i) {
+                    const double nn = keep_sum[i] > 1e-30 ? 1.0 / keep_sum[i] : 0.0, kn = weight[i] * nn;
+                    const double s0 = (masked ? -16.0 : -1.0) * mb[0][i];
+                    v[i] = to_half(-kn * mb[3][i]);
+                    u[i] = to_half(kn * (s0 - 2.0 * (t_raw[i] * nn) * mb[1][i] - py[i] * mb[2][i]));
+                }
+                const Field tv = filter(v, s.h, s.w, T), tu = filter(u, s.h, s.w, T);
+                for (int yy = 0; yy < s.h; ++yy)
+                    for (int xx = 0; xx < s.w; ++xx) {
+                        const size_t i = static_cast<size_t>(yy) * s.w + xx;
+                        const size_t e = (static_cast<size_t>(n) * s.c + c) * P + i;
+                        const double center = weight[i];
+                        const double l1 = (1 - sw) * sign(pc[i] - py[i]) * (masked ? center : (inside_valid(yy, xx) ? 1.0 : 0.0));
+                        const double gc = chain * (center * -sw * ms[3][i] + l1 + keep[i] * tv[i]);
+                        const double gr = chain * (center * ((masked ? -16.0 : -1.0) * ms[0][i] - 2.0 * pr[i] * ms[1][i] -
+                                                             py[i] * ms[2][i]) +
+                                                   keep[i] * tu[i]);
+                        if (bc.decoupled) {
+                            ref.grad[e] = gc;
+                            ref.grad_raw[e] = gr;
+                        } else {
+                            ref.grad[e] = gc + gr;
+                        }
+                    }
+            }
+        return ref;
+    }
+
+    // The render, a raw render near it (as before exposure correction), and a photo: a noisy copy of the render
+    // (the sharp branch leads), a blur of it with noise (the blurred branch leads) or a smooth photo whose windows
+    // are all flat (plain SSIM).
+    PhotoInputs blur_inputs(const BlurCase& bc, const uint32_t seed) {
+        PhotoCase pc{bc.decoupled ? ops::PhotoPath::MaskedDecoupled : ops::PhotoPath::MaskedFused, bc.shape,
+                     bc.target_bytes, bc.mask == 2};
+        PhotoInputs in = photo_inputs(pc, seed);
+        const Shape4& s = bc.shape;
+        const auto raw_noise = uniform(s.numel(), seed + 5, -0.05f, 0.05f);
+        std::vector<float> raw(s.numel());
+        for (size_t i = 0; i < raw.size(); ++i)
+            raw[i] = std::clamp(0.9f * static_cast<float>(in.hx[i]) + 0.05f + raw_noise[i], 0.f, 1.f);
+        in.raw = upload(raw, s.tensor());
+        in.hraw = widen(raw);
+        if (bc.photo != 0) {
+            const std::vector<double> taps = blur_taps_reference(1.0f);
+            const auto noise = uniform(s.numel(), seed + 6, -0.05f, 0.05f);
+            std::vector<float> y(s.numel());
+            for (int n = 0; n < s.n; ++n)
+                for (int c = 0; c < s.c; ++c) {
+                    const Field blurred = filter(plane_of(in.hx, s, n, c), s.h, s.w, taps);
+                    const Field mass = filter(Field(s.plane(), 1.0), s.h, s.w, taps);
+                    for (int py = 0; py < s.h; ++py)
+                        for (int px = 0; px < s.w; ++px) {
+                            const size_t i = static_cast<size_t>(py) * s.w + px;
+                            const size_t e = (static_cast<size_t>(n) * s.c + c) * s.plane() + i;
+                            y[e] = bc.photo == 1 ? std::clamp(static_cast<float>(blurred[i] / mass[i]) + noise[e], 0.f, 1.f)
+                                                 : 0.5f + 0.02f * std::sin(0.31f * px + 0.7f * c) * std::cos(0.43f * py);
+                        }
+                }
+            if (bc.target_bytes) {
+                std::vector<uint8_t> bytes(y.size());
+                for (size_t i = 0; i < y.size(); ++i) {
+                    bytes[i] = static_cast<uint8_t>(std::lround(std::clamp(y[i], 0.f, 1.f) * 255.f));
+                    y[i] = static_cast<float>(bytes[i]) * (1.0f / 255.0f);
+                }
+                in.y = upload_bytes(bytes, s.tensor());
+            } else {
+                in.y = upload(y, s.tensor());
+            }
+            in.hy = widen(y);
+        }
+        if (bc.mask == 1) {
+            // Soft weights in [0, 1.5]: zeros, values below one and above it (the tile scale).
+            const auto soft = uniform(s.plane(), seed + 7);
+            std::vector<float> mask(s.plane());
+            for (size_t i = 0; i < mask.size(); ++i)
+                mask[i] = soft[i] < 0.25f ? 0.f : 1.5f * soft[i];
+            in.mask = upload(mask, TensorShape({static_cast<size_t>(s.h), static_cast<size_t>(s.w)}));
+            in.hmask = widen(mask);
+        }
+        return in;
+    }
+
+    // A blur-tolerant gradient against the reference: every element within 3e-3 of the largest (moving where the
+    // fp16 partials round moves elements by up to 2.8e-3 of the largest: the CUDA test's own measurement, between
+    // its four- and three-pass versions), the L1 norm within 1e-4 (BlurTolerantSsim.MatchesReferenceValues'
+    // budget) and the projection onto the reference within 1e-4 of it.
+    void expect_blur_gradient(const std::vector<float>& got, const Field& want, const std::string& what) {
+        expect_field(got, want, 0.0, 3e-3, what);
+        double l1_got = 0.0, l1_want = 0.0, dot = 0.0, square = 0.0;
+        for (size_t i = 0; i < got.size(); ++i) {
+            l1_got += std::abs(got[i]);
+            l1_want += std::abs(want[i]);
+            dot += got[i] * want[i];
+            square += want[i] * want[i];
+        }
+        EXPECT_NEAR(l1_got, l1_want, 1e-4 * l1_want) << what << " L1 norm";
+        EXPECT_NEAR(dot / square, 1.0, 1e-4) << what << " projection";
+    }
+
+    void check_blur(const lfs::training::TrainingOps& table, const BlurCase& bc, const std::string& name) {
+        SCOPED_TRACE(name);
+        const PhotoInputs in = blur_inputs(bc, 17);
+        const bool masked = bc.mask != 0;
+        const ops::PhotoPath path = masked ? (bc.decoupled ? ops::PhotoPath::MaskedDecoupled : ops::PhotoPath::MaskedFused)
+                                           : (bc.decoupled ? ops::PhotoPath::Decoupled : ops::PhotoPath::Fused);
+        ops::PhotoSaved saved{.backend = table.photometric->create()};
+        Tensor loss, grad, grad_raw;
+        table.photometric->evaluate(saved, in.x, bc.decoupled ? in.raw : Tensor{}, in.y, masked ? in.mask : Tensor{},
+                                    {.path = path, .ssim_weight = bc.weight, .valid_padding = true, .denominator = bc.denominator, .blur_sigma = bc.sigma},
+                                    loss, grad, grad_raw);
+        const BlurRef ref = blur_reference(bc, in);
+        expect_value(download(loss)[0], ref.loss, 1e-5, name + " loss");
+        expect_blur_gradient(download(grad), ref.grad, name + " grad");
+        if (bc.decoupled)
+            expect_blur_gradient(download(grad_raw), ref.grad_raw, name + " grad_raw");
+        else
+            EXPECT_FALSE(grad_raw.is_valid());
+        // Both maps within the plain maps' budget plus 1e-4 of each value: a nearly flat photo window or a blurred
+        // window's small variance cancels its covariances against the window means, which keeps that much less of
+        // the float precision. The blend's contrast-structure where the soft maximum is decided: near its balance
+        // point the temperature (50) multiplies the float rounding of s0 - s1 in the branch weights by up to 12.5.
+        const double map_tolerance = bc.mask == 1 ? 3e-6 : 2e-6;
+        const auto expect_map = [&](const std::vector<float>& got, const Field& want, const bool decided_only,
+                                    const std::string& what) {
+            ASSERT_EQ(got.size(), want.size()) << what;
+            size_t compared = 0, worst = 0;
+            double worst_ratio = 0.0;
+            for (size_t i = 0; i < got.size(); ++i) {
+                if (decided_only && !ref.decided[i])
+                    continue;
+                ++compared;
+                const double ratio = std::abs(got[i] - want[i]) / (map_tolerance + 1e-4 * std::abs(want[i]));
+                if (!(ratio <= worst_ratio)) {
+                    worst_ratio = ratio;
+                    worst = i;
+                }
+            }
+            EXPECT_LE(worst_ratio, 1.0) << what << ": index " << worst << " got " << got[worst] << " want " << want[worst]
+                                        << " (" << compared << " of " << got.size() << " compared)";
+        };
+        expect_map(download(saved.ssim_map), ref.ssim_map, false, name + " ssim_map");
+        expect_map(download(saved.cs_map), ref.cs_map, true, name + " cs_map");
+    }
+
+    // Catches a blur-tolerant SSIM that leaves CUDA's three kernels: the loss, both gradients and both maps against
+    // the double reference for every blur radius, plain and decoupled, unweighted, soft-weighted and 8-bit masks,
+    // float and 8-bit photos, batches, sizes that leave partial tiles or are smaller than a tile, a fixed
+    // denominator, the sharp branch leading, the blurred one leading and flat photo windows.
+    TEST_P(PortableLosses, BlurTolerantSsimMatchesReference) {
+        const Shape4 fixture{1, 3, 32, 40}, odd{2, 3, 21, 27}, thin{1, 3, 9, 30}, tiny{1, 3, 7, 5}, gray{1, 1, 20, 24};
+        check_blur(*table_, {fixture}, "plain");
+        check_blur(*table_, {fixture, true}, "decoupled");
+        check_blur(*table_, {fixture, false, 1}, "soft_weights");
+        check_blur(*table_, {fixture, true, 1}, "decoupled_soft_weights");
+        check_blur(*table_, {fixture, true, 2, true}, "decoupled_u8_mask_u8_photo");
+        check_blur(*table_, {fixture, true, 1, false, 1.5f, 0.22f, 5000.f}, "decoupled_fixed_denominator");
+        check_blur(*table_, {fixture, true, 0, false, 0.8215f}, "radius_3");
+        check_blur(*table_, {fixture, false, 1, false, 0.6f}, "radius_2_soft_weights");
+        check_blur(*table_, {fixture, true, 0, true, 0.3f}, "radius_1_u8_photo");
+        check_blur(*table_, {fixture, false, 0, false, 1.5f, 0.22f, 0.f, 1}, "blurred_photo");
+        check_blur(*table_, {fixture, true, 1, false, 1.5f, 0.22f, 0.f, 1}, "decoupled_blurred_photo_soft_weights");
+        check_blur(*table_, {fixture, true, 0, false, 1.5f, 1.0f, 0.f, 2}, "flat_photo_ssim_only");
+        check_blur(*table_, {fixture, false, 1, false, 1.5f, 0.22f, 0.f, 2}, "flat_photo_soft_weights");
+        check_blur(*table_, {odd, true, 0, true}, "batch_decoupled_u8_photo");
+        check_blur(*table_, {odd, false, 2}, "batch_u8_mask");
+        check_blur(*table_, {thin, true}, "thin");
+        check_blur(*table_, {tiny, true, 1}, "tiny_soft_weights");
+        check_blur(*table_, {tiny}, "tiny");
+        check_blur(*table_, {gray, true, 0, false, 1.0f}, "one_channel");
+    }
+
+    // Catches portable blur-tolerant SSIM values that leave CUDA's: the inputs and the values CUDA records in
+    // BlurTolerantSsim.MatchesReferenceValues (tests/test_blur_tolerant_ssim.cpp, in the CUDA build's list), with its
+    // budgets: the loss within 1e-6 and both gradients' L1 norms within 1e-4.
+    TEST_P(PortableLosses, BlurTolerantSsimMatchesCudaValues) {
+        constexpr size_t H = 301, W = 437;
+        // That test's fixed_values and box_blurred.
+        const auto fixed_values = [&](const size_t channels, const unsigned seed, const float lo, const float hi,
+                                      const bool holes = false) {
+            std::mt19937 rng(seed);
+            std::vector<float> values(std::max<size_t>(channels, 1) * H * W);
+            for (size_t i = 0; i < values.size(); ++i) {
+                const size_t y = i / W % H, x = i % W;
+                const bool hole = holes && ((y % 37 >= 10 && y % 37 < 17 && x % 41 >= 5 && x % 41 < 30) || y % 53 == 3);
+                values[i] = hole ? 0.0f : lo + (hi - lo) * static_cast<float>(rng() >> 8) * (1.0f / 16777216.0f);
+            }
+            return values;
+        };
+        const auto box_blurred = [&](const std::vector<float>& in) {
+            std::vector<float> out(in.size());
+            for (size_t c = 0; c < 3; ++c)
+                for (size_t y = 0; y < H; ++y)
+                    for (size_t x = 0; x < W; ++x) {
+                        float sum = 0.0f;
+                        int count = 0;
+                        for (int dy = -1; dy <= 1; ++dy)
+                            for (int dx = -1; dx <= 1; ++dx) {
+                                const auto yy = static_cast<long>(y) + dy, xx = static_cast<long>(x) + dx;
+                                if (yy < 0 || xx < 0 || yy >= static_cast<long>(H) || xx >= static_cast<long>(W))
+                                    continue;
+                                sum += in[(c * H + yy) * W + xx];
+                                ++count;
+                            }
+                        out[(c * H + y) * W + x] = sum / static_cast<float>(count);
+                    }
+            return out;
+        };
+        const TensorShape rgb({3, H, W});
+        const auto image = fixed_values(3, 1, 0.02f, 0.98f), shade = fixed_values(3, 2, 0.0f, 0.3f);
+        const auto noise = fixed_values(3, 5, 0.0f, 1.0f);
+        std::vector<float> mixed(image.size()), raw(image.size());
+        for (size_t i = 0; i < image.size(); ++i) {
+            mixed[i] = image[i] * 0.7f + shade[i];
+            raw[i] = noise[i] * 0.2f + image[i] * 0.8f;
+        }
+        const auto target = box_blurred(mixed);
+        std::vector<uint8_t> target_bytes(target.size());
+        for (size_t i = 0; i < target.size(); ++i)
+            target_bytes[i] = static_cast<uint8_t>(std::round(std::clamp(target[i], 0.0f, 1.0f) * 255.0f));
+        const Tensor x = upload(image, rgb), r = upload(raw, rgb), y = upload(target, rgb), y8 = upload_bytes(target_bytes, rgb);
+        const Tensor weight = upload(fixed_values(0, 9, 0.5f, 1.5f, true), TensorShape({H, W}));
+        struct Case {
+            float sigma;
+            bool decoupled;
+            int weighting; // 0 none, 1 weights, 2 weights with the 8-bit photo and denominator 50,000
+            float loss;
+            double corrected_l1, raw_l1;
+        };
+        const Case cases[] = {
+            {0.6f, false, 0, 0.304602087f, 1.040200202, 0},
+            {0.6f, false, 1, 0.3034347f, 1.03684406, 0},
+            {0.6f, false, 2, 2.07304907f, 7.083815804, 0},
+            {0.6f, true, 0, 0.296424866f, 0.7809249387, 0.6007441256},
+            {0.6f, true, 1, 0.295226306f, 0.7811272925, 0.589753502},
+            {0.6f, true, 2, 2.01698184f, 5.336627963, 4.029545959},
+            {1.5f, false, 0, 0.247425988f, 0.819398238, 0},
+            {1.5f, false, 1, 0.24595879f, 0.8363325159, 0},
+            {1.5f, false, 2, 1.6805985f, 5.712948791, 0},
+            {1.5f, true, 0, 0.261338472f, 0.7804109969, 0.7261689108},
+            {1.5f, true, 1, 0.25874871f, 0.7804907897, 0.6983592078},
+            {1.5f, true, 2, 1.76796758f, 5.332270833, 4.77068885},
+        };
+        const auto l1_norm = [](const Tensor& t) {
+            double sum = 0.0;
+            for (const float v : download(t))
+                sum += std::abs(v);
+            return sum;
+        };
+        ops::PhotoSaved saved{.backend = table_->photometric->create()};
+        for (const Case& c : cases) {
+            SCOPED_TRACE(testing::Message() << "sigma " << c.sigma << ", decoupled " << c.decoupled << ", weighting "
+                                            << c.weighting);
+            const bool masked = c.weighting != 0;
+            const ops::PhotoPath path = masked ? (c.decoupled ? ops::PhotoPath::MaskedDecoupled : ops::PhotoPath::MaskedFused)
+                                               : (c.decoupled ? ops::PhotoPath::Decoupled : ops::PhotoPath::Fused);
+            Tensor loss, grad, grad_raw;
+            table_->photometric->evaluate(saved, x, c.decoupled ? r : Tensor{}, c.weighting == 2 ? y8 : y,
+                                          masked ? weight : Tensor{},
+                                          {.path = path, .ssim_weight = 0.22f, .valid_padding = true, .denominator = c.weighting == 2 ? 50000.0f : 0.0f, .blur_sigma = c.sigma},
+                                          loss, grad, grad_raw);
+            EXPECT_NEAR(download(loss)[0], c.loss, 1e-6f);
+            EXPECT_NEAR(l1_norm(grad), c.corrected_l1, 1e-4 * c.corrected_l1);
+            EXPECT_EQ(grad_raw.is_valid(), c.decoupled);
+            if (c.decoupled)
+                EXPECT_NEAR(l1_norm(grad_raw), c.raw_l1, 1e-4 * c.raw_l1);
+        }
+    }
+
+    // Catches a blur-tolerant SSIM that allocates per step or leaks into the plain paths' arena: Metal keeps it in
+    // its own arena, sized by its layout, reused at the same shape and kept when a plain evaluate runs in between
+    // (photo sets that straddle the 1,200-pixel rule); shrink and reset cover it.
+    TEST_P(PortableLosses, BlurTolerantSsimWorkspaceFollowsItsArena) {
+        if (GetParam() != GpuBackend::Metal)
+            GTEST_SKIP() << "Metal's workspace layout";
+        const auto align = [](const size_t bytes) { return (bytes + 255) & ~size_t{255}; };
+        const auto layout = [&](const std::vector<size_t>& fields) {
+            size_t total = 0;
+            for (const size_t bytes : fields)
+                total = align(total) + bytes;
+            return align(total);
+        };
+        // SSIM map, sharp partials (half4), the blurred partials' region that the two float gradients reuse,
+        // v u (half2), partial sums, loss and mask sum.
+        const auto blur_bytes = [&](const Shape4& s) {
+            return layout({s.n * s.plane() * 4, s.numel() * 8, align(s.numel() * 4) + s.numel() * 4, s.numel() * 4, 8192, 4, 4});
+        };
+        const auto masked_decoupled_bytes = [&](const Shape4& s) {
+            return layout({s.n * s.plane() * 4, s.numel() * 2, s.numel() * 2, s.numel() * 2, s.numel() * 2,
+                           s.numel() * 4, 8192, 4, 4});
+        };
+        ops::PhotoSaved saved{.backend = table_->photometric->create()};
+        const auto run = [&](const Shape4& s, const float sigma) {
+            const PhotoInputs in = photo_inputs({ops::PhotoPath::MaskedDecoupled, s}, 3);
+            Tensor loss, grad, grad_raw;
+            table_->photometric->evaluate(saved, in.x, in.raw, in.y, in.mask,
+                                          {.path = ops::PhotoPath::MaskedDecoupled, .ssim_weight = 0.2f, .valid_padding = true, .blur_sigma = sigma},
+                                          loss, grad, grad_raw);
+            download(loss);
+        };
+        const Shape4 big{1, 3, 33, 41}, small{1, 3, 16, 20};
+        run(big, 1.5f);
+        auto bytes = table_->photometric->workspace_bytes(saved);
+        EXPECT_EQ(bytes.required, blur_bytes(big));
+        EXPECT_EQ(bytes.allocated, blur_bytes(big));
+        run(big, 0.8f);
+        EXPECT_EQ(table_->photometric->workspace_bytes(saved).allocated, blur_bytes(big)) << "same shape";
+        run(big, 0.f);
+        bytes = table_->photometric->workspace_bytes(saved);
+        EXPECT_EQ(bytes.required, blur_bytes(big) + masked_decoupled_bytes(big));
+        EXPECT_EQ(bytes.allocated, blur_bytes(big) + masked_decoupled_bytes(big)) << "both arenas kept";
+        run(small, 1.5f);
+        bytes = table_->photometric->workspace_bytes(saved);
+        EXPECT_EQ(bytes.required, blur_bytes(small) + masked_decoupled_bytes(big));
+        EXPECT_EQ(bytes.allocated, blur_bytes(big) + masked_decoupled_bytes(big)) << "a smaller shape keeps the high-water";
+        table_->photometric->shrink_to_required(saved);
+        EXPECT_EQ(table_->photometric->workspace_bytes(saved).allocated, blur_bytes(small) + masked_decoupled_bytes(big));
+        table_->photometric->reset(saved);
+        bytes = table_->photometric->workspace_bytes(saved);
+        EXPECT_EQ(bytes.required, 0u);
+        EXPECT_EQ(bytes.allocated, 0u);
     }
 
     // The thin-structure denominator is read back once per camera and kept while what its weight was made from
