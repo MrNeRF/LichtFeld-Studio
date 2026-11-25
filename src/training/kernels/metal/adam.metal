@@ -160,11 +160,11 @@ constant constexpr uint kShValueQ16 = 2u;
 static float4 adam_sh_load_slot(constant AdamShParams& p, const uint prim, const uint k, const uint slot,
                                 const float2 vmm) {
     if (p.value_mode == kShValueQ16) {
-        device const ushort* codes = static_cast<device const ushort*>(p.parameter);
+        device const ushort* codes = sh_q16_cells(static_cast<device const ushort*>(p.parameter), prim, p.value_cells);
         float4 value = float4(0.0f);
         for (uint c = 0; c < 4u; ++c) {
             if (k * 4u + c < p.value_cells)
-                value[c] = sh_q16_decode(codes[sh_q16_index(prim, k * 4u + c, p.value_cells)], vmm.x, vmm.y);
+                value[c] = sh_q16_decode(codes[(k * 4u + c) * kShReorder], vmm.x, vmm.y);
         }
         return value;
     }
@@ -250,7 +250,7 @@ kernel void adam_step_sh(constant AdamShParams& p [[buffer(0)]], uint group [[th
         return;
     const float inv_u = 1.0f / fmax(new_mm.y - new_mm.x, kJointEps);
     const float inv_s = 1.0f / fmax(new_mm.w - new_mm.z, kJointEps);
-    device ushort* codes = static_cast<device ushort*>(p.parameter);
+    device ushort* codes = sh_q16_cells(static_cast<device ushort*>(p.parameter), prim, p.value_cells);
     for (uint k = 0; k < slots; ++k) {
         const uint slot = sh_slot_index(prim, k, p.layout_slots);
         const bool active = k < p.active_slots;
@@ -262,7 +262,7 @@ kernel void adam_step_sh(constant AdamShParams& p [[buffer(0)]], uint group [[th
             const float2 us = adam_sh_moment(p, grad[c], cell, old_mm, apply_step, active, row_step, cell_value);
             C::encode_us(p.packed, cell, us.x, us.y, new_mm.x, new_mm.z, inv_u, inv_s);
             if (q16 && k * 4u + c < p.value_cells)
-                codes[sh_q16_index(prim, k * 4u + c, p.value_cells)] = sh_q16_encode(cell_value, new_vmm.x, new_vmm.y);
+                codes[(k * 4u + c) * kShReorder] = sh_q16_encode(cell_value, new_vmm.x, new_vmm.y);
         }
     }
 }

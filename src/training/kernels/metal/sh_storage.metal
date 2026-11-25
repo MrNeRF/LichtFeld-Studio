@@ -32,6 +32,16 @@ static ulong sh_q16_index(const uint primitive, const uint cell, const uint cell
     return ulong(primitive / kShReorder) * ulong(cells * kShReorder) + cell * kShReorder + primitive % kShReorder;
 }
 
+// A primitive's Q16 cells: cell c is at c * kShReorder from the pointer returned. Only the start needs 64 bits;
+// offsets within a primitive stay below 45 * 32, so hot loops index from it in 32 bits.
+static device const ushort* sh_q16_cells(device const ushort* codes, const uint primitive, const uint cells) {
+    return codes + (ulong(primitive / kShReorder) * ulong(cells * kShReorder) + primitive % kShReorder);
+}
+
+static device ushort* sh_q16_cells(device ushort* codes, const uint primitive, const uint cells) {
+    return codes + (ulong(primitive / kShReorder) * ulong(cells * kShReorder) + primitive % kShReorder);
+}
+
 static float sh_q16_decode(const ushort q, const float lo, const float hi) {
     // nvcc contracts the CUDA codec's sum into an fma.
     return fma(hi - lo, float(q) * (1.0f / 65535.0f), lo);

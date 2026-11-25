@@ -523,12 +523,12 @@ static float2 fast_slot_codes(const uint2 packed, const uint c) {
 static float4 fast_shN_load(constant FastAdamGroup& g, const bool q16, const bool f16, const uint p, const uint k,
                             const uint slot, const uint cells, const float2 vmm) {
     if (q16) {
-        device const ushort* codes = reinterpret_cast<device const ushort*>(g.param);
+        device const ushort* codes = sh_q16_cells(reinterpret_cast<device const ushort*>(g.param), p, cells);
         float4 v = float4(0.0f);
         for (uint c = 0; c < 4u; ++c) {
             const uint cell = k * 4u + c;
             if (cell < cells)
-                v[c] = sh_q16_decode(codes[sh_q16_index(p, cell, cells)], vmm.x, vmm.y);
+                v[c] = sh_q16_decode(codes[cell * kShReorder], vmm.x, vmm.y);
         }
         return v;
     }
@@ -662,6 +662,7 @@ static void fast_adam_shN(constant FastAdamGroup& g, const uint p, const uint pa
     if (!touch)
         return;
     const float2 inv = fast_inverse_ranges(mm);
+    device ushort* q16_codes = sh_q16_cells(reinterpret_cast<device ushort*>(g.param), p, cells);
 #pragma unroll
     for (uint j = 0; j < kFastShSlotsPerThread; ++j) {
         const uint k = part * kFastShSlotsPerThread + j;
@@ -677,8 +678,7 @@ static void fast_adam_shN(constant FastAdamGroup& g, const uint p, const uint pa
             else
                 encoded.y |= cell_bits;
             if (q16 && k * 4u + c < cells)
-                reinterpret_cast<device ushort*>(g.param)[sh_q16_index(p, k * 4u + c, cells)] =
-                    sh_q16_encode(updated[j][c], vmm.x, vmm.y);
+                q16_codes[(k * 4u + c) * kShReorder] = sh_q16_encode(updated[j][c], vmm.x, vmm.y);
         }
         reinterpret_cast<device uint2*>(g.packed)[slot] = encoded;
     }

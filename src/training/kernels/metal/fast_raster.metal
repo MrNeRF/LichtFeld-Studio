@@ -118,20 +118,22 @@ static float3 fast_sh_rest(device const uchar* shN, device const float2* bounds,
         const uint base = coeff * 3u;
         if (base + 2u >= q16_cells)
             return float3(0.0f);
-        device const ushort* codes = reinterpret_cast<device const ushort*>(shN);
+        device const ushort* codes = sh_q16_cells(reinterpret_cast<device const ushort*>(shN), p, q16_cells);
         const float2 mm = bounds[p / 256u];
-        return float3(sh_q16_decode(codes[sh_q16_index(p, base, q16_cells)], mm.x, mm.y),
-                      sh_q16_decode(codes[sh_q16_index(p, base + 1u, q16_cells)], mm.x, mm.y),
-                      sh_q16_decode(codes[sh_q16_index(p, base + 2u, q16_cells)], mm.x, mm.y));
+        return float3(sh_q16_decode(codes[base * kShReorder], mm.x, mm.y),
+                      sh_q16_decode(codes[(base + 1u) * kShReorder], mm.x, mm.y),
+                      sh_q16_decode(codes[(base + 2u) * kShReorder], mm.x, mm.y));
     }
     if (layout_rest == 0u)
         return float3(0.0f);
+    // The primitive's slot 0 in floats, all in 64 bits; slot k, component j is at k * kShReorder * 4 + j from there.
+    const ulong row = (ulong(p / kShReorder) * ulong(sh_float4_slots(layout_rest) * kShReorder) + p % kShReorder) * 4u;
     float3 result;
     for (uint c = 0; c < 3u; ++c) {
         const uint linear = coeff * 3u + c;
-        const ulong index = ulong(sh_swizzled_index(p, linear / 4u, layout_rest)) * 4u + linear % 4u;
-        result[c] = storage == kFastShFloat16 ? float(reinterpret_cast<device const half*>(shN)[index])
-                                              : reinterpret_cast<device const float*>(shN)[index];
+        const uint offset = (linear / 4u) * (kShReorder * 4u) + linear % 4u;
+        result[c] = storage == kFastShFloat16 ? float((reinterpret_cast<device const half*>(shN) + row)[offset])
+                                              : (reinterpret_cast<device const float*>(shN) + row)[offset];
     }
     return result;
 }
