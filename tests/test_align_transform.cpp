@@ -125,6 +125,37 @@ namespace lfs::vis {
         check(false);
         rm->setWakeCallback({});
     }
+    TEST_F(AlignDepthIntegrationTest, ModelModalTicksWithoutGroundToolEnabled) {
+        ViewerOptions options;
+        options.show_startup_overlay = false;
+        options.project_lifecycle_settings_path = temporary_.path / "lifecycle.json";
+        VisualizerImpl viewer(options);
+        initialize(viewer);
+        auto* manager = viewer.getSceneManager();
+        auto* renderer = viewer.getRenderingManager();
+        auto& scene = manager->getScene();
+        scene.addSplat("reference", lfs::test::licht::make_splat(1));
+        scene.addSplat("moving", lfs::test::licht::make_splat(1));
+        scene.setNodeLocked("reference", true); // Only the moving model must be editable.
+        manager->selectNodes({"moving", "reference"});
+        op::OperatorProperties props;
+        props.set("reference", std::string("reference"));
+        props.set("moving", std::string("moving"));
+        EXPECT_EQ(op::operators().invoke(op::BuiltinOp::ModelAlignment, &props).status, op::OperatorResult::RUNNING_MODAL);
+        ASSERT_TRUE(op::operators().isModal(op::BuiltinOp::ModelAlignment));
+        ASSERT_NE(op::ModelAlignmentOperator::active(), nullptr);
+        EXPECT_EQ(op::ModelAlignmentOperator::active()->session()->nodes[0], scene.getNode("reference")->uuid);
+        ToolContext context(renderer, manager, &viewer.getViewport(), nullptr);
+        ToolBase* tool = viewer.getAlignTool();
+        ASSERT_NE(tool, nullptr);
+        ASSERT_FALSE(tool->isEnabled());
+        scene.setNodeVisibility("moving", false);
+        tool->update(context);
+        EXPECT_FALSE(op::operators().isModal(op::BuiltinOp::ModelAlignment));
+        EXPECT_EQ(op::ModelAlignmentOperator::active(), nullptr);
+        EXPECT_FALSE(renderer->independentPanelOverrides());
+    }
+
 } // namespace lfs::vis
 
 namespace {
@@ -1260,7 +1291,7 @@ namespace lfs::vis::op {
         active->pointState().requestUiAction(PointPickState::UiAction::Clear);
         EXPECT_EQ(operators().dispatchModalEvent({}), OperatorResult::RUNNING_MODAL);
         EXPECT_TRUE(active->pointState().getPickedPoints().empty());
-        EXPECT_TRUE(active->pointState().canUndoPointEdit());
+        EXPECT_TRUE(active->canUndoPointEdit());
         EXPECT_EQ(undo(), OperatorResult::RUNNING_MODAL);
         EXPECT_EQ(active->pointState().getPickedPoints(), points);
         active->pointState().requestUiAction(PointPickState::UiAction::TogglePreview);
@@ -1280,6 +1311,7 @@ namespace lfs::vis::op {
         ASSERT_TRUE(undoHistory().undo().success);
         EXPECT_TRUE(operators().poll(BuiltinOp::Redo));
         EXPECT_EQ(manager_->getNodeTransform("target"), original);
+
     }
 
 

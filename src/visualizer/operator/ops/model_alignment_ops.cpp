@@ -1,4 +1,4 @@
-/* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
@@ -67,9 +67,12 @@ namespace lfs::vis::op {
             if (!reference || !mobile || !begin(gui->getViewer()->getViewport(), scene, *reference, *mobile))
                 return OperatorResult::CANCELLED;
         }
+        edits_.clear();
+        feedback_ = {};
         return PointPickOperator::invoke(ctx, props);
     }
     void ModelAlignmentOperator::cancel(OperatorContext& ctx) {
+        edits_.clear();
         PointPickOperator::cancel(ctx);
         end();
     }
@@ -157,6 +160,21 @@ namespace lfs::vis::op {
         };
     }
 
+    void ModelAlignmentOperator::pointsWillChange() {
+        edits_.push_back({picked_points_, selected_point_, pick_panel_, pair_edit_});
+    }
+    void ModelAlignmentOperator::undoPointEdit() {
+        if (edits_.empty())
+            return;
+        auto edit = std::move(edits_.back());
+        edits_.pop_back();
+        clearAllPoints();
+        picked_points_ = std::move(edit.points);
+        selected_point_ = edit.selected;
+        pick_panel_ = edit.panel;
+        pair_edit_ = std::move(edit.pair);
+        syncPickedPointsToServices();
+    }
     void ModelAlignmentOperator::appendPickedPoint(const PointSample& sample) {
         const bool completes_right_first = pair_edit_.pending_right;
         if (picked_points_.size() % 2 == 0) {
@@ -172,7 +190,7 @@ namespace lfs::vis::op {
         }
         pair_edit_.pending_right = picked_points_.size() % 2 != 0 && sample.panel == SplitViewPanelId::Right;
     }
-    std::pair<size_t, size_t> ModelAlignmentOperator::pointRemovalRange(size_t index, bool selected) {
+    void ModelAlignmentOperator::erasePickedPoint(size_t index, bool selected) {
         const size_t first = selected ? index - index % 2 : index;
         if (selected || index % 2 == 0) {
             const auto pair = first / 2;
@@ -181,7 +199,8 @@ namespace lfs::vis::op {
         }
         if (!selected || first + 1 == picked_points_.size())
             pair_edit_.pending_right = false;
-        return {first, std::min(picked_points_.size(), first + (selected ? 2u : 1u))};
+        const auto last = std::min(picked_points_.size(), first + (selected ? 2u : 1u));
+        picked_points_.erase(picked_points_.begin() + first, picked_points_.begin() + last);
     }
     std::optional<OperatorResult> ModelAlignmentOperator::prepareModal(OperatorContext& ctx) {
         auto* renderer = services().renderingOrNull();
@@ -197,6 +216,7 @@ namespace lfs::vis::op {
         if (world != session_->world) {
             const bool had_points = !picked_points_.empty();
             restorePreview(ctx);
+            edits_.clear();
             clearAllPoints();
             (void)point_state_.takeUiAction();
             session_->world = world;
@@ -324,13 +344,12 @@ namespace lfs::vis::op {
             .previous_secondary = renderer->projectSecondaryViewport(),
         });
         active_ = this;
-        renderer->restoreSplitViewMode(SplitViewMode::IndependentDual, primary);
+        renderer->restoreSplitViewMode(SplitViewMode::IndependentDual, primary,
+                                       splitViewUsesIndependentPanels(settings.split_view_mode) ? std::nullopt : std::optional{0.5f});
         auto& secondary = renderer->projectSecondaryViewport();
         primary.ortho_scale_override = primary.ortho_scale_override.value_or(settings.ortho_scale);
         secondary.ortho_scale_override = secondary.ortho_scale_override.value_or(settings.ortho_scale);
         renderer->setFocusedSplitPanel(SplitViewPanelId::Left);
-        if (!splitViewUsesIndependentPanels(settings.split_view_mode))
-            renderer->restoreSplitViewMode(SplitViewMode::IndependentDual, primary, 0.5f);
         publishView();
         return true;
     }
@@ -360,10 +379,13 @@ namespace lfs::vis::op {
         auto* renderer = services().renderingOrNull();
         if (!renderer || !session_)
             return;
-        std::array<RenderingManager::IndependentPanelOverride, 2> panels;
-        for (size_t i = 0; i < panels.size(); ++i) {
-            auto& panel = panels[i];
-            panel.exact_surface_picking = !session_->preview;
+        RenderingManager::IndependentSplitOverrides overrides{
+            .exact_surface_picking = !session_->preview,
+            .render_meshes = false,
+            .apply_scene_effects = false,
+        };
+        for (size_t i = 0; i < overrides.panels.size(); ++i) {
+            auto& panel = overrides.panels[i];
             if (session_->composite && splitViewPanelIndex(*session_->composite) == i)
                 panel.visible_nodes = {session_->nodes[0], session_->nodes[1]};
             else
@@ -371,7 +393,7 @@ namespace lfs::vis::op {
             if (session_->preview)
                 panel.transforms.emplace_back(session_->nodes[1], *session_->preview);
         }
-        renderer->setIndependentPanelOverrides(std::move(panels));
+        renderer->setIndependentPanelOverrides(std::move(overrides));
         publish_align_state_generation();
     }
     void ModelAlignmentOperator::setPreview(std::optional<glm::mat4> transform) {
@@ -421,13 +443,16 @@ namespace lfs::vis::op {
         ModelAlignmentState result;
         if (!session_)
             return result;
+        result.active = true;
+        result.preview = session_->preview.has_value();
+        result.can_apply = hasEnoughAlignmentPairs(picked_points_.size());
         result.linked = session_->linked;
-        result.display_mode = !session_->composite ? "separate" : *session_->composite == SplitViewPanelId::Left ? "overlay_left"
-                                                                                                                 : "overlay_right";
+        result.display_mode = !session_->composite ? ModelAlignmentDisplayMode::Separate : *session_->composite == SplitViewPanelId::Left ? ModelAlignmentDisplayMode::OverlayLeft
+                                                                                                                                          : ModelAlignmentDisplayMode::OverlayRight;
         const auto* manager = services().sceneOrNull();
         result.can_swap_roles = manager && canSwapRoles(manager->getScene());
         result.can_delete_pair = !session_->preview && point_state_.getSelectedPoint().has_value();
-        result.can_undo = session_->preview.has_value() || point_state_.canUndoPointEdit();
+        result.can_undo = session_->preview.has_value() || canUndoPointEdit();
         return result;
     }
     void ModelAlignmentOperator::swapRoles(const core::Scene& scene) {

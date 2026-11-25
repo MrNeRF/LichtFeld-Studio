@@ -422,11 +422,12 @@ class _GizmoToolbarController:
         crop_object_buttons = self._build_crop_object_records(active_tool_id) if crop_tool_active else []
         crop_transform_buttons = self._build_crop_transform_records(active_tool_id) if crop_tool_active else []
         crop_action_buttons = self._build_crop_action_records(active_tool_id) if crop_tool_active else []
-        model_alignment = getattr(lf.ui, "get_split_view_mode", lambda: "")() == "model_alignment"
+        alignment = lf.ui.get_model_alignment_state()
+        model_alignment = alignment.active
         align_tool_active = model_alignment or active_tool_id == self._ALIGN_TOOL_ID
-        align_action_buttons = self._build_align_action_records(
-            self._ALIGN_TOOL_ID if model_alignment else active_tool_id
-        ) if align_tool_active else []
+        align_action_buttons = self._build_model_alignment_records(alignment) if model_alignment else (
+            self._build_align_action_records(active_tool_id) if align_tool_active else []
+        )
         scale_distance_tool_active = active_tool_id == self._SCALE_DISTANCE_TOOL_ID
         selection_volume_gizmo_buttons = self._build_selection_volume_gizmo_records(active_tool_id)
         multi_transform_selection = active_tool_id in self._TRANSFORM_TOOL_IDS and len(selected_nodes) > 1
@@ -794,6 +795,58 @@ class _GizmoToolbarController:
             )
         ]
 
+    def _build_model_alignment_records(self, alignment):
+        import lichtfeld as lf
+
+        linked = alignment.linked
+        can_swap = alignment.can_swap_roles
+        can_delete = alignment.can_delete_pair
+        preview = alignment.preview
+        cancel = ("cancel", "align.cancel_session", "Cancel", "scene/x", "", False, True)
+        if preview:
+            exit_preview = _ui_label("align.edit_points", "Exit preview")
+            records = [
+                _button_record("align-preview", "model_alignment_preview", "", _icon_src("scene/hidden"),
+                               tooltip_key="align.edit_points", tooltip_text=exit_preview,
+                               selected=True, enabled=True),
+                _button_record("align-apply", "model_alignment_apply", "", _icon_src("check"),
+                               tooltip_key="align.apply_preview", tooltip_text="Apply alignment and exit.",
+                               enabled=True),
+            ]
+            link_tooltip = "align.unlink_cameras" if linked else "align.link_cameras_help"
+            controls = (
+                ("separate", "align.separate", "Separate", "layout-columns", "",
+                 alignment.display_mode == lf.ui.ModelAlignmentDisplayMode.SEPARATE, True),
+                ("left", "align.composite_left", "Overlay left", "alignment-overlay-left", "",
+                 alignment.display_mode == lf.ui.ModelAlignmentDisplayMode.OVERLAY_LEFT, True),
+                ("right", "align.composite_right", "Overlay right", "alignment-overlay-right", "",
+                 alignment.display_mode == lf.ui.ModelAlignmentDisplayMode.OVERLAY_RIGHT, True),
+                ("link", link_tooltip, "Link cameras", "link", "",
+                 linked, True),
+                cancel,
+            )
+        else:
+            records = [
+                _button_record("align-preview", "model_alignment_preview", "", _icon_src("scene/visible"),
+                               tooltip_key="align.preview", tooltip_text="Preview alignment",
+                               enabled=alignment.can_apply),
+                _button_record("align-clear", "model_alignment_clear", "", _icon_src("reset"),
+                               tooltip_key="align.clear", tooltip_text="Clear", enabled=True),
+            ]
+            controls = (
+                ("swap", "align.swap_roles" if can_swap else "align.swap_unavailable", "Swap roles", "",
+                 "⇄", False, can_swap),
+                ("delete", "align.delete_pair", "Delete selected pair", "scene/trash", "", False, can_delete),
+                cancel,
+            )
+        return records + [
+            _button_record(f"model-alignment-{action}", "model_alignment_control", action,
+                           _icon_src(icon) if icon else "", tooltip_key=key, tooltip_text=fallback,
+                           label=label, selected=selected, enabled=enabled,
+                           separator_before=preview and action in ("separate", "link", "cancel"))
+            for action, key, fallback, icon, label, selected, enabled in controls
+        ]
+
     def _build_align_action_records(self, active_tool_id):
         import lichtfeld as lf
 
@@ -825,51 +878,7 @@ class _GizmoToolbarController:
                 enabled=active,
             ),
         ]
-        split_mode = lf.ui.get_split_view_mode()
-        if split_mode == "model_alignment":
-            alignment = lf.ui.get_model_alignment_state()
-            linked = alignment.linked
-            can_swap = alignment.can_swap_roles
-            can_delete = alignment.can_delete_pair
-            preview = lf.ui.get_align_preview()
-            cancel = ("cancel", "align.cancel_session", "Cancel", "scene/x", "", False, True)
-            if preview:
-                exit_preview = _ui_label("align.edit_points", "Exit preview")
-                records[0].update(
-                    tooltip_key="align.edit_points", tooltip_text=exit_preview, label="",
-                    selected=True, enabled=True, opacity="1", icon_src=_icon_src("scene/hidden"),
-                )
-                records = records[:2]
-                records[1].update(tooltip_key="align.apply_preview",
-                                  tooltip_text=_ui_label("align.apply_preview", "Apply alignment and exit."))
-                link_tooltip = "align.unlink_cameras" if linked else "align.link_cameras_help"
-                controls = (
-                    ("separate", "align.separate", "Separate", "layout-columns", "",
-                     alignment.display_mode == "separate", True),
-                    ("left", "align.composite_left", "Overlay left", "alignment-overlay-left", "",
-                     alignment.display_mode == "overlay_left", True),
-                    ("right", "align.composite_right", "Overlay right", "alignment-overlay-right", "",
-                     alignment.display_mode == "overlay_right", True),
-                    ("link", link_tooltip, "Link cameras", "link", "",
-                     linked, True),
-                    cancel,
-                )
-            else:
-                del records[1]
-                records[0]["label"] = ""
-                controls = (
-                    ("swap", "align.swap_roles" if can_swap else "align.swap_unavailable", "Swap roles", "",
-                     "⇄", False, can_swap),
-                    ("delete", "align.delete_pair", "Delete selected pair", "scene/trash", "", False, can_delete),
-                    cancel,
-                )
-            return records + [
-                _button_record(f"model-alignment-{action}", "model_alignment_control", action,
-                               _icon_src(icon) if icon else "", tooltip_key=key, tooltip_text=fallback,
-                               label=label, selected=selected, enabled=enabled,
-                               separator_before=preview and action in ("separate", "link", "cancel"))
-                for action, key, fallback, icon, label, selected, enabled in controls
-            ]
+
         return records + [
             _button_record(
                 "align-snap",
@@ -1229,6 +1238,16 @@ class _GizmoToolbarController:
                 apply_crop_tool()
             return
 
+        if action == "model_alignment_preview":
+            lf.ui.toggle_model_alignment_preview()
+            return
+        if action == "model_alignment_apply":
+            lf.ui.apply_model_alignment()
+            return
+        if action == "model_alignment_clear":
+            lf.ui.clear_model_alignment_points()
+            return
+
         if action == "model_alignment_control":
             if value == "swap":
                 lf.ui.swap_model_alignment_roles()
@@ -1239,7 +1258,9 @@ class _GizmoToolbarController:
             elif value == "link":
                 lf.ui.set_model_alignment_camera_link(not lf.ui.get_model_alignment_state().linked)
             else:
-                lf.ui.set_model_alignment_display({"separate": "separate", "left": "overlay_left", "right": "overlay_right"}[value])
+                mode = lf.ui.ModelAlignmentDisplayMode
+                lf.ui.set_model_alignment_display({"separate": mode.SEPARATE, "left": mode.OVERLAY_LEFT,
+                                                   "right": mode.OVERLAY_RIGHT}[value])
             return
 
         if action == "align_toggle_preview":
@@ -2204,16 +2225,16 @@ class _ViewportToolbarController:
             )
         )
         split_mode = call("", getattr(lf.ui, "get_split_view_mode", None))
-        if active_tool == "builtin.align" or split_mode == "model_alignment":
+        alignment = lf.ui.get_model_alignment_state()
+        if active_tool == "builtin.align" or alignment.active:
             align_split_mode = split_mode
-            if split_mode == "model_alignment":
-                alignment = lf.ui.get_model_alignment_state()
+            if alignment.active:
                 align_split_mode = (split_mode, alignment.linked, alignment.display_mode,
                                     alignment.can_swap_roles, alignment.can_delete_pair, alignment.can_undo)
-            align_can_apply = bool(call(False, getattr(lf.ui, "can_apply_align", None)))
+            align_can_apply = alignment.can_apply if alignment.active else bool(call(False, getattr(lf.ui, "can_apply_align", None)))
             align_axis_snap = bool(call(True, getattr(lf.ui, "get_align_axis_snap", None)))
             align_edge_to_axis = lf.ui.get_align_edge_to_axis()
-            align_preview = lf.ui.get_align_preview()
+            align_preview = alignment.preview if alignment.active else lf.ui.get_align_preview()
         else:
             align_split_mode = None
             align_can_apply = False
@@ -2347,6 +2368,9 @@ class _ViewportToolbarController:
             "crop_delete",
             "crop_toggle_enabled",
             "model_alignment_control",
+            "model_alignment_preview",
+            "model_alignment_apply",
+            "model_alignment_clear",
             "align_toggle_preview",
             "align_apply",
             "align_clear",

@@ -4,14 +4,19 @@
 #pragma once
 #include "point_pick_operator.hpp"
 #include "rendering/rendering_types.hpp"
-#include <any>
 #include <array>
 #include <span>
 
 namespace lfs::vis::op {
+    enum class ModelAlignmentDisplayMode { Separate,
+                                           OverlayLeft,
+                                           OverlayRight };
     struct ModelAlignmentState {
+        bool active = false;
+        bool preview = false;
+        bool can_apply = false;
         bool linked = false;
-        std::string display_mode = "separate";
+        ModelAlignmentDisplayMode display_mode = ModelAlignmentDisplayMode::Separate;
         bool can_swap_roles = false;
         bool can_delete_pair = false;
         bool can_undo = false;
@@ -47,6 +52,7 @@ namespace lfs::vis::op {
         const Session* session() const { return session_ ? &*session_ : nullptr; }
         PointPickState& pointState() { return point_state_; }
         const PointPickState& pointState() const { return point_state_; }
+        bool canUndoPointEdit() const { return !edits_.empty(); }
         bool pendingPairOnRight() const { return pair_edit_.pending_right; }
         struct PreviewFeedback {
             std::optional<int> focus;
@@ -75,12 +81,19 @@ namespace lfs::vis::op {
             bool pending_right = false;
             std::vector<size_t> colors;
         } pair_edit_;
+        struct PointEdit {
+            std::vector<glm::vec3> points;
+            std::optional<int> selected;
+            std::optional<SplitViewPanelId> panel;
+            PairEdit pair;
+        };
+        std::vector<PointEdit> edits_;
         bool supportsPointEditing() const override { return true; }
-        std::any capturePointEditState() const override { return pair_edit_; }
-        void restorePointEditState(const std::any& state) override { pair_edit_ = std::any_cast<PairEdit>(state); }
+        void pointsWillChange() override;
+        void undoPointEdit();
         void pointsCleared() override { pair_edit_ = {}; }
         void appendPickedPoint(const PointSample&) override;
-        std::pair<size_t, size_t> pointRemovalRange(size_t, bool) override;
+        void erasePickedPoint(size_t, bool) override;
         void showPointMenu(glm::dvec2, int) override;
         bool acceptsPointSample(const PointSample&, std::optional<int>) const override;
         bool applyPickedPoints(OperatorContext&, float) override;

@@ -10,7 +10,6 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "theme/theme.hpp"
 #include <algorithm>
-#include <array>
 
 namespace lfs::vis::tools {
 
@@ -193,61 +192,31 @@ namespace lfs::vis::tools {
         return {mouse_pos, panel_proj_opt ? *panel_proj_opt : panel_proj_fallback, panel_proj_opt.has_value(), over_gui};
     }
 
-    void drawPointMarkers(lfs::rendering::ScreenOverlayRenderer& overlay, const PanelProjection& panel_proj,
-                          const std::vector<glm::vec3>& picked_points, std::optional<int> selected_point,
-                          const lfs::rendering::OverlayColor& color, float label_size,
-                          std::optional<SplitViewPanelId> pair_panel, bool pending_pair_on_right,
-                          std::span<const size_t> pair_color_slots) {
-        using lfs::rendering::OverlayColor;
-        static constexpr std::array pair_colors{
-            OverlayColor{0.30f, 0.79f, 1.00f, 1.0f}, // cyan
-            OverlayColor{1.00f, 0.71f, 0.24f, 1.0f}, // amber
-            OverlayColor{0.82f, 0.58f, 1.00f, 1.0f}, // violet
-            OverlayColor{0.51f, 0.88f, 0.39f, 1.0f}, // lime
-            OverlayColor{1.00f, 0.46f, 0.62f, 1.0f}, // rose
-            OverlayColor{0.20f, 0.86f, 0.69f, 1.0f}, // mint
-            OverlayColor{1.00f, 0.91f, 0.37f, 1.0f}, // yellow
-            OverlayColor{0.52f, 0.65f, 1.00f, 1.0f}, // blue
-            OverlayColor{1.00f, 0.53f, 0.30f, 1.0f}, // orange
-            OverlayColor{0.96f, 0.57f, 0.94f, 1.0f}, // magenta
-        };
+    void drawPointMarker(lfs::rendering::ScreenOverlayRenderer& overlay, const PanelProjection& panel_proj,
+                         const glm::vec3& world, bool selected, const lfs::rendering::OverlayColor& color,
+                         float label_size, std::string_view label, bool translucent) {
         const auto& t = theme();
-        const bool paired = pair_panel.has_value();
-        for (size_t i = 0; i < picked_points.size(); ++i) {
-            const bool pending_right = pending_pair_on_right && i + 1 == picked_points.size();
-            if (pair_panel && splitViewPanelIndex(*pair_panel) != (pending_right ? 1u : i % 2))
-                continue;
-            const glm::vec2 screen_pos = projectToScreen(panel_proj, picked_points[i]);
-            const float screen_radius = markerScreenRadius(picked_points[i], panel_proj);
-
-            const bool is_selected = selected_point &&
-                                     (paired ? *selected_point / 2 == static_cast<int>(i / 2)
-                                             : *selected_point == static_cast<int>(i));
-            const auto pair_index = i / 2;
-            const bool has_pair_color = pair_index < pair_color_slots.size();
-            const auto marker_color = has_pair_color
-                                          ? pair_colors[pair_color_slots[pair_index] % pair_colors.size()]
-                                          : color;
-            auto fill = marker_color;
-            if (pair_panel)
-                fill.a *= 0.22f;
-            overlay.addCircleFilled(screen_pos, screen_radius, fill, 32);
-            if (pair_panel) {
-                overlay.addCircleFilled(screen_pos, 2.0f, toOverlay(t.overlay.text), 12);
-            }
-            const auto outline = has_pair_color
-                                     ? marker_color
-                                     : (is_selected ? toOverlay(t.palette.primary) : toOverlay(t.overlay.text));
-            if (pair_panel)
-                overlay.addCircle(screen_pos, screen_radius, toOverlay(t.overlay.background, 0.85f),
-                                  32, is_selected ? 5.0f : 3.5f);
-            overlay.addCircle(screen_pos, screen_radius, outline, 32, is_selected ? 2.5f : 1.5f);
-
-            const auto label = std::to_string((paired ? i / 2 : i) + 1);
-            const glm::vec2 label_pos = pair_panel ? screen_pos + glm::vec2(screen_radius + 4.0f, -6.0f)
-                                                   : screen_pos - glm::vec2(4.0f, 6.0f);
-            overlay.addText(label_pos, label, toOverlay(t.overlay.text), label_size);
+        const auto screen_pos = projectToScreen(panel_proj, world);
+        const float radius = markerScreenRadius(world, panel_proj);
+        auto fill = color;
+        if (translucent) fill.a *= 0.22f;
+        overlay.addCircleFilled(screen_pos, radius, fill, 32);
+        if (translucent) {
+            overlay.addCircleFilled(screen_pos, 2.0f, toOverlay(t.overlay.text), 12);
+            overlay.addCircle(screen_pos, radius, toOverlay(t.overlay.background, 0.85f), 32, selected ? 5.0f : 3.5f);
         }
+        const auto outline = translucent ? color : (selected ? toOverlay(t.palette.primary) : toOverlay(t.overlay.text));
+        overlay.addCircle(screen_pos, radius, outline, 32, selected ? 2.5f : 1.5f);
+        const auto label_pos = translucent ? screen_pos + glm::vec2(radius + 4.0f, -6.0f) : screen_pos - glm::vec2(4.0f, 6.0f);
+        overlay.addText(label_pos, label, toOverlay(t.overlay.text), label_size);
+    }
+
+    void drawPointMarkers(lfs::rendering::ScreenOverlayRenderer& overlay, const PanelProjection& panel_proj,
+                          const std::vector<glm::vec3>& points, std::optional<int> selected,
+                          const lfs::rendering::OverlayColor& color, float label_size) {
+        for (size_t i = 0; i < points.size(); ++i)
+            drawPointMarker(overlay, panel_proj, points[i], selected == static_cast<int>(i), color,
+                            label_size, std::to_string(i + 1), false);
     }
 
     void drawPointPickHud(lfs::rendering::ScreenOverlayRenderer& overlay, const PanelProjection& panel_proj,

@@ -178,7 +178,7 @@ namespace lfs::vis {
                 (((modal_id == op::to_string(op::BuiltinOp::AlignPickPoint) || modal_id == op::to_string(op::BuiltinOp::ModelAlignment)) ||
                   modal_id == op::to_string(op::BuiltinOp::ScaleDistancePickPoint)) &&
                  isAlignModalAction(action)) ||
-                ((modal_id == op::to_string(op::BuiltinOp::AlignPickPoint) || modal_id == op::to_string(op::BuiltinOp::ModelAlignment)) &&
+                (modal_id == op::to_string(op::BuiltinOp::ModelAlignment) &&
                  (action == input::Action::UNDO || action == input::Action::REDO)) ||
                 (modal_id == op::to_string(op::BuiltinOp::ModelAlignment) &&
                  (action == input::Action::DELETE_NODE || action == input::Action::PIE_MENU ||

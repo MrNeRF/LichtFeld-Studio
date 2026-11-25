@@ -15,6 +15,7 @@
 #include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
 #include <algorithm>
+#include <array>
 #include <cstdio>
 
 namespace lfs::vis::tools {
@@ -76,13 +77,16 @@ namespace lfs::vis::tools {
     }
 
     void AlignTool::update(const ToolContext& ctx) {
-        if (op::operators().activeModalId() == op::to_string(op::BuiltinOp::AlignPickPoint)) {
+        if ((isEnabled() && op::operators().isModal(op::BuiltinOp::AlignPickPoint)) ||
+            op::operators().isModal(op::BuiltinOp::ModelAlignment)) {
             op::ModalEvent event{};
             event.type = op::ModalEvent::Type::NONE;
             op::operators().dispatchModalEvent(event);
         }
         auto* const rm = ctx.getRenderingManager();
-        const bool has_status = services().alignPointPick().getStatusMessage() != nullptr;
+        const auto* alignment = op::ModelAlignmentOperator::active();
+        const auto& state = alignment ? alignment->pointState() : services().alignPointPick();
+        const bool has_status = state.getStatusMessage() != nullptr;
         if (had_align_status_ && !has_status && rm) {
             rm->markDirty(DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
         }
@@ -100,6 +104,35 @@ namespace lfs::vis::tools {
     }
 
     namespace {
+        void drawAlignmentPairs(lfs::rendering::ScreenOverlayRenderer& overlay, const PanelProjection& projection,
+                                const op::ModelAlignmentOperator& alignment, SplitViewPanelId panel, float label_size) {
+            using lfs::rendering::OverlayColor;
+        static constexpr std::array pair_colors{
+            OverlayColor{0.30f, 0.79f, 1.00f, 1.0f}, // cyan
+            OverlayColor{1.00f, 0.71f, 0.24f, 1.0f}, // amber
+            OverlayColor{0.82f, 0.58f, 1.00f, 1.0f}, // violet
+            OverlayColor{0.51f, 0.88f, 0.39f, 1.0f}, // lime
+            OverlayColor{1.00f, 0.46f, 0.62f, 1.0f}, // rose
+            OverlayColor{0.20f, 0.86f, 0.69f, 1.0f}, // mint
+            OverlayColor{1.00f, 0.91f, 0.37f, 1.0f}, // yellow
+            OverlayColor{0.52f, 0.65f, 1.00f, 1.0f}, // blue
+            OverlayColor{1.00f, 0.53f, 0.30f, 1.0f}, // orange
+            OverlayColor{0.96f, 0.57f, 0.94f, 1.0f}, // magenta
+        };
+
+            const auto& points = alignment.pointState().getPickedPoints();
+            const auto selected = alignment.pointState().getSelectedPoint();
+            const auto& slots = alignment.pairColorSlots();
+            for (size_t i = 0; i < points.size(); ++i) {
+                const auto side = alignment.pendingPairOnRight() && i + 1 == points.size() ? 1u : i % 2;
+                if (splitViewPanelIndex(panel) != side) continue;
+                const auto pair = i / 2;
+                const auto color = pair_colors[(pair < slots.size() ? slots[pair] : pair) % pair_colors.size()];
+                drawPointMarker(overlay, projection, points[i], selected && *selected / 2 == static_cast<int>(pair),
+                                color, label_size, std::to_string(pair + 1), true);
+            }
+        }
+
 
         void drawEdgeLengthLabels(lfs::rendering::ScreenOverlayRenderer& overlay,
                                   const PanelProjection& panel_proj,
@@ -283,9 +316,7 @@ namespace lfs::vis::tools {
                     const auto& info = projection.info;
                     const lfs::rendering::ScreenOverlayRenderer::ScopedClipRect pane_clip(
                         *overlay, {info.x, info.y}, {info.x + info.width, info.y + info.height});
-                    drawPointMarkers(*overlay, projection, picked_points, selected_point,
-                                     SPHERE_COLOR, label_size, panel, pending_right,
-                                     op::ModelAlignmentOperator::active()->pairColorSlots());
+                    drawAlignmentPairs(*overlay, projection, *op::ModelAlignmentOperator::active(), panel, label_size);
                 }
                 const auto count = picked_points.size();
                 const auto next = count % 2 && !pending_right ? SplitViewPanelId::Right : SplitViewPanelId::Left;
@@ -301,7 +332,7 @@ namespace lfs::vis::tools {
                                               pointPickShortcut(input::Action::DELETE_SELECTED),
                                               pointPickShortcut(input::Action::UNDO),
                                               pointPickShortcut(input::Action::CANCEL_POLYGON))
-                                 : point_state.canUndoPointEdit()
+                                 : op::ModelAlignmentOperator::active()->canUndoPointEdit()
                                      ? LOCF("align.pair_recover_help", pointPickShortcut(input::Action::UNDO))
                                      : std::string{});
             } else {

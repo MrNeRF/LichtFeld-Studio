@@ -423,12 +423,18 @@ namespace lfs::vis {
                                   std::optional<float> position = std::nullopt,
                                   std::optional<size_t> offset = std::nullopt);
         struct IndependentPanelOverride {
-            bool exact_surface_picking = false;
             std::vector<core::Uuid> visible_nodes;
             std::vector<std::pair<core::Uuid, glm::mat4>> transforms;
         };
-        void setIndependentPanelOverrides(std::optional<std::array<IndependentPanelOverride, 2>> panels) {
-            independent_panel_overrides_ = std::move(panels);
+        struct IndependentSplitOverrides {
+            std::array<IndependentPanelOverride, 2> panels;
+            bool exact_surface_picking = false;
+            bool render_meshes = true;
+            bool apply_scene_effects = true;
+        };
+        // Viewer-thread rendering inputs, borrowed from the active workflow's state.
+        void setIndependentPanelOverrides(std::optional<IndependentSplitOverrides> overrides) {
+            independent_panel_overrides_ = std::move(overrides);
             markDirty(DirtyFlag::ALL, FrameReason::SceneChange);
         }
         const auto& independentPanelOverrides() const { return independent_panel_overrides_; }
@@ -759,7 +765,7 @@ namespace lfs::vis {
             markDirty(DirtyFlag::VIEWPORT, FrameReason::SettingsChange);
         }
         [[nodiscard]] bool exactSurfacePicking() const {
-            return independent_panel_overrides_ ? (*independent_panel_overrides_)[0].exact_surface_picking : exact_surface_picking_;
+            return independent_panel_overrides_ ? independent_panel_overrides_->exact_surface_picking : exact_surface_picking_;
         }
         void configureSurfacePicking(FrameContext& frame) const;
 
@@ -1196,7 +1202,7 @@ namespace lfs::vis {
 
         CameraInteractionService camera_interaction_service_;
         SplitViewService split_view_service_;
-        std::optional<std::array<IndependentPanelOverride, 2>> independent_panel_overrides_;
+        std::optional<IndependentSplitOverrides> independent_panel_overrides_;
         ViewportFrameLifecycleService frame_lifecycle_service_;
 
         // Settings

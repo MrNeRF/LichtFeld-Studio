@@ -54,10 +54,7 @@ namespace lfs::vis {
             notify_();
         }
         [[nodiscard]] const std::vector<glm::vec3>& getPickedPoints() const { return picked_points_; }
-        [[nodiscard]] bool canUndoPointEdit() const { return can_undo_point_edit_; }
-        void setCanUndoPointEdit(bool available) { can_undo_point_edit_ = available; }
         void clearPickedPoints() {
-            can_undo_point_edit_ = false;
             const bool changed = !picked_points_.empty() || !status_message_.empty();
             picked_points_.clear();
             selected_point_.reset();
@@ -135,7 +132,6 @@ namespace lfs::vis {
     private:
         void (*notify_)();
         bool notify_status_;
-        bool can_undo_point_edit_ = false;
         std::vector<glm::vec3> picked_points_;
         std::optional<int> selected_point_;
         UiAction ui_action_ = UiAction::None;

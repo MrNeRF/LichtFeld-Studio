@@ -88,6 +88,7 @@ namespace lfs::vis::op {
             bool is_registered = false;
         };
 
+        void setActiveModalBuiltin(BuiltinOp op); // Called with mutex_ held.
         [[nodiscard]] std::optional<OperatorContext> makeContext() const;
         [[nodiscard]] bool pollImpl(const RegisteredOperator& reg,
                                     const OperatorProperties* props = nullptr) const;

@@ -24,6 +24,8 @@ def _install_stub_modules(monkeypatch):
     lf_stub.get_render_mode_controls_open = lambda: False
     lf_stub.set_render_mode_controls_open = lambda _open: None
     lf_stub.ui = SimpleNamespace(
+        get_model_alignment_state=lambda: SimpleNamespace(active=False),
+        ModelAlignmentDisplayMode=SimpleNamespace(SEPARATE="separate", OVERLAY_LEFT="overlay_left", OVERLAY_RIGHT="overlay_right"),
         PanelSpace=SimpleNamespace(FLOATING="FLOATING", BOTTOM_DOCK="BOTTOM_DOCK"),
         add_hook=lambda panel, section, callback, position="append": hook_calls.append(
             (panel, section, callback, position)
@@ -2780,9 +2782,13 @@ def test_model_alignment_replaces_active_tool_controls_and_refreshes_on_preview(
     lf.ui.get_align_preview = lambda: False
     lf.ui.get_align_edge_to_axis = lambda: False
     calls = []
+    lf.ui.toggle_model_alignment_preview = lambda: calls.append("preview")
+    lf.ui.apply_model_alignment = lambda: calls.append("apply")
+    lf.ui.clear_model_alignment_points = lambda: calls.append("clear")
 
     def state(linked=False, mode="separate", swap=True, delete=False, undo=False):
-        return SimpleNamespace(linked=linked, display_mode=mode, can_swap_roles=swap,
+        return SimpleNamespace(active=True, preview=lf.ui.get_align_preview(), can_apply=lf.ui.can_apply_align(),
+                               linked=linked, display_mode=mode, can_swap_roles=swap,
                                can_delete_pair=delete, can_undo=undo)
 
     lf.ui.get_model_alignment_state = lambda: state()
@@ -2837,6 +2843,9 @@ def test_model_alignment_replaces_active_tool_controls_and_refreshes_on_preview(
     for action in ("right", "separate", "cancel"):
         controller._on_toolbar_action(None, None, ["model_alignment_control", action])
     assert calls == ["overlay_right", "separate", "cancel"]
+    for action in ("model_alignment_preview", "model_alignment_apply", "model_alignment_clear"):
+        controller._on_toolbar_action(None, None, [action, ""])
+    assert calls[-3:] == ["preview", "apply", "clear"]
 
 
 def test_align_toolbar_buttons_follow_native_state(toolbar_module):

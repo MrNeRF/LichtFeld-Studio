@@ -2771,7 +2771,7 @@ namespace lfs::vis::gui {
     }
 
     void GizmoManager::renderCropBoxGizmo(const UIContext& ctx, const ViewportLayout& viewport) {
-        if (last_tool_state_stamp_.ui_hidden || last_tool_state_stamp_.gt_compare)
+        if (op::operators().isModal(op::BuiltinOp::ModelAlignment) || last_tool_state_stamp_.gt_compare)
             return;
 
         if (isVolumeGizmoToolActive() && crop_tool_shape_ == CropToolShape::Box) {
@@ -3334,7 +3334,7 @@ namespace lfs::vis::gui {
     }
 
     void GizmoManager::renderEllipsoidGizmo(const UIContext& ctx, const ViewportLayout& viewport) {
-        if (last_tool_state_stamp_.ui_hidden || last_tool_state_stamp_.gt_compare)
+        if (op::operators().isModal(op::BuiltinOp::ModelAlignment) || last_tool_state_stamp_.gt_compare)
             return;
 
         // The polygon prism is centred like the ellipsoid and shares its crop tool gizmo.

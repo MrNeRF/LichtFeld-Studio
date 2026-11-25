@@ -2537,7 +2537,6 @@ namespace lfs::vis {
         handlers.subscribe<core::events::cmd::DeselectAll>(record(Action::DESELECT_ALL));
         handlers.subscribe<core::events::ui::ToggleVramHud>(record(Action::TOGGLE_PERFORMANCE_HUD));
         handlers.subscribe<core::events::ui::ToggleUI>(record(Action::TOGGLE_UI));
-        handlers.subscribe<core::events::cmd::ToggleSplitView>(record(Action::TOGGLE_SPLIT_VIEW));
         handlers.subscribe<core::events::ui::ToggleSideDock>([&](const auto& event) {
             ++dispatched[event.side == lfs::core::SideDock::Right ? Action::TOGGLE_RIGHT_DOCK : Action::TOGGLE_LEFT_DOCK];
         });

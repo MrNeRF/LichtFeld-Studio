@@ -2691,9 +2691,9 @@ namespace lfs::vis {
             }
         } viewer_borrow_publisher{live_trainer, vksplat_viewport_renderer_.get()};
 
-        if (independent_panel_overrides_) {
+        if (independent_panel_overrides_ && !independent_panel_overrides_->render_meshes)
             scene_state.meshes.clear();
-        } else {
+        if (!independent_panel_overrides_ || independent_panel_overrides_->apply_scene_effects) {
             scene_state.reveal = sequencer_reveal_;
             if (scene_manager)
                 attachCustomEffect(scene_state, *scene_manager, scene_time_);
@@ -3967,7 +3967,7 @@ namespace lfs::vis {
                                               const VksplatViewportRenderer::OutputSlot output) {
                     const auto index = splitViewPanelIndex(panel);
                     const glm::ivec2 size{std::max((*layouts)[index].width, 1), render_size.y};
-                    const auto* overrides = independent_panel_overrides_ ? &(*independent_panel_overrides_)[index] : nullptr;
+                    const auto* overrides = independent_panel_overrides_ ? &independent_panel_overrides_->panels[index] : nullptr;
                     if (!overrides || !scene_manager)
                         return render_panel_image(viewport, size, panel, std::nullopt, nullptr, nullptr, output);
 

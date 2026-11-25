@@ -8,7 +8,6 @@
 #include "core/services.hpp"
 #include "internal/viewport.hpp"
 #include "operator/operator.hpp"
-#include <any>
 #include "rendering/rendering_types.hpp"
 
 namespace lfs::vis::op {
@@ -21,7 +20,7 @@ namespace lfs::vis::op {
 
     protected:
         PointPickOperator(PointPickState& state, size_t max_points, const char* no_surface_key)
-            : max_points_(max_points), state_(state), no_surface_key_(no_surface_key) {}
+            : state_(state), max_points_(max_points), no_surface_key_(no_surface_key) {}
 
         virtual std::optional<OperatorResult> prepareModal(OperatorContext&) { return std::nullopt; }
         virtual bool pointEditingBlocked() const { return false; }
@@ -30,17 +29,15 @@ namespace lfs::vis::op {
         struct PointSample;
         virtual bool acceptsPointSample(const PointSample&, std::optional<int>) const { return true; }
         virtual bool supportsPointEditing() const { return false; }
-        virtual std::any capturePointEditState() const { return {}; }
-        virtual void restorePointEditState(const std::any&) {}
+        virtual void pointsWillChange() {}
         virtual void pointsCleared() {}
         virtual void appendPickedPoint(const PointSample& sample);
-        virtual std::pair<size_t, size_t> pointRemovalRange(size_t index, bool) { return {index, index + 1}; }
+        virtual void erasePickedPoint(size_t index, bool selected);
         virtual void showPointMenu(glm::dvec2, int) {}
         virtual bool applyPickedPoints(OperatorContext& ctx, float value) = 0;
         virtual void handleToolUiAction(OperatorContext&, PointPickState::UiAction) {}
         virtual OperatorResult handleToolAction(OperatorContext&, input::Action) { return OperatorResult::PASS_THROUGH; }
 
-        size_t max_points_;
         std::vector<glm::vec3> picked_points_;
         int pick_button_ = 0;
         bool press_active_ = false;
@@ -69,24 +66,16 @@ namespace lfs::vis::op {
         void syncPickedPointsToServices();
         void removeLastPoint();
         void removeSelectedPoint();
-        void clearAllPoints(bool preserve_history = false);
-        void undoPointEdit();
+        void clearAllPoints();
         [[nodiscard]] bool tryPlacePoint(double x, double y);
         void setStatus(const char* locale_key, double duration_seconds = 1.5) const;
 
     private:
         OperatorResult handlePendingUiAction(OperatorContext& ctx);
         void markOverlayDirty() const;
-        struct PointEdit {
-            std::vector<glm::vec3> points;
-            std::optional<int> selected;
-            std::optional<SplitViewPanelId> panel;
-            std::any tool_state;
-        };
-        void rememberPointEdit();
-        std::vector<PointEdit> edits_;
         bool drag_edit_recorded_ = false;
         PointPickState& state_;
+        size_t max_points_;
 
         const char* no_surface_key_;
     };

@@ -326,8 +326,8 @@ namespace lfs::vis::op {
         case PointPickState::UiAction::Clear:
             beforePointEdit(ctx);
             if (!picked_points_.empty())
-                rememberPointEdit();
-            clearAllPoints(true);
+                pointsWillChange();
+            clearAllPoints();
             break;
         case PointPickState::UiAction::DeleteSelected:
             if (supportsPointEditing() && !pointEditingBlocked())
@@ -360,37 +360,12 @@ namespace lfs::vis::op {
     }
 
     void PointPickOperator::syncPickedPointsToServices() {
-        state_.setCanUndoPointEdit(!edits_.empty());
         state_.setPickedPoints(picked_points_);
         state_.setSelectedPoint(selected_point_);
         markOverlayDirty();
     }
 
-    void PointPickOperator::rememberPointEdit() {
-        if (supportsPointEditing())
-            edits_.push_back({picked_points_, selected_point_, pick_panel_, capturePointEditState()});
-    }
-
-    void PointPickOperator::undoPointEdit() {
-        pending_pick_.reset();
-        press_active_ = false;
-        press_point_index_.reset();
-        drag_active_ = false;
-        drag_edit_recorded_ = false;
-        if (edits_.empty())
-            return;
-        auto edit = std::move(edits_.back());
-        edits_.pop_back();
-        picked_points_ = std::move(edit.points);
-        selected_point_ = edit.selected;
-        pick_panel_ = edit.panel;
-        restorePointEditState(edit.tool_state);
-        syncPickedPointsToServices();
-    }
-
-    void PointPickOperator::clearAllPoints(bool preserve_history) {
-        if (!preserve_history)
-            edits_.clear();
+    void PointPickOperator::clearAllPoints() {
         pending_pick_.reset();
         press_active_ = false;
         picked_points_.clear();
@@ -399,8 +374,8 @@ namespace lfs::vis::op {
         pick_panel_.reset();
         press_point_index_.reset();
         drag_active_ = false;
+        drag_edit_recorded_ = false;
         state_.clearPickedPoints();
-        state_.setCanUndoPointEdit(!edits_.empty());
         markOverlayDirty();
     }
 
@@ -412,13 +387,12 @@ namespace lfs::vis::op {
         if (picked_points_.empty()) {
             return;
         }
-        rememberPointEdit();
+        pointsWillChange();
         const int last = static_cast<int>(picked_points_.size()) - 1;
-        (void)pointRemovalRange(static_cast<size_t>(last), false);
         if (selected_point_ && *selected_point_ >= last) {
             selected_point_.reset();
         }
-        picked_points_.pop_back();
+        erasePickedPoint(static_cast<size_t>(last), false);
         if (picked_points_.empty()) {
             pick_panel_.reset();
             selected_point_.reset();
@@ -440,14 +414,17 @@ namespace lfs::vis::op {
             state_.clearSelectedPoint();
             return;
         }
-        rememberPointEdit();
-        const auto [first, last] = pointRemovalRange(static_cast<size_t>(idx), true);
-        picked_points_.erase(picked_points_.begin() + first, picked_points_.begin() + last);
+        pointsWillChange();
+        erasePickedPoint(static_cast<size_t>(idx), true);
         selected_point_.reset();
         if (picked_points_.empty()) {
             pick_panel_.reset();
         }
         syncPickedPointsToServices();
+    }
+
+    void PointPickOperator::erasePickedPoint(size_t index, bool) {
+        picked_points_.erase(picked_points_.begin() + index);
     }
 
     bool PointPickOperator::tryPlacePoint(const double x, const double y) {
@@ -489,14 +466,14 @@ namespace lfs::vis::op {
             if (*index < 0 || static_cast<size_t>(*index) >= picked_points_.size())
                 return false;
             if (!drag_edit_recorded_ && picked_points_[*index] != sample.world) {
-                rememberPointEdit();
+                pointsWillChange();
                 drag_edit_recorded_ = true;
             }
             picked_points_[*index] = sample.world;
         } else {
             if (picked_points_.size() >= max_points_)
                 return false;
-            rememberPointEdit();
+            pointsWillChange();
             appendPickedPoint(sample);
         }
         if (!pick_panel_)

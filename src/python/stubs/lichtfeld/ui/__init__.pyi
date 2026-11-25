@@ -2390,21 +2390,28 @@ def start_crop_polygon() -> None:
     Edit the selected splat's or point cloud's crop polygon, or start drawing one on a camera-facing plane
     """
 
-def can_apply_align() -> bool:
-    """Whether the align tool has enough picked points to attempt alignment"""
+class ModelAlignmentDisplayMode(enum.Enum):
+    SEPARATE = 0
 
-def apply_align() -> bool:
-    """Request the running align modal to apply its current alignment"""
+    OVERLAY_LEFT = 1
 
-def clear_align_points() -> None:
-    """Request the running align modal to clear all picked points"""
+    OVERLAY_RIGHT = 2
 
 class ModelAlignmentState:
+    @property
+    def active(self) -> bool: ...
+
+    @property
+    def preview(self) -> bool: ...
+
+    @property
+    def can_apply(self) -> bool: ...
+
     @property
     def linked(self) -> bool: ...
 
     @property
-    def display_mode(self) -> str: ...
+    def display_mode(self) -> ModelAlignmentDisplayMode: ...
 
     @property
     def can_swap_roles(self) -> bool: ...
@@ -2421,7 +2428,7 @@ def get_model_alignment_state() -> ModelAlignmentState:
 def swap_model_alignment_roles() -> None:
     """Swap reference and moving model before picking points"""
 
-def set_model_alignment_display(mode: str) -> None:
+def set_model_alignment_display(mode: ModelAlignmentDisplayMode) -> None:
     """Choose separate models or an overlay in the left or right panel"""
 
 def set_model_alignment_camera_link(linked: bool) -> None:
@@ -2435,6 +2442,24 @@ def undo_model_alignment() -> None:
 
 def delete_model_alignment_pair() -> None:
     """Delete the selected matching point pair"""
+
+def apply_model_alignment() -> bool:
+    """Apply the matching-point alignment and end the session"""
+
+def clear_model_alignment_points() -> None:
+    """Clear matching points while keeping them available to Undo"""
+
+def toggle_model_alignment_preview() -> None:
+    """Switch between picking matching points and previewing model alignment"""
+
+def can_apply_align() -> bool:
+    """True when the align tool has 3 non-degenerate points ready to apply"""
+
+def apply_align() -> bool:
+    """Request the running align modal to apply the current triangle"""
+
+def clear_align_points() -> None:
+    """Request the running align modal to clear all picked points"""
 
 def get_align_preview() -> bool:
     """Whether the alignment result is being previewed"""
@@ -3339,7 +3364,7 @@ def get_current_camera_id() -> int:
 
 def get_split_view_mode() -> str:
     """
-    Get split view mode (none, gt_comparison, ply_comparison, independent_dual, model_alignment)
+    Get split view mode (none, gt_comparison, ply_comparison, independent_dual)
     """
 
 def get_speed_overlay() -> tuple[float, float, float, float]:
