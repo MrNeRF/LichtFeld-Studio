@@ -6,6 +6,7 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/scene.hpp"
+#include "core/services.hpp"
 #include "core/splat_data_transform.hpp"
 #include "gui/bounds_gizmo.hpp"
 #include "gui/gui_focus_state.hpp"
@@ -22,6 +23,7 @@
 #include "operator/operator_id.hpp"
 #include "operator/operator_registry.hpp"
 #include "operator/ops/crop_polygon_ops.hpp"
+#include "operator/ops/model_alignment_ops.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering.hpp"
@@ -1513,6 +1515,8 @@ namespace lfs::vis::gui {
         lfs::core::events::tools::SetToolbarTool::when([this](const auto& e) {
             auto& editor = viewer_->getEditorContext();
             const auto tool = static_cast<ToolType>(e.tool_mode);
+            if (op::operators().isModal(op::BuiltinOp::ModelAlignment))
+                return;
 
             auto& registry = UnifiedToolRegistry::instance();
             // Undo can reselect a crop volume without entering the crop tool.
@@ -1742,6 +1746,7 @@ namespace lfs::vis::gui {
         auto* const scale_distance_tool = ctx.viewer->getScaleDistanceTool();
         auto* const selection_tool = ctx.viewer->getSelectionTool();
         auto* const rendering_manager = ctx.viewer->getRenderingManager();
+        ui_hidden = ui_hidden || op::operators().isModal(op::BuiltinOp::ModelAlignment);
         const bool has_selected_node = scene_manager && scene_manager->hasSelectedNode();
         const std::string active_tool_id = UnifiedToolRegistry::instance().getActiveTool();
         const std::string gizmo_type = ctx.editor ? ctx.editor->getGizmoType() : std::string{};
@@ -2767,7 +2772,7 @@ namespace lfs::vis::gui {
     }
 
     void GizmoManager::renderCropBoxGizmo(const UIContext& ctx, const ViewportLayout& viewport) {
-        if (last_tool_state_stamp_.gt_compare)
+        if (op::operators().isModal(op::BuiltinOp::ModelAlignment) || last_tool_state_stamp_.gt_compare)
             return;
 
         if (isVolumeGizmoToolActive() && crop_tool_shape_ == CropToolShape::Box) {
@@ -3330,7 +3335,7 @@ namespace lfs::vis::gui {
     }
 
     void GizmoManager::renderEllipsoidGizmo(const UIContext& ctx, const ViewportLayout& viewport) {
-        if (last_tool_state_stamp_.gt_compare)
+        if (op::operators().isModal(op::BuiltinOp::ModelAlignment) || last_tool_state_stamp_.gt_compare)
             return;
 
         // The polygon prism is centred like the ellipsoid and shares its crop tool gizmo.
@@ -3653,7 +3658,7 @@ namespace lfs::vis::gui {
         const auto snap_to_axis = [&](ViewportGizmoPanelTarget& panel, const int encoded_axis) {
             panel.viewport->camera.setAxisAlignedView(encoded_axis % 3, encoded_axis >= 3);
             rendering_manager->setGridPlaneForPanel(panel.panel, encoded_axis % 3);
-            rendering_manager->markCameraPoseChanged();
+            publishViewportGizmoCameraMove(*panel.viewport);
         };
 
         // A press or drag owns the pointer until release, even over UI.
@@ -3664,7 +3669,7 @@ namespace lfs::vis::gui {
                 if (delta != glm::vec2(0.0f)) {
                     viewport_gizmo_drag_pos_ += delta;
                     orbitViewportGizmo(*panel->viewport, time);
-                    rendering_manager->markCameraPoseChanged();
+                    publishViewportGizmoCameraMove(*panel->viewport);
                 }
                 return;
             }
@@ -3678,7 +3683,7 @@ namespace lfs::vis::gui {
                         rendering_manager->setGridPlaneForPanel(panel->panel, snapped_axis);
                     }
                 }
-                rendering_manager->markCameraPoseChanged();
+                publishViewportGizmoCameraMove(*panel->viewport);
             }
             viewport_gizmo_dragging_ = false;
             viewport_gizmo_camera_snapshot_valid_ = false;
@@ -3758,11 +3763,17 @@ namespace lfs::vis::gui {
         viewport_gizmo_drag_pos_ = mouse;
         if (mouse != viewport_gizmo_press_pos_) {
             orbitViewportGizmo(viewport, time);
-            if (auto* const rendering_manager = viewer_->getRenderingManager())
-                rendering_manager->markCameraPoseChanged();
+            publishViewportGizmoCameraMove(viewport);
         }
         if (SDL_Window* const window = viewer_->getWindow())
             SDL_SetWindowRelativeMouseMode(window, true);
+    }
+
+    void GizmoManager::publishViewportGizmoCameraMove(const Viewport& viewport) {
+        if (auto* alignment = op::ModelAlignmentOperator::active())
+            alignment->syncCamera(viewport);
+        if (auto* renderer = viewer_->getRenderingManager())
+            renderer->markCameraPoseChanged();
     }
 
     void GizmoManager::orbitViewportGizmo(Viewport& viewport, const float time) {
@@ -3968,8 +3979,8 @@ namespace lfs::vis::gui {
             viewport_gizmo_dragging_ = false;
             viewport_gizmo_camera_snapshot_valid_ = false;
             releaseViewportGizmoPointer();
-            if (rendering_manager)
-                rendering_manager->markCameraPoseChanged();
+            if (active_viewport)
+                publishViewportGizmoCameraMove(*active_viewport);
             cancelled = true;
         }
         if (viewport_gizmo_pressed_) {

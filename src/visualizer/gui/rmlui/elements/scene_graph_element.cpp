@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "operator/ops/model_alignment_ops.hpp"
 #include "gui/rmlui/elements/scene_graph_element.hpp"
 #include "core/error.hpp"
 #include "core/native_fs.hpp"
@@ -43,6 +44,7 @@
 #include "visualizer/core/parameter_manager.hpp"
 #include "visualizer/core/services.hpp"
 #include "visualizer/gui_capabilities.hpp"
+#include "visualizer_impl.hpp"
 #include "window/window_manager.hpp"
 #include <SDL3/SDL.h>
 
@@ -3178,6 +3180,12 @@ namespace lfs::vis::gui {
             items.push_back(makeAction(tr("export.export") + "...",
                                        prefixedAction(std::format("export_splat:{}", node_id)), !items.empty()));
         }
+        if (selected_ids_.size() == 2 && selected_ids_.contains(node_id)) {
+            const auto other = std::ranges::find_if(selected_ids_, [node_id](const auto id) { return id != node_id; });
+            const auto* mobile = scene->getNodeById(*other);
+            if (mobile && op::ModelAlignmentOperator::canBegin(*scene, *node, *mobile))
+                items.push_back(makeAction(tr("align.models"), prefixedAction("align_models")));
+        }
         const bool selected_cameras_in_group = selectionContainsOnlyCamerasInGroup(node_id);
         if (selected_ids_.size() > 1 && !selected_cameras_in_group) {
             items.push_back(makeAction(tr("scene.select_hierarchy"),
@@ -3469,6 +3477,26 @@ namespace lfs::vis::gui {
             return;
 
         const std::string& kind = parts[0];
+        if (kind == "align_models") {
+            auto* gui = services().guiOrNull();
+            auto* renderer = services().renderingOrNull();
+            if (!gui || !gui->getViewer() || !renderer || op::modelAlignmentSession() ||
+                selected_ids_.size() != 2 || !selected_ids_.contains(context_menu_node_id_))
+                return;
+            const auto other = std::ranges::find_if(selected_ids_, [&](const auto id) {
+                return id != context_menu_node_id_;
+            });
+            const auto* reference = scene->getNodeById(context_menu_node_id_);
+            const auto* mobile = scene->getNodeById(*other);
+            if (!reference || !mobile || !op::ModelAlignmentOperator::canBegin(*scene, *reference, *mobile))
+                return;
+            op::OperatorProperties props;
+            props.set("reference", reference->name);
+            props.set("moving", mobile->name);
+            op::operators().cancelModalOperator();
+            op::operators().invoke(op::BuiltinOp::ModelAlignment, &props);
+            return;
+        }
         if (kind == "select_hierarchy") {
             if (selectionContainsOnlyCamerasInGroup(context_menu_node_id_))
                 selectHierarchy(context_menu_node_id_);

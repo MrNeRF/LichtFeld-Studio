@@ -26,6 +26,13 @@ namespace lfs::vis::op {
         virtual bool pointEditingBlocked() const { return false; }
         virtual void beforePointEdit(OperatorContext&) {}
         virtual void pointSampleApplied() {}
+        struct PointSample;
+        virtual bool acceptsPointSample(const PointSample&, std::optional<int>) const { return true; }
+        virtual bool supportsPointEditing() const { return false; }
+        virtual void pointsWillChange() {}
+        virtual void pointsCleared() {}
+        virtual void appendPickedPoint(const PointSample& sample);
+        virtual void erasePickedPoint(size_t index, bool selected);
         virtual bool applyPickedPoints(OperatorContext& ctx, float value) = 0;
         virtual void handleToolUiAction(OperatorContext&, PointPickState::UiAction) {}
         virtual OperatorResult handleToolAction(OperatorContext&, input::Action) { return OperatorResult::PASS_THROUGH; }
@@ -53,7 +60,7 @@ namespace lfs::vis::op {
         void resolvePendingPoint();
         [[nodiscard]] bool requestPoint(const PendingPick& pick);
         [[nodiscard]] bool applyPointSample(const PointSample& sample, std::optional<int> index);
-        [[nodiscard]] PointSample sampleScreenPoint(glm::dvec2 position) const;
+        [[nodiscard]] PointSample sampleScreenPoint(const PendingPick& pick) const;
         [[nodiscard]] std::optional<int> hitTestPoint(double x, double y) const;
         void syncPickedPointsToServices();
         void removeLastPoint();
@@ -65,8 +72,10 @@ namespace lfs::vis::op {
     private:
         OperatorResult handlePendingUiAction(OperatorContext& ctx);
         void markOverlayDirty() const;
+        bool drag_edit_recorded_ = false;
         PointPickState& state_;
         size_t max_points_;
+
         const char* no_surface_key_;
     };
 

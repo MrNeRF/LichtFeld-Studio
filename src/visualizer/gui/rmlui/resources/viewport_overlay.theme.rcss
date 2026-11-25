@@ -392,6 +392,10 @@
     border-color: transparent;
 }
 
+.icon-btn.disabled .align-button-label {
+    color: @{viewport.icon_disabled};
+}
+
 .icon-btn.disabled img {
     image-color: @{viewport.icon_disabled};
 }
@@ -764,7 +768,7 @@
     background-color: @{statusbar.progress_bg};
 }
 
-.toolbar-hcenter .align-toolbar {
+.toolbar-hcenter .align-toolbar.ground-align-toolbar {
     decorator: none;
     background-color: @{alpha(toolbar.background,1.0)};
     color: @{text};

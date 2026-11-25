@@ -124,6 +124,7 @@ def _install_lichtfeld_stub(monkeypatch):
         has_gaussian_selection=lambda: state["has_gaussian_selection"],
         has_gaussian_clipboard=lambda: state["has_gaussian_clipboard"],
         get_split_view_mode=lambda: "independent_dual",
+        get_model_alignment_state=lambda: SimpleNamespace(active=False),
         get_vr_state=lambda: dict(state["vr"]),
         get_vr_preferences=lambda: {"enabled": state.get("vr_support", False)},
         get_active_tool=lambda: state["active_tool"],
@@ -261,6 +262,22 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     }
 
     edit_items = edit_mod.EditMenu().menu_items()
+    lf = sys.modules["lichtfeld"]
+    original_split_mode = lf.ui.get_split_view_mode
+    monkeypatch.setattr(lf.ui, "get_split_view_mode", lambda: "independent_dual")
+    local_actions = []
+    monkeypatch.setattr(lf.ui, "get_model_alignment_state", lambda: SimpleNamespace(active=True, can_undo=True), raising=False)
+    monkeypatch.setattr(lf.ui, "undo_model_alignment", lambda: local_actions.append("undo"), raising=False)
+    alignment_items = edit_mod.EditMenu().menu_items()
+    assert alignment_items[0]["enabled"]
+    assert not alignment_items[1]["enabled"]
+    alignment_items[0]["callback"]()
+    assert local_actions == ["undo"]
+    assert not state["undo_called"]
+    monkeypatch.setattr(lf.ui, "get_model_alignment_state", lambda: SimpleNamespace(active=True, can_undo=False))
+    assert not edit_mod.EditMenu().menu_items()[0]["enabled"]
+    monkeypatch.setattr(lf.ui, "get_split_view_mode", original_split_mode)
+    monkeypatch.setattr(lf.ui, "get_model_alignment_state", lambda: SimpleNamespace(active=False))
     assert [item.get("label") for item in edit_items] == [
         "Undo", "Redo", None, "tr:menu.select.cut_selection",
         "tr:menu.select.copy_selection", "tr:menu.select.paste_selection",

@@ -24,6 +24,8 @@ def _install_stub_modules(monkeypatch):
     lf_stub.get_render_mode_controls_open = lambda: False
     lf_stub.set_render_mode_controls_open = lambda _open: None
     lf_stub.ui = SimpleNamespace(
+        get_model_alignment_state=lambda: SimpleNamespace(active=False),
+        ModelAlignmentDisplayMode=SimpleNamespace(SEPARATE="separate", OVERLAY_LEFT="overlay_left", OVERLAY_RIGHT="overlay_right"),
         PanelSpace=SimpleNamespace(FLOATING="FLOATING", BOTTOM_DOCK="BOTTOM_DOCK"),
         add_hook=lambda panel, section, callback, position="append": hook_calls.append(
             (panel, section, callback, position)
@@ -1160,6 +1162,7 @@ def test_crop_enable_toggle_tracks_dataset_stages_and_uses_cropbox_operator(
             "selected": True,
             "enabled": True,
             "opacity": "1",
+            "separator_before": False,
         }
     ]
     assert snapshot["crop_settings_buttons"] == [
@@ -1175,6 +1178,7 @@ def test_crop_enable_toggle_tracks_dataset_stages_and_uses_cropbox_operator(
             "selected": False,
             "enabled": True,
             "opacity": "1",
+            "separator_before": False,
         }
     ]
 
@@ -1758,7 +1762,7 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert 'class="toolbar-flyout-divider hidden"' not in rml
     assert "toolbar-flyout" not in rml
     assert rml.count('data-for="button : selection_group_buttons"') == 2
-    assert rml.count('class="toolbar-separator"') == 10
+    assert rml.count('data-class-hidden="!button.separator_before"') == 2
     assert 'class="toolbar-separator hidden"' in rml
     assert rml.count('class="viewport-gizmo-controls"') == 2
     assert rml.count('class="viewport-gizmo-control-row"') == 2
@@ -2170,14 +2174,10 @@ def test_empty_viewport_rejects_independent_split_activation_and_hides_orphan_ui
         divider_start,
     )
     divider_block = gui_manager[divider_start:divider_end]
-
-    assert (
-        "rendering && rendering->isSplitViewActive() && "
-        "!rendering->isIndependentSplitViewActive())"
-        in divider_block
-    )
+    assert "rendering && rendering->isSplitViewActive()" in divider_block
     assert "rendering->getSplitDividerScreenX" in divider_block
     assert "rendering->getContentBounds" in divider_block
+
 
 
 def test_right_panel_tabs_keep_stable_boundaries_without_transparent_shell():
@@ -2723,6 +2723,8 @@ def test_align_toolbar_signature_tracks_can_apply(toolbar_module):
     controller = module._ViewportToolbarController()
 
     lf_stub.ui.get_active_tool = lambda: "builtin.align"
+    split_mode = {"value": "none"}
+    lf_stub.ui.get_split_view_mode = lambda: split_mode["value"]
     can_apply = {"value": False}
     lf_stub.ui.can_apply_align = lambda: can_apply["value"]
     lf_stub.ui.get_align_axis_snap = lambda: True
@@ -2736,6 +2738,10 @@ def test_align_toolbar_signature_tracks_can_apply(toolbar_module):
     assert signature_disabled != signature_enabled
     assert signature_disabled[-4:-1] == (False, True, False)
     assert signature_enabled[-4:-1] == (True, True, False)
+
+    split_mode["value"] = "ply_comparison"
+    assert controller._toolbar_signature(None) != signature_enabled
+    split_mode["value"] = "none"
 
     preview["value"] = True
     assert controller._toolbar_signature(None) != signature_enabled
@@ -2767,10 +2773,88 @@ def test_align_toolbar_actions_route_to_gizmo_dispatch(toolbar_module):
     assert calls == [("preview", None), ("snap", False), ("edge", True), ("apply", None), ("clear", None)]
 
 
+def test_model_alignment_replaces_active_tool_controls_and_refreshes_on_preview(toolbar_module):
+    module, *_ = toolbar_module
+    lf = sys.modules["lichtfeld"]
+    lf.ui.get_active_tool = lambda: "builtin.scale_distance"
+    lf.ui.get_split_view_mode = lambda: "independent_dual"
+    lf.ui.can_apply_align = lambda: False
+    lf.ui.get_align_preview = lambda: False
+    lf.ui.get_align_edge_to_axis = lambda: False
+    calls = []
+    lf.ui.toggle_model_alignment_preview = lambda: calls.append("preview")
+    lf.ui.apply_model_alignment = lambda: calls.append("apply")
+    lf.ui.clear_model_alignment_points = lambda: calls.append("clear")
+
+    def state(linked=False, mode="separate", swap=True, delete=False, undo=False):
+        return SimpleNamespace(active=True, preview=lf.ui.get_align_preview(), can_apply=lf.ui.can_apply_align(),
+                               linked=linked, display_mode=mode, can_swap_roles=swap,
+                               can_delete_pair=delete, can_undo=undo)
+
+    lf.ui.get_model_alignment_state = lambda: state()
+    lf.ui.set_model_alignment_display = lambda mode: calls.append(mode)
+    lf.ui.cancel_model_alignment = lambda: calls.append("cancel")
+    controller = module._ViewportToolbarController()
+    snapshot = controller._gizmo.snapshot()
+    assert snapshot["show_model_alignment_toolbar"]
+    assert not snapshot["show_scale_distance_toolbar"]
+    assert not snapshot["show_crop_toolbar"]
+    assert not snapshot["selection_group_buttons"]
+    assert not snapshot["transform_group_buttons"]
+    assert not snapshot["gizmo_buttons"]
+    picking = {record["button_id"]: record for record in snapshot["align_action_buttons"]}
+    assert picking["model-alignment-swap"]["enabled"]
+    assert not picking["model-alignment-swap"]["selected"]
+    assert "model-alignment-link" not in picking
+    assert "model-alignment-separate" not in picking
+    assert "align-apply" not in picking
+    assert not picking["model-alignment-delete"]["enabled"]
+    assert [record["button_id"] for record in snapshot["align_action_buttons"]
+            if record["separator_before"]] == ["align-clear", "model-alignment-cancel"]
+    selection_signature = controller._toolbar_signature(None)
+    lf.ui.get_model_alignment_state = lambda: state(delete=True, undo=True)
+    assert controller._toolbar_signature(None) != selection_signature
+    selected = {record["button_id"]: record for record in controller._gizmo.snapshot()["align_action_buttons"]}
+    assert selected["model-alignment-delete"]["enabled"]
+    lf.ui.get_model_alignment_state = lambda: state()
+    signature = controller._toolbar_signature(None)
+
+    lf.ui.can_apply_align = lambda: True
+    lf.ui.get_align_preview = lambda: True
+    lf.ui.get_model_alignment_state = lambda: state(True, "overlay_left", False, False, True)
+    assert controller._toolbar_signature(None) != signature
+    records = controller._gizmo.snapshot()["align_action_buttons"]
+    by_value = {record["value"]: record for record in records if record["action"] == "model_alignment_control"}
+    assert by_value["left"]["selected"]
+    assert by_value["link"]["selected"]
+    assert "swap" not in by_value
+    assert not by_value["separate"]["selected"]
+    preview = {record["button_id"]: record for record in records}
+    assert preview["align-preview"]["tooltip_key"] == "align.edit_points"
+    assert preview["align-apply"]["enabled"]
+    assert preview["align-apply"]["tooltip_key"] == "align.apply_preview"
+    assert "align-clear" not in preview
+    assert all(not record["label"] and record["icon_src"] for record in records)
+    assert by_value["left"]["icon_src"] != by_value["right"]["icon_src"]
+    assert by_value["link"]["tooltip_key"] == "align.unlink_cameras"
+    assert [record["value"] for record in records if record["separator_before"]] == ["separate", "link", "cancel"]
+    lf.ui.get_model_alignment_state = lambda: state(swap=False)
+    separate = controller._gizmo.snapshot()["align_action_buttons"]
+    assert [record["value"] for record in separate
+            if record["action"] == "model_alignment_control" and record["selected"]] == ["separate"]
+    for action in ("right", "separate", "cancel"):
+        controller._on_toolbar_action(None, None, ["model_alignment_control", action])
+    assert calls == ["overlay_right", "separate", "cancel"]
+    for action in ("model_alignment_preview", "model_alignment_apply", "model_alignment_clear"):
+        controller._on_toolbar_action(None, None, [action, ""])
+    assert calls[-3:] == ["preview", "apply", "clear"]
+
+
 def test_align_toolbar_buttons_follow_native_state(toolbar_module):
     module, _hook_calls, _remove_calls = toolbar_module
     lf_stub = sys.modules["lichtfeld"]
     ready = {"value": False}
+    lf_stub.ui.get_split_view_mode = lambda: "none"
     lf_stub.ui.can_apply_align = lambda: ready["value"]
     lf_stub.ui.get_align_axis_snap = lambda: True
     lf_stub.ui.get_align_edge_to_axis = lambda: False
@@ -2798,6 +2882,9 @@ def test_align_toolbar_buttons_follow_native_state(toolbar_module):
     assert buttons[1]["enabled"] is True
     assert buttons[3]["selected"] is False
     assert buttons[4]["selected"] is True
+
+    lf_stub.ui.get_split_view_mode = lambda: "ply_comparison"
+    assert controller._build_align_action_records("builtin.align") == buttons
 
 
 @pytest.mark.parametrize("mode,error,handled", [("walk", "No Walk support below the camera", True),

@@ -2390,6 +2390,68 @@ def start_crop_polygon() -> None:
     Edit the selected splat's or point cloud's crop polygon, or start drawing one on a camera-facing plane
     """
 
+class ModelAlignmentDisplayMode(enum.Enum):
+    SEPARATE = 0
+
+    OVERLAY_LEFT = 1
+
+    OVERLAY_RIGHT = 2
+
+class ModelAlignmentState:
+    @property
+    def active(self) -> bool: ...
+
+    @property
+    def preview(self) -> bool: ...
+
+    @property
+    def can_apply(self) -> bool: ...
+
+    @property
+    def linked(self) -> bool: ...
+
+    @property
+    def display_mode(self) -> ModelAlignmentDisplayMode: ...
+
+    @property
+    def can_swap_roles(self) -> bool: ...
+
+    @property
+    def can_delete_pair(self) -> bool: ...
+
+    @property
+    def can_undo(self) -> bool: ...
+
+def get_model_alignment_state() -> ModelAlignmentState:
+    """Current model alignment controls with named fields"""
+
+def swap_model_alignment_roles() -> None:
+    """Swap reference and moving model before picking points"""
+
+def set_model_alignment_display(mode: ModelAlignmentDisplayMode) -> None:
+    """Choose separate models or an overlay in the left or right panel"""
+
+def set_model_alignment_camera_link(linked: bool) -> None:
+    """Link or unlink navigation in the alignment preview"""
+
+def cancel_model_alignment() -> None:
+    """Cancel model alignment and restore the previous views"""
+
+def undo_model_alignment() -> None:
+    """Undo the last point edit or exit alignment preview"""
+
+def delete_model_alignment_pair() -> None:
+    """Delete the selected matching point pair"""
+
+def apply_model_alignment() -> bool:
+    """Apply the matching-point alignment and end the session"""
+
+def clear_model_alignment_points() -> None:
+    """Clear matching points while keeping them available to Undo"""
+
+def toggle_model_alignment_preview() -> None:
+    """Switch between picking matching points and previewing model alignment"""
+
 def can_apply_align() -> bool:
     """True when the align tool has 3 non-degenerate points ready to apply"""
 

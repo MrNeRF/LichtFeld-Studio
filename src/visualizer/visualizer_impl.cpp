@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "operator/ops/model_alignment_ops.hpp"
 #include "visualizer_impl.hpp"
 #include "core/animatable_property.hpp"
 #include "core/crash_handler.hpp"
@@ -1084,8 +1085,11 @@ namespace lfs::vis {
             viewport_.setViewMatrix(*rotation, eye);
             viewport_.camera.setPivot(target);
 
-            if (rendering_manager_)
+            if (rendering_manager_) {
+                if (isOnViewerThread())
+                    if (auto* alignment = op::ModelAlignmentOperator::active()) alignment->syncCamera(viewport_);
                 rendering_manager_->markCameraPoseChanged();
+            }
         });
         callback_cleanup_.add([] { vis::set_set_view_callback(nullptr); });
 
@@ -1108,6 +1112,8 @@ namespace lfs::vis {
             vp.setViewMatrix(*rotation, eye);
             vp.camera.setPivot(target);
 
+            if (isOnViewerThread())
+                if (auto* alignment = op::ModelAlignmentOperator::active()) alignment->syncCamera(vp);
             rendering_manager_->markCameraPoseChanged();
         });
         callback_cleanup_.add([] { vis::set_set_view_for_panel_callback(nullptr); });
@@ -2436,11 +2442,12 @@ namespace lfs::vis {
         }
 
         if (tool_context_ && !vr_active_) {
-            if (selection_tool_ && selection_tool_->isEnabled())
+            const bool model_alignment = rendering_manager_ && op::modelAlignmentSession();
+            if (!model_alignment && selection_tool_ && selection_tool_->isEnabled())
                 selection_tool_->update(*tool_context_);
-            if (align_tool_ && align_tool_->isEnabled())
+            if (align_tool_ && (align_tool_->isEnabled() || model_alignment))
                 align_tool_->update(*tool_context_);
-            if (scale_distance_tool_ && scale_distance_tool_->isEnabled())
+            if (!model_alignment && scale_distance_tool_ && scale_distance_tool_->isEnabled())
                 scale_distance_tool_->update(*tool_context_);
         }
 
@@ -3689,6 +3696,8 @@ namespace lfs::vis {
             }))
             return {};
         if (scene_manager_ && scene_manager_->canClearScene()) {
+            if (rendering_manager_ && op::modelAlignmentSession())
+                op::operators().cancelModalOperator();
             data_loader_->cancelPendingImports();
             if (gui_manager_)
                 gui_manager_->asyncTasks().cancelImport(false);
@@ -4381,6 +4390,8 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::deactivateProjectTools() {
+        if (rendering_manager_ && op::modelAlignmentSession())
+            op::operators().cancelModalOperator();
         lfs::core::events::tools::SetToolbarTool{
             .tool_mode = static_cast<int>(ToolType::None)}
             .emit();
@@ -4844,6 +4855,8 @@ namespace lfs::vis {
 
     void VisualizerImpl::projectMarkSessionChapterCommitted(
         const std::string_view chapter) {
+        if (chapter == "VIEW" && rendering_manager_ && op::modelAlignmentSession())
+            return;
         if (project_lifecycle_ &&
             !applying_project_session_restore_.load(
                 std::memory_order_acquire)) {

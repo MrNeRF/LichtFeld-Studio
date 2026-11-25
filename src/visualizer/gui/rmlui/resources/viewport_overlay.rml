@@ -39,7 +39,7 @@
     </div>
 
     <div id="primary-toolbar-root" class="panel-toolbar-root">
-        <div id="primary-utility-toolbar" class="toolbar-container toolbar-vertical">
+        <div id="primary-utility-toolbar" class="toolbar-container toolbar-vertical" data-class-hidden="show_model_alignment_toolbar">
             <div id="primary-utility-toolbar-handle" class="toolbar-drag-handle"
                  title="@tr:preferences.viewport_toolbar_drag">
                 <span class="toolbar-drag-line"></span>
@@ -147,7 +147,7 @@
             </div>
         </div>
 
-        <div class="toolbar-hcenter toolbar-layer-primary" data-class-align-active="show_align_toolbar" data-class-scale-distance-active="show_scale_distance_toolbar">
+        <div class="toolbar-hcenter toolbar-layer-primary" data-class-align-active="show_align_toolbar" data-class-model-align-active="show_model_alignment_toolbar" data-class-scale-distance-active="show_scale_distance_toolbar">
             <div id="primary-transform-toolbar" class="toolbar-container hidden"
                  data-class-hidden="!show_transform_toolbar">
                 <div class="icon-btn"
@@ -177,19 +177,21 @@
                 </div>
             </div>
             <div id="primary-align-toolbar" class="toolbar-container align-toolbar hidden"
-                 data-class-hidden="!show_align_toolbar">
-                <div class="icon-btn"
-                     data-for="button : align_action_buttons"
-                     data-attr-id="button.button_id"
-                     data-class-selected="button.selected"
-                     data-class-has-label="button.label != ''"
-                     data-attr-data-action="button.action_id"
-                     data-attr-title="button.tooltip_text"
-                     data-attrif-disabled="!button.enabled"
-                     data-class-disabled="!button.enabled"
-                     data-event-click="toolbar_action(button.action, button.value)">
-                    <img data-attr-src="button.icon_src" />
-                    <span class="align-button-label" data-if="button.label != ''">{{button.label}}</span>
+                 data-class-hidden="!show_align_toolbar" data-class-ground-align-toolbar="!show_model_alignment_toolbar">
+                <div class="align-action-item" data-for="button : align_action_buttons">
+                    <div class="toolbar-separator hidden" data-class-hidden="!button.separator_before"></div>
+                    <div class="icon-btn"
+                         data-attr-id="button.button_id"
+                         data-class-selected="button.selected"
+                         data-class-has-label="button.label != ''"
+                         data-attr-data-action="button.action_id"
+                         data-attr-title="button.tooltip_text"
+                         data-attrif-disabled="!button.enabled"
+                         data-class-disabled="!button.enabled"
+                         data-event-click="toolbar_action(button.action, button.value)">
+                        <img data-if="button.icon_src != ''" data-attr-src="button.icon_src" />
+                        <span class="align-button-label" data-if="button.label != ''">{{button.label}}</span>
+                    </div>
                 </div>
             </div>
             <div id="primary-scale-distance-toolbar" class="toolbar-container scale-distance-toolbar hidden"
@@ -350,7 +352,7 @@
     </div>
 
     <div id="secondary-toolbar-root" class="panel-toolbar-root hidden">
-        <div id="secondary-utility-toolbar" class="toolbar-container toolbar-vertical">
+        <div id="secondary-utility-toolbar" class="toolbar-container toolbar-vertical" data-class-hidden="show_model_alignment_toolbar">
             <div id="secondary-utility-toolbar-handle" class="toolbar-drag-handle"
                  title="@tr:preferences.viewport_toolbar_drag">
                 <span class="toolbar-drag-line"></span>
@@ -487,20 +489,22 @@
                     <img data-attr-src="button.icon_src" />
                 </div>
             </div>
-            <div id="secondary-align-toolbar" class="toolbar-container align-toolbar hidden"
-                 data-class-hidden="!show_align_toolbar">
-                <div class="icon-btn"
-                     data-for="button : align_action_buttons"
-                     data-attr-id="button.button_id"
-                     data-class-selected="button.selected"
-                     data-class-has-label="button.label != ''"
-                     data-attr-data-action="button.action_id"
-                     data-attr-title="button.tooltip_text"
-                     data-attrif-disabled="!button.enabled"
-                     data-class-disabled="!button.enabled"
-                     data-event-click="toolbar_action(button.action, button.value)">
-                    <img data-attr-src="button.icon_src" />
-                    <span class="align-button-label" data-if="button.label != ''">{{button.label}}</span>
+            <div id="secondary-align-toolbar" class="toolbar-container align-toolbar ground-align-toolbar hidden"
+                 data-class-hidden="!show_align_toolbar || show_model_alignment_toolbar">
+                <div class="align-action-item" data-for="button : align_action_buttons">
+                    <div class="toolbar-separator hidden" data-class-hidden="!button.separator_before"></div>
+                    <div class="icon-btn"
+                         data-attr-id="button.button_id"
+                         data-class-selected="button.selected"
+                         data-class-has-label="button.label != ''"
+                         data-attr-data-action="button.action_id"
+                         data-attr-title="button.tooltip_text"
+                         data-attrif-disabled="!button.enabled"
+                         data-class-disabled="!button.enabled"
+                         data-event-click="toolbar_action(button.action, button.value)">
+                        <img data-if="button.icon_src != ''" data-attr-src="button.icon_src" />
+                        <span class="align-button-label" data-if="button.label != ''">{{button.label}}</span>
+                    </div>
                 </div>
             </div>
             <div id="secondary-scale-distance-toolbar" class="toolbar-container scale-distance-toolbar hidden"

@@ -829,12 +829,17 @@ def test_scene_tree_delete_key_uses_selection_gated_confirmation_path():
         / "scene_graph_element.cpp"
     ).read_text(encoding="utf-8")
 
-    delete_case = input_controller.index("case input::Action::DELETE_NODE:")
     confirmation_route = input_controller.index(
-        "gui->requestDeleteSceneSelectionIfAvailable()", delete_case
+        "gui->requestDeleteSceneSelectionIfAvailable()"
     )
-    legacy_remove = input_controller.index("cmd::RemovePLY", delete_case)
-    assert delete_case < confirmation_route < legacy_remove
+    # Earlier modal guards also mention DELETE_NODE without deleting anything.
+    # Bound the check to the dispatch case that actually requests confirmation.
+    delete_case = input_controller.rfind(
+        "case input::Action::DELETE_NODE:", 0, confirmation_route
+    )
+    assert delete_case >= 0
+    delete_handler = re.split(r"\n\s*case ", input_controller[delete_case:], maxsplit=1)[0]
+    assert delete_handler.index("gui->requestDeleteSceneSelectionIfAvailable()") < delete_handler.index("cmd::RemovePLY")
     assert "requestDeleteSceneSelectionIfAvailable" in gui_manager
     assert "requestDeleteSelectionIfAvailable" in scene_panel
     assert "tree_el_->selectedCount() == 0" in scene_panel

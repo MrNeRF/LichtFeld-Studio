@@ -1915,7 +1915,7 @@ namespace lfs::vis {
                                                    const std::optional<SplitViewPanelId> panel) {
         if (x < 0 || y < 0 || x >= source_size.x || y >= source_size.y)
             return -1.0f;
-        const float depth = sampleDepthAtPixel(x, y, panel, true, exact_surface_picking_, source_size);
+        const float depth = sampleDepthAtPixel(x, y, panel, true, exactSurfacePicking(), source_size);
         // Point-cloud readback already schedules its own GUI-only retry.
         if (depth == PointCloudVulkanRenderer::kDepthSamplePending && !viewport_artifact_service_.hasDepthSampler()) {
             markDirty(DirtyFlag::VIEWPORT, FrameReason::Overlay);

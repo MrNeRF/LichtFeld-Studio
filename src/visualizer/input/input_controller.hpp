@@ -26,6 +26,11 @@
 struct SDL_Window;
 struct SDL_Cursor;
 
+namespace lfs::core {
+    class Scene;
+    class SceneNode;
+} // namespace lfs::core
+
 namespace lfs::vis {
 
     namespace input {
@@ -219,6 +224,8 @@ namespace lfs::vis {
         void handleFileDrop(const std::vector<std::string>& paths);
         void onWindowFocusLost();
         bool focusSelection();
+        bool frameVisibleNode(Viewport& viewport, const core::Scene& scene, const core::SceneNode& node,
+                              const glm::mat4& preview_transform = glm::mat4(1.0f));
         // Moves the active viewport to its home.
         void goHome();
         // Makes the active viewport's current view its home.
