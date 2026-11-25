@@ -2391,6 +2391,56 @@ namespace {
                      capture(lfs::training::Family::Photometric, GpuBackend::Vulkan), true);
     }
 
+    // MRNF's blend peak fold on Vulkan against CUDA's blend_peak_update_kernel, transliterated: a positive step peak
+    // counts a render, the running peak decays and rises to the step peak, and the step peak is cleared. A fold that
+    // cleared the step peak before its uses counted no render through MoltenVK and only decayed the running peak, so
+    // MRNF's retire quota and keep-covered never applied.
+    TEST(TrainingVulkanOps, MrnfBlendPeakFoldCountsRendersAndRaisesThePeak) {
+        if (!lfs::core::gpu_backend_available(GpuBackend::Vulkan))
+            GTEST_SKIP() << "Vulkan device unavailable";
+        const lfs::test::DefaultGpuBackendForTesting scope(GpuBackend::Vulkan);
+        ASSERT_TRUE(scope.switched());
+        const auto* const mrnf = lfs::training::training_ops(GpuBackend::Vulkan).mrnf;
+        ASSERT_TRUE(mrnf != nullptr && mrnf->growth != nullptr);
+        constexpr size_t n = 2063;
+        constexpr float decay = .975f;
+        std::mt19937 rng(785);
+        std::uniform_real_distribution<float> step_dist(-.04f, .1f), peak_dist(0.f, .04f);
+        std::vector<float> step(n), peak(n), renders(n);
+        for (size_t i = 0; i < n; ++i) {
+            step[i] = step_dist(rng);
+            peak[i] = peak_dist(rng);
+            renders[i] = float(27 + rng() % 7);
+        }
+        // A zero step peak, of either sign, counts no render.
+        step[3] = 0.f;
+        step[4] = -0.f;
+        auto step_gpu = Tensor::from_vector(step, {n}, Device::GPU);
+        auto peak_gpu = Tensor::from_vector(peak, {n}, Device::GPU);
+        auto renders_gpu = Tensor::from_vector(renders, {n}, Device::GPU);
+        mrnf->growth->blend_peak(step_gpu, peak_gpu, renders_gpu, decay);
+        const auto step_after = step_gpu.to_vector();
+        const auto peak_after = peak_gpu.to_vector();
+        const auto renders_after = renders_gpu.to_vector();
+        size_t rendered = 0, uncounted = 0, wrong_count = 0, raised = 0, wrong_peak = 0, uncleared = 0;
+        for (size_t i = 0; i < n; ++i) {
+            const bool render = step[i] > 0.f;
+            const float decayed = peak[i] * decay;
+            rendered += render ? 1 : 0;
+            raised += step[i] > decayed ? 1 : 0;
+            if (renders_after[i] != renders[i] + (render ? 1.f : 0.f)) {
+                ++wrong_count;
+                uncounted += render && renders_after[i] == renders[i] ? 1 : 0;
+            }
+            wrong_peak += peak_after[i] != std::max(decayed, step[i]) ? 1 : 0;
+            uncleared += step_after[i] != 0.f ? 1 : 0;
+        }
+        EXPECT_EQ(wrong_count, 0u) << uncounted << " of " << rendered << " renders not counted";
+        EXPECT_EQ(wrong_peak, 0u) << wrong_peak << " of " << n << " running peaks wrong (" << raised
+                                  << " should rise to the step peak)";
+        EXPECT_EQ(uncleared, 0u) << "step peaks left";
+    }
+
     Capture capture_fast_nonzero(GpuBackend backend, int degree, bool mip, bool symmetric = false, bool old_momentum = false, bool quantized = false, DensificationType densify = DensificationType::MRNF, bool september = false, float disabled_dc_sh_weight = -1.f, bool disable_sh_rest = false, bool rendered_only = false) {
         const lfs::test::DefaultGpuBackendForTesting scope(backend);
         Capture out;
