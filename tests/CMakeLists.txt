@@ -1238,6 +1238,7 @@ if(NOT LFS_HAS_CUDA)
             test_training_ops_metal_gsplat.cpp
             test_training_ops_metal_losses.cpp
             test_training_ops_metal_adam_sh.cpp
+            test_sh_rest_past_32bit_wrap.cpp
             test_training_ops_metal_fast.cpp
             test_roi_masks.cpp
             test_roi_polygon_weight_map.cpp
@@ -1638,6 +1639,7 @@ set(TEST_FILES
     test_raster_tile_keys.cu
     test_sh_swizzle_layout.cpp
     test_shn_bda_index_math.cpp
+    test_sh_rest_past_32bit_wrap.cpp
     test_python_io.cpp
     test_extended_unary_ops_vs_torch.cpp
     test_scene_validity.cpp
