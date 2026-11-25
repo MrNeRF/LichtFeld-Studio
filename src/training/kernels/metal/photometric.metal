@@ -674,6 +674,70 @@ static float blur_weight(device const uchar* mask, const int y, const int x, con
     return kPhotoMaskedWindow ? photo_mask(mask, uint(y) * uint(W) + uint(x)) : 1.0f;
 }
 
+// Four mask weights from index (packed: any alignment).
+static float4 blur_mask4(device const uchar* mask, const uint index) {
+    if (kPhotoMaskBytes != 0)
+        return select(float4(0.0f), float4(1.0f), uchar4(*(device const packed_uchar4*)(mask + index)) != uchar4(0));
+    return float4(*(device const packed_float4*)((device const float*)mask + index));
+}
+
+// Four photo values from index (packed: any alignment).
+static float4 blur_target4(device const uchar* target, const uint index) {
+    if (kPhotoTargetBytes != 0)
+        return float4(uchar4(*(device const packed_uchar4*)(target + index))) * (1.0f / 255.0f);
+    return float4(*(device const packed_float4*)((device const float*)target + index));
+}
+
+// One channel's loads: keep corrected and keep raw over the blur's reach (E x E) into src, the photo over the SSIM
+// span into photo. Four columns per item; groups that leave the image or the row load element by element.
+static void blur_load_channel(constant PhotoBlurForwardParams& p, const uint base, const int y0, const int x0,
+                              const int R, const uint rank, threadgroup float2* src, threadgroup float* photo) {
+    const int H = p.height, W = p.width, E = kPhotoSpan + 2 * R;
+    const int reach_quads = (E + 3) / 4;
+    for (uint i = rank; i < uint(E * reach_quads); i += uint(kPhotoTile * kPhotoTile)) {
+        const int yy = int(i) / reach_quads, xx = 4 * (int(i) % reach_quads);
+        const int gy = y0 + yy - kPhotoHalo - R, gx = x0 + xx - kPhotoHalo - R;
+        threadgroup float2* out = src + yy * kBlurReachPitch + xx;
+        if (xx + 4 <= E && gy >= 0 && gy < H && gx >= 0 && gx + 4 <= W) {
+            const uint g = base + uint(gy) * uint(W) + uint(gx);
+            const float4 c = float4(*(device const packed_float4*)(p.corrected + g));
+            const float4 r = float4(*(device const packed_float4*)(p.raw + g));
+            const bool4 keep = kPhotoMaskedWindow ? blur_mask4(p.mask, uint(gy) * uint(W) + uint(gx)) > 0.0f : bool4(true);
+            out[0] = keep.x ? float2(c.x, r.x) : float2(0.0f);
+            out[1] = keep.y ? float2(c.y, r.y) : float2(0.0f);
+            out[2] = keep.z ? float2(c.z, r.z) : float2(0.0f);
+            out[3] = keep.w ? float2(c.w, r.w) : float2(0.0f);
+        } else {
+            for (int k = 0; k < 4 && xx + k < E; ++k) {
+                float2 value = float2(0.0f);
+                if (blur_weight(p.mask, gy, gx + k, H, W) > 0.0f) {
+                    const uint g = base + uint(gy) * uint(W) + uint(gx + k);
+                    value = float2(p.corrected[g], p.raw[g]);
+                }
+                out[k] = value;
+            }
+        }
+    }
+    constexpr int kSpanQuads = (kPhotoSpan + 3) / 4;
+    for (uint i = rank; i < uint(kPhotoSpan * kSpanQuads); i += uint(kPhotoTile * kPhotoTile)) {
+        const int yy = int(i) / kSpanQuads, xx = 4 * (int(i) % kSpanQuads);
+        const int gy = y0 + yy - kPhotoHalo, gx = x0 + xx - kPhotoHalo;
+        threadgroup float* out = photo + yy * kPhotoSpan + xx;
+        if (xx + 4 <= kPhotoSpan && gy >= 0 && gy < H && gx >= 0 && gx + 4 <= W) {
+            const float4 y = blur_target4(p.target, base + uint(gy) * uint(W) + uint(gx));
+            out[0] = y.x;
+            out[1] = y.y;
+            out[2] = y.z;
+            out[3] = y.w;
+        } else {
+            for (int k = 0; k < 4 && xx + k < kPhotoSpan; ++k) {
+                const bool in = gx + k >= 0 && gx + k < W && gy >= 0 && gy < H;
+                out[k] = in ? photo_target(p.target, base + uint(gy) * uint(W) + uint(gx + k)) : 0.0f;
+            }
+        }
+    }
+}
+
 // One decoupled SSIM branch from window means (bt_branch): returns S, writes cs and the partials in the order of
 // the half4 stores.
 static float blur_branch(const float mc, const float mr, const float mrr, const float my, const float myy,
@@ -863,21 +927,7 @@ static void blur_forward_tile(constant PhotoBlurForwardParams& p, const uint til
     for (int c = 0; c < C; ++c) {
         const uint base = (b * uint(C) + uint(c)) * plane;
         threadgroup_barrier(mem_flags::mem_threadgroup);
-        for (uint i = rank; i < uint(E * E); i += uint(kPhotoTile * kPhotoTile)) {
-            const int yy = int(i) / E, xx = int(i) % E;
-            const int gy = y0 + yy - kPhotoHalo - R, gx = x0 + xx - kPhotoHalo - R;
-            float2 value = float2(0.0f);
-            if (blur_weight(p.mask, gy, gx, H, W) > 0.0f) {
-                const uint g = base + uint(gy) * uint(W) + uint(gx);
-                value = float2(p.corrected[g], p.raw[g]);
-            }
-            src[yy * kBlurReachPitch + xx] = value;
-        }
-        for (uint i = rank; i < kPhotoSpanCells; i += uint(kPhotoTile * kPhotoTile)) {
-            const int gy = y0 + int(i / kPhotoSpan) - kPhotoHalo, gx = x0 + int(i % kPhotoSpan) - kPhotoHalo;
-            const bool in = gx >= 0 && gx < W && gy >= 0 && gy < H;
-            photo[i] = in ? photo_target(p.target, base + uint(gy) * uint(W) + uint(gx)) : 0.0f;
-        }
+        blur_load_channel(p, base, y0, x0, R, rank, src, photo);
         threadgroup_barrier(mem_flags::mem_threadgroup);
         float ms[5], mb[5];
         blur_moments<0>(t, rank, R, src, photo, weights, rows, inv_window, ms);
