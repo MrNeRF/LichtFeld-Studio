@@ -226,6 +226,11 @@ namespace lfs::vis::op {
     }
 
     bool OperatorRegistry::pollImpl(const RegisteredOperator& reg, const OperatorProperties* props) const {
+        if (!props && reg.descriptor.builtin_id == BuiltinOp::ModelAlignment &&
+            active_modal_builtin_.load() == BuiltinOp::ModelAlignment && active_modal_) {
+            auto ctx = makeContext();
+            return ctx && active_modal_->poll(*ctx);
+        }
         if (props != nullptr) {
             if (reg.poll_fn) {
                 return reg.poll_fn();

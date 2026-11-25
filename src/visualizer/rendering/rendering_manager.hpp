@@ -429,8 +429,6 @@ namespace lfs::vis {
         struct IndependentSplitOverrides {
             std::array<IndependentPanelOverride, 2> panels;
             bool exact_surface_picking = false;
-            bool render_meshes = true;
-            bool apply_scene_effects = true;
         };
         // Viewer-thread rendering inputs, borrowed from the active workflow's state.
         void setIndependentPanelOverrides(std::optional<IndependentSplitOverrides> overrides) {

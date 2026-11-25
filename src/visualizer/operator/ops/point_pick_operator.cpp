@@ -191,15 +191,6 @@ namespace lfs::vis::op {
                 if (event->over_gui) {
                     return OperatorResult::PASS_THROUGH;
                 }
-                if (supportsPointEditing() && !is_pick_button && mb->button == static_cast<int>(input::AppMouseButton::RIGHT)) {
-                    if (const auto hit = hitTestPoint(mb->position.x, mb->position.y)) {
-                        selected_point_ = hit;
-                        state_.setSelectedPoint(hit);
-                        markOverlayDirty();
-                        showPointMenu(mb->position, *hit);
-                        return OperatorResult::RUNNING_MODAL;
-                    }
-                }
                 if (is_pick_button) {
                     drag_edit_recorded_ = false;
                     press_active_ = true;

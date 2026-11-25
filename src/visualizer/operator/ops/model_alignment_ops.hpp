@@ -5,8 +5,8 @@
 #include "point_pick_operator.hpp"
 #include "rendering/rendering_types.hpp"
 #include <array>
-#include <atomic>
 #include <memory>
+#include <mutex>
 #include <span>
 
 namespace lfs::vis::op {
@@ -54,7 +54,11 @@ namespace lfs::vis::op {
         const Session* session() const { return session_.get(); }
         // Project saves may run on the training worker. Only the immutable previous_*
         // fields are safe there; this lease keeps them alive through modal teardown.
-        static std::shared_ptr<const Session> savedViewSession() { return published_session_.load().lock(); }
+        static std::shared_ptr<const Session> savedViewSession();
+        static constexpr bool blocksSceneAction(const input::Action action) {
+            return action == input::Action::DELETE_NODE || action == input::Action::PIE_MENU ||
+                   action == input::Action::APPLY_CROP_BOX || action == input::Action::TOGGLE_SELECTION_CROP_FILTER;
+        }
         PointPickState& pointState() { return point_state_; }
         const PointPickState& pointState() const { return point_state_; }
         bool canUndoPointEdit() const { return !edits_.empty(); }
@@ -82,7 +86,9 @@ namespace lfs::vis::op {
         PointPickState point_state_;
         PreviewFeedback feedback_;
         std::shared_ptr<Session> session_;
-        static std::atomic<std::weak_ptr<const Session>> published_session_;
+        static std::mutex published_session_mutex_;
+        static std::weak_ptr<const Session> published_session_;
+        void publishSavedView();
         struct PairEdit {
             bool pending_right = false;
             std::vector<size_t> colors;
@@ -100,7 +106,6 @@ namespace lfs::vis::op {
         void pointsCleared() override { pair_edit_ = {}; }
         void appendPickedPoint(const PointSample&) override;
         void erasePickedPoint(size_t, bool) override;
-        void showPointMenu(glm::dvec2, int) override;
         bool acceptsPointSample(const PointSample&, std::optional<int>) const override;
         bool applyPickedPoints(OperatorContext&, float) override;
         std::optional<OperatorResult> prepareModal(OperatorContext&) override;

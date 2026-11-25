@@ -145,6 +145,8 @@ namespace lfs::vis {
         ASSERT_TRUE(op::operators().isModal(op::BuiltinOp::ModelAlignment));
         ASSERT_NE(op::ModelAlignmentOperator::active(), nullptr);
         EXPECT_EQ(op::ModelAlignmentOperator::active()->session()->nodes[0], scene.getNode("reference")->uuid);
+        manager->selectNodes({"reference"});
+        EXPECT_TRUE(op::operators().poll(op::BuiltinOp::ModelAlignment));
         ToolContext context(renderer, manager, &viewer.getViewport(), nullptr);
         ToolBase* tool = viewer.getAlignTool();
         ASSERT_NE(tool, nullptr);
@@ -1231,6 +1233,15 @@ namespace lfs::vis::op {
         ASSERT_FALSE(HasFatalFailure());
         EXPECT_TRUE(operation_.poll(*context_));
         manager_->getScene().setNodeLocked("reference", true);
+        EXPECT_TRUE(operation_.poll(*context_));
+        ModelAlignmentOperator idle;
+        EXPECT_TRUE(idle.poll(*context_));
+        OperatorProperties reversed;
+        reversed.set("reference", std::string("mobile"));
+        reversed.set("moving", std::string("reference"));
+        EXPECT_FALSE(idle.poll(*context_, &reversed));
+        manager_->selectNodes({"reference"});
+        EXPECT_FALSE(idle.poll(*context_));
         EXPECT_TRUE(operation_.poll(*context_));
         manager_->getScene().setNodeLocked("mobile", true);
         EXPECT_FALSE(operation_.poll(*context_));

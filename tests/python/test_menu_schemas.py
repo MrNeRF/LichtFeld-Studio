@@ -264,7 +264,7 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     edit_items = edit_mod.EditMenu().menu_items()
     lf = sys.modules["lichtfeld"]
     original_split_mode = lf.ui.get_split_view_mode
-    monkeypatch.setattr(lf.ui, "get_split_view_mode", lambda: "model_alignment")
+    monkeypatch.setattr(lf.ui, "get_split_view_mode", lambda: "independent_dual")
     local_actions = []
     monkeypatch.setattr(lf.ui, "get_model_alignment_state", lambda: SimpleNamespace(active=True, can_undo=True), raising=False)
     monkeypatch.setattr(lf.ui, "undo_model_alignment", lambda: local_actions.append("undo"), raising=False)

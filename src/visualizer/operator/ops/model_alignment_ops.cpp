@@ -3,13 +3,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "model_alignment_ops.hpp"
-#include "core/event_bridge/localization_manager.hpp"
 #include "core/services.hpp"
 #include "gui/gui_manager.hpp"
-#include "gui/string_keys.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
-#include "operator/operator_registry.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/viewport_request_builder.hpp"
 #include "scene/scene_manager.hpp"
@@ -26,7 +23,18 @@
 namespace lfs::vis::op {
 
     ModelAlignmentOperator* ModelAlignmentOperator::active_ = nullptr;
-    std::atomic<std::weak_ptr<const ModelAlignmentOperator::Session>> ModelAlignmentOperator::published_session_;
+    std::mutex ModelAlignmentOperator::published_session_mutex_;
+    std::weak_ptr<const ModelAlignmentOperator::Session> ModelAlignmentOperator::published_session_;
+
+    std::shared_ptr<const ModelAlignmentOperator::Session> ModelAlignmentOperator::savedViewSession() {
+        const std::lock_guard lock(published_session_mutex_);
+        return published_session_.lock();
+    }
+
+    void ModelAlignmentOperator::publishSavedView() {
+        const std::lock_guard lock(published_session_mutex_);
+        published_session_ = session_;
+    }
     const OperatorDescriptor ModelAlignmentOperator::DESCRIPTOR = {
         .builtin_id = BuiltinOp::ModelAlignment,
         .label = "Align Models",
@@ -42,10 +50,19 @@ namespace lfs::vis::op {
     ModelAlignmentOperator::~ModelAlignmentOperator() { end(); }
     namespace {
         std::array<const core::SceneNode*, 2> selectedPair(const OperatorContext& ctx, const OperatorProperties* props) {
-            const auto names = ctx.scene().getSelectedNodeNames();
+            auto names = ctx.scene().getSelectedNodeNames();
             if (names.size() != 2)
                 return {};
             const auto& scene = ctx.scene().getScene();
+            // Use scene order for callers without explicit roles.
+            for (const auto* node : scene.getNodes()) {
+                if (node->name == names[0])
+                    break;
+                if (node->name == names[1]) {
+                    std::swap(names[0], names[1]);
+                    break;
+                }
+            }
             const auto reference = props ? props->get_or<std::string>("reference", names[0]) : names[0];
             const auto moving = props ? props->get_or<std::string>("moving", names[1]) : names[1];
             if (reference == moving || std::find(names.begin(), names.end(), reference) == names.end() ||
@@ -55,8 +72,11 @@ namespace lfs::vis::op {
         }
     } // namespace
     bool ModelAlignmentOperator::poll(const OperatorContext& ctx, const OperatorProperties* props) const {
-        const auto [reference, mobile] = selectedPair(ctx, props);
-        return reference && mobile && canBegin(ctx.scene().getScene(), *reference, *mobile);
+        const auto& scene = ctx.scene().getScene();
+        const auto [reference, mobile] = session_
+                                             ? std::array{scene.getNodeByUuid(session_->nodes[0]), scene.getNodeByUuid(session_->nodes[1])}
+                                             : selectedPair(ctx, props);
+        return reference && mobile && canBegin(scene, *reference, *mobile);
     }
     OperatorResult ModelAlignmentOperator::invoke(OperatorContext& ctx, OperatorProperties& props) {
         if (!session_) {
@@ -85,24 +105,6 @@ namespace lfs::vis::op {
             return sample.panel == (pendingPairOnRight() ? SplitViewPanelId::Right : SplitViewPanelId::Left);
         const bool right = *index % 2 != 0;
         return sample.panel == (right ? SplitViewPanelId::Right : SplitViewPanelId::Left);
-    }
-
-    void ModelAlignmentOperator::showPointMenu(const glm::dvec2 position, const int point) {
-        auto* gui = services().guiOrNull();
-        if (!gui)
-            return;
-        gui->globalContextMenu().request(
-            {{.label = LOC("align.delete_pair"), .action = "delete_pair"}},
-            static_cast<float>(position.x), static_cast<float>(position.y),
-            [point](std::string_view) {
-                auto& registry = operators();
-                auto* alignment = ModelAlignmentOperator::active();
-                if (!registry.isModal(BuiltinOp::ModelAlignment) || !alignment ||
-                    alignment->pointState().getSelectedPoint() != point)
-                    return;
-                alignment->pointState().requestUiAction(PointPickState::UiAction::DeleteSelected);
-                (void)registry.dispatchModalEvent({});
-            });
     }
 
     std::optional<glm::mat4> ModelAlignmentOperator::computePairPreviewTransform() const {
@@ -256,14 +258,8 @@ namespace lfs::vis::op {
     }
 
     OperatorResult ModelAlignmentOperator::handleToolAction(OperatorContext& ctx, const input::Action action) {
-        switch (action) {
-        case input::Action::DELETE_NODE:
-        case input::Action::PIE_MENU:
-        case input::Action::APPLY_CROP_BOX:
-        case input::Action::TOGGLE_SELECTION_CROP_FILTER:
+        if (blocksSceneAction(action))
             return OperatorResult::RUNNING_MODAL;
-        default: break;
-        }
         if (action == input::Action::REDO)
             return OperatorResult::RUNNING_MODAL;
         if (action == input::Action::UNDO) {
@@ -345,7 +341,7 @@ namespace lfs::vis::op {
             .previous_secondary = renderer->projectSecondaryViewport(),
         });
         active_ = this;
-        published_session_.store(session_);
+        publishSavedView();
         renderer->restoreSplitViewMode(SplitViewMode::IndependentDual, primary,
                                        splitViewUsesIndependentPanels(settings.split_view_mode) ? std::nullopt : std::optional{0.5f});
         auto& secondary = renderer->projectSecondaryViewport();
@@ -375,7 +371,7 @@ namespace lfs::vis::op {
             restoreAlignmentCamera(renderer->projectSecondaryViewport(), saved->previous_secondary);
             renderer->setFocusedSplitPanel(saved->previous_focus);
         }
-        published_session_.store({});
+        publishSavedView();
         publish_align_state_generation();
     }
     void ModelAlignmentOperator::publishView() {
@@ -384,8 +380,6 @@ namespace lfs::vis::op {
             return;
         RenderingManager::IndependentSplitOverrides overrides{
             .exact_surface_picking = !session_->preview,
-            .render_meshes = false,
-            .apply_scene_effects = false,
         };
         for (size_t i = 0; i < overrides.panels.size(); ++i) {
             auto& panel = overrides.panels[i];

@@ -2691,9 +2691,9 @@ namespace lfs::vis {
             }
         } viewer_borrow_publisher{live_trainer, vksplat_viewport_renderer_.get()};
 
-        if (independent_panel_overrides_ && !independent_panel_overrides_->render_meshes)
+        if (independent_panel_overrides_) {
             scene_state.meshes.clear();
-        if (!independent_panel_overrides_ || independent_panel_overrides_->apply_scene_effects) {
+        } else {
             scene_state.reveal = sequencer_reveal_;
             if (scene_manager)
                 attachCustomEffect(scene_state, *scene_manager, scene_time_);

@@ -33,7 +33,6 @@ namespace lfs::vis::op {
         virtual void pointsCleared() {}
         virtual void appendPickedPoint(const PointSample& sample);
         virtual void erasePickedPoint(size_t index, bool selected);
-        virtual void showPointMenu(glm::dvec2, int) {}
         virtual bool applyPickedPoints(OperatorContext& ctx, float value) = 0;
         virtual void handleToolUiAction(OperatorContext&, PointPickState::UiAction) {}
         virtual OperatorResult handleToolAction(OperatorContext&, input::Action) { return OperatorResult::PASS_THROUGH; }
