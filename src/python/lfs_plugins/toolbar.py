@@ -831,7 +831,7 @@ class _GizmoToolbarController:
                                tooltip_key="align.preview", tooltip_text="Preview alignment",
                                enabled=alignment.can_apply),
                 _button_record("align-clear", "model_alignment_clear", "", _icon_src("reset"),
-                               tooltip_key="align.clear", tooltip_text="Clear", enabled=True),
+                               tooltip_key="align.clear", tooltip_text="Clear", enabled=True, separator_before=True),
             ]
             controls = (
                 ("swap", "align.swap_roles" if can_swap else "align.swap_unavailable", "Swap roles", "",
@@ -843,7 +843,7 @@ class _GizmoToolbarController:
             _button_record(f"model-alignment-{action}", "model_alignment_control", action,
                            _icon_src(icon) if icon else "", tooltip_key=key, tooltip_text=fallback,
                            label=label, selected=selected, enabled=enabled,
-                           separator_before=preview and action in ("separate", "link", "cancel"))
+                           separator_before=action == "cancel" or (preview and action in ("separate", "link")))
             for action, key, fallback, icon, label, selected, enabled in controls
         ]
 

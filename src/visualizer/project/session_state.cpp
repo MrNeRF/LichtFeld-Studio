@@ -2700,7 +2700,7 @@ namespace lfs::vis::project {
         }
 
         auto settings = rendering_manager->getSettings();
-        const auto* alignment = op::modelAlignmentSession();
+        const auto alignment = op::ModelAlignmentOperator::savedViewSession();
         if (alignment) {
             settings.split_view_mode = alignment->previous_mode;
             settings.split_position = alignment->previous_position;

@@ -369,8 +369,7 @@ body {
     top: 5dp;
 }
 
-.toolbar-layer-primary.align-active,
-.toolbar-layer-primary.scale-distance-active {
+.toolbar-layer-primary.model-align-active {
     z-index: 2;
 }
 
@@ -2291,6 +2290,16 @@ body {
     justify-content: center;
 }
 
+.toolbar-hcenter.model-align-active {
+    padding: 0;
+}
+
+.toolbar-hcenter.model-align-active .align-toolbar {
+    max-width: none;
+    flex-wrap: nowrap;
+    flex-shrink: 0;
+}
+
 /* Alignment options need names as well as icons. */
 .toolbar-hcenter .align-toolbar .icon-btn.has-label {
     width: auto;
@@ -2302,6 +2311,7 @@ body {
 .align-action-item {
     display: flex;
     align-items: center;
+    flex-shrink: 0;
 }
 
 .align-button-label {

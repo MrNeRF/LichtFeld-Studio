@@ -23,6 +23,7 @@
 #include "operator/operator_id.hpp"
 #include "operator/operator_registry.hpp"
 #include "operator/ops/crop_polygon_ops.hpp"
+#include "operator/ops/model_alignment_ops.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering.hpp"
@@ -3657,7 +3658,7 @@ namespace lfs::vis::gui {
         const auto snap_to_axis = [&](ViewportGizmoPanelTarget& panel, const int encoded_axis) {
             panel.viewport->camera.setAxisAlignedView(encoded_axis % 3, encoded_axis >= 3);
             rendering_manager->setGridPlaneForPanel(panel.panel, encoded_axis % 3);
-            rendering_manager->markCameraPoseChanged();
+            publishViewportGizmoCameraMove(*panel.viewport);
         };
 
         // A press or drag owns the pointer until release, even over UI.
@@ -3668,7 +3669,7 @@ namespace lfs::vis::gui {
                 if (delta != glm::vec2(0.0f)) {
                     viewport_gizmo_drag_pos_ += delta;
                     orbitViewportGizmo(*panel->viewport, time);
-                    rendering_manager->markCameraPoseChanged();
+                    publishViewportGizmoCameraMove(*panel->viewport);
                 }
                 return;
             }
@@ -3682,7 +3683,7 @@ namespace lfs::vis::gui {
                         rendering_manager->setGridPlaneForPanel(panel->panel, snapped_axis);
                     }
                 }
-                rendering_manager->markCameraPoseChanged();
+                publishViewportGizmoCameraMove(*panel->viewport);
             }
             viewport_gizmo_dragging_ = false;
             viewport_gizmo_camera_snapshot_valid_ = false;
@@ -3762,11 +3763,17 @@ namespace lfs::vis::gui {
         viewport_gizmo_drag_pos_ = mouse;
         if (mouse != viewport_gizmo_press_pos_) {
             orbitViewportGizmo(viewport, time);
-            if (auto* const rendering_manager = viewer_->getRenderingManager())
-                rendering_manager->markCameraPoseChanged();
+            publishViewportGizmoCameraMove(viewport);
         }
         if (SDL_Window* const window = viewer_->getWindow())
             SDL_SetWindowRelativeMouseMode(window, true);
+    }
+
+    void GizmoManager::publishViewportGizmoCameraMove(const Viewport& viewport) {
+        if (auto* alignment = op::ModelAlignmentOperator::active())
+            alignment->syncCamera(viewport);
+        if (auto* renderer = viewer_->getRenderingManager())
+            renderer->markCameraPoseChanged();
     }
 
     void GizmoManager::orbitViewportGizmo(Viewport& viewport, const float time) {
@@ -3972,8 +3979,8 @@ namespace lfs::vis::gui {
             viewport_gizmo_dragging_ = false;
             viewport_gizmo_camera_snapshot_valid_ = false;
             releaseViewportGizmoPointer();
-            if (rendering_manager)
-                rendering_manager->markCameraPoseChanged();
+            if (active_viewport)
+                publishViewportGizmoCameraMove(*active_viewport);
             cancelled = true;
         }
         if (viewport_gizmo_pressed_) {

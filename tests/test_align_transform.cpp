@@ -1086,13 +1086,19 @@ namespace lfs::vis::op {
         EXPECT_EQ(operation_.session(), nullptr);
         EXPECT_EQ(manager_->getNodeTransform("mobile"), original);
         auto& scene = manager_->getScene();
+        std::shared_ptr<const ModelAlignmentOperator::Session> saved_view;
         {
             ModelAlignmentOperator replacement;
             ASSERT_TRUE(replacement.begin(pair_primary_, scene, *scene.getNode("reference"), *scene.getNode("mobile")));
+            saved_view = ModelAlignmentOperator::savedViewSession();
+            ASSERT_TRUE(saved_view);
             OperatorProperties props;
             ASSERT_EQ(replacement.invoke(*context_, props), OperatorResult::RUNNING_MODAL);
         }
         EXPECT_EQ(operation_.session(), nullptr);
+        EXPECT_FALSE(ModelAlignmentOperator::savedViewSession());
+        ASSERT_TRUE(saved_view);
+        EXPECT_EQ(saved_view->previous_mode, SplitViewMode::Disabled);
         EXPECT_EQ(manager_->getNodeTransform("mobile"), original);
         EXPECT_EQ(undoHistory().undoCount(), 0u);
     }

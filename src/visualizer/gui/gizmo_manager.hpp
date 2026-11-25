@@ -149,6 +149,7 @@ namespace lfs::vis {
             VisualizerImpl* viewer_;
             void beginViewportGizmoOrbit(::Viewport& viewport, const glm::vec2& mouse, float time);
             void orbitViewportGizmo(::Viewport& viewport, float time);
+            void publishViewportGizmoCameraMove(const ::Viewport& viewport);
             void releaseViewportGizmoPointer();
             [[nodiscard]] std::optional<core::NodeId> selectedCropVolumeNodeId(core::NodeId target_id) const;
             [[nodiscard]] bool ensureCropVolumeForCurrentSelection();

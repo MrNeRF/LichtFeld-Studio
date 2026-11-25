@@ -1853,6 +1853,66 @@ namespace lfs::vis::gui {
                 if (updateViewportOverlayPanelLayout())
                     rml_context_->Update();
             }
+            if (auto* bar = document_->GetElementById("primary-align-toolbar")) {
+                auto* row = bar->GetParentNode();
+                const float dpi = rml_context_->GetDensityIndependentPixelRatio();
+                const bool model_alignment = row->IsClassSet("model-align-active") && bar->IsVisible(true);
+                float bar_width = 0.0f;
+                bool bar_size_changed = false;
+                if (model_alignment) {
+                    const auto& box = bar->GetBox();
+                    bar_width = box.GetSize(Rml::BoxArea::Border).x - box.GetSize(Rml::BoxArea::Content).x;
+                    for (int i = 0; i < bar->GetNumChildren(); ++i) {
+                        auto* child = bar->GetChild(i);
+                        if (child->IsVisible(true))
+                            bar_width += child->GetBox().GetSize(Rml::BoxArea::Margin).x;
+                    }
+                    if (std::abs(box.GetSize(Rml::BoxArea::Border).x - bar_width) > 0.5f) {
+                        bar->SetProperty("width", std::format("{:.1f}px", bar_width));
+                        bar_size_changed = true;
+                    }
+                } else {
+                    bar->RemoveProperty("width");
+                }
+                auto* primary_controls = document_->GetElementById("primary-viewport-gizmo-controls");
+                const float left = row->GetParentNode()->GetAbsoluteOffset(Rml::BoxArea::Border).x;
+                const float margin = 8.0f * dpi;
+                float lane_width = primary_toolbar_width_;
+                if (primary_controls && primary_controls->IsVisible(true))
+                    lane_width = primary_controls->GetAbsoluteOffset(Rml::BoxArea::Border).x - left;
+                const bool wide = bar_width + 2.0f * margin > lane_width;
+                if (model_alignment) {
+                    float top = 5.0f * dpi;
+                    float width = lane_width;
+                    if (wide) {
+                        width = show_secondary_toolbar_
+                                    ? secondary_toolbar_x_ + secondary_toolbar_width_ - primary_toolbar_x_
+                                    : primary_toolbar_width_;
+                        for (const auto* id : {"primary-viewport-gizmo-controls", "secondary-viewport-gizmo-controls"}) {
+                            if (auto* controls = document_->GetElementById(id); controls && controls->IsVisible(true)) {
+                                top = std::max(top, controls->GetAbsoluteOffset(Rml::BoxArea::Border).y -
+                                                        row->GetParentNode()->GetAbsoluteOffset(Rml::BoxArea::Border).y +
+                                                        controls->GetBox().GetSize(Rml::BoxArea::Border).y + 5.0f * dpi);
+                            }
+                        }
+                    }
+                    const float current_top = row->GetAbsoluteOffset(Rml::BoxArea::Border).y -
+                                              row->GetParentNode()->GetAbsoluteOffset(Rml::BoxArea::Border).y;
+                    if (bar_size_changed || !row->IsClassSet("alignment-positioned") ||
+                        std::abs(row->GetBox().GetSize(Rml::BoxArea::Border).x - width) > 0.5f ||
+                        std::abs(current_top - top) > 0.5f) {
+                        row->SetClass("alignment-positioned", true);
+                        row->SetProperty("width", std::format("{:.1f}px", width));
+                        row->SetProperty("top", std::format("{:.1f}px", top));
+                        rml_context_->Update();
+                    }
+                } else if (row->IsClassSet("alignment-positioned")) {
+                    row->SetClass("alignment-positioned", false);
+                    row->RemoveProperty("width");
+                    row->RemoveProperty("top");
+                    rml_context_->Update();
+                }
+            }
             if (updateSplitDividerToolbarClearance())
                 rml_context_->Update();
         }

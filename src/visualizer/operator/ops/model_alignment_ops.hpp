@@ -5,6 +5,8 @@
 #include "point_pick_operator.hpp"
 #include "rendering/rendering_types.hpp"
 #include <array>
+#include <atomic>
+#include <memory>
 #include <span>
 
 namespace lfs::vis::op {
@@ -49,7 +51,10 @@ namespace lfs::vis::op {
         };
         // Non-owning viewer-thread access; lifetime belongs to the modal operator.
         static ModelAlignmentOperator* active() { return active_; }
-        const Session* session() const { return session_ ? &*session_ : nullptr; }
+        const Session* session() const { return session_.get(); }
+        // Project saves may run on the training worker. Only the immutable previous_*
+        // fields are safe there; this lease keeps them alive through modal teardown.
+        static std::shared_ptr<const Session> savedViewSession() { return published_session_.load().lock(); }
         PointPickState& pointState() { return point_state_; }
         const PointPickState& pointState() const { return point_state_; }
         bool canUndoPointEdit() const { return !edits_.empty(); }
@@ -76,7 +81,8 @@ namespace lfs::vis::op {
         static ModelAlignmentOperator* active_;
         PointPickState point_state_;
         PreviewFeedback feedback_;
-        std::optional<Session> session_;
+        std::shared_ptr<Session> session_;
+        static std::atomic<std::weak_ptr<const Session>> published_session_;
         struct PairEdit {
             bool pending_right = false;
             std::vector<size_t> colors;

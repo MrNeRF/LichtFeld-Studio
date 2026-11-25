@@ -147,7 +147,7 @@
             </div>
         </div>
 
-        <div class="toolbar-hcenter toolbar-layer-primary" data-class-align-active="show_align_toolbar" data-class-scale-distance-active="show_scale_distance_toolbar">
+        <div class="toolbar-hcenter toolbar-layer-primary" data-class-align-active="show_align_toolbar" data-class-model-align-active="show_model_alignment_toolbar" data-class-scale-distance-active="show_scale_distance_toolbar">
             <div id="primary-transform-toolbar" class="toolbar-container hidden"
                  data-class-hidden="!show_transform_toolbar">
                 <div class="icon-btn"
@@ -177,9 +177,9 @@
                 </div>
             </div>
             <div id="primary-align-toolbar" class="toolbar-container align-toolbar hidden"
-                 data-class-hidden="!show_align_toolbar">
+                 data-class-hidden="!show_align_toolbar" data-class-ground-align-toolbar="!show_model_alignment_toolbar">
                 <div class="align-action-item" data-for="button : align_action_buttons">
-                    <div class="toolbar-separator" data-if="button.separator_before"></div>
+                    <div class="toolbar-separator hidden" data-class-hidden="!button.separator_before"></div>
                     <div class="icon-btn"
                          data-attr-id="button.button_id"
                          data-class-selected="button.selected"
@@ -489,10 +489,10 @@
                     <img data-attr-src="button.icon_src" />
                 </div>
             </div>
-            <div id="secondary-align-toolbar" class="toolbar-container align-toolbar hidden"
+            <div id="secondary-align-toolbar" class="toolbar-container align-toolbar ground-align-toolbar hidden"
                  data-class-hidden="!show_align_toolbar || show_model_alignment_toolbar">
                 <div class="align-action-item" data-for="button : align_action_buttons">
-                    <div class="toolbar-separator" data-if="button.separator_before"></div>
+                    <div class="toolbar-separator hidden" data-class-hidden="!button.separator_before"></div>
                     <div class="icon-btn"
                          data-attr-id="button.button_id"
                          data-class-selected="button.selected"

@@ -1762,7 +1762,7 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert 'class="toolbar-flyout-divider hidden"' not in rml
     assert "toolbar-flyout" not in rml
     assert rml.count('data-for="button : selection_group_buttons"') == 2
-    assert rml.count('class="toolbar-separator"') == 12
+    assert rml.count('data-class-hidden="!button.separator_before"') == 2
     assert 'class="toolbar-separator hidden"' in rml
     assert rml.count('class="viewport-gizmo-controls"') == 2
     assert rml.count('class="viewport-gizmo-control-row"') == 2
@@ -2777,7 +2777,7 @@ def test_model_alignment_replaces_active_tool_controls_and_refreshes_on_preview(
     module, *_ = toolbar_module
     lf = sys.modules["lichtfeld"]
     lf.ui.get_active_tool = lambda: "builtin.scale_distance"
-    lf.ui.get_split_view_mode = lambda: "model_alignment"
+    lf.ui.get_split_view_mode = lambda: "independent_dual"
     lf.ui.can_apply_align = lambda: False
     lf.ui.get_align_preview = lambda: False
     lf.ui.get_align_edge_to_axis = lambda: False
@@ -2809,6 +2809,8 @@ def test_model_alignment_replaces_active_tool_controls_and_refreshes_on_preview(
     assert "model-alignment-separate" not in picking
     assert "align-apply" not in picking
     assert not picking["model-alignment-delete"]["enabled"]
+    assert [record["button_id"] for record in snapshot["align_action_buttons"]
+            if record["separator_before"]] == ["align-clear", "model-alignment-cancel"]
     selection_signature = controller._toolbar_signature(None)
     lf.ui.get_model_alignment_state = lambda: state(delete=True, undo=True)
     assert controller._toolbar_signature(None) != selection_signature

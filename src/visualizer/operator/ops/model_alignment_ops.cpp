@@ -26,6 +26,7 @@
 namespace lfs::vis::op {
 
     ModelAlignmentOperator* ModelAlignmentOperator::active_ = nullptr;
+    std::atomic<std::weak_ptr<const ModelAlignmentOperator::Session>> ModelAlignmentOperator::published_session_;
     const OperatorDescriptor ModelAlignmentOperator::DESCRIPTOR = {
         .builtin_id = BuiltinOp::ModelAlignment,
         .label = "Align Models",
@@ -332,7 +333,7 @@ namespace lfs::vis::op {
         if (session_ || active_ || !renderer || !canBegin(scene, reference, mobile))
             return false;
         const auto settings = renderer->getSettings();
-        session_.emplace(Session{
+        session_ = std::make_shared<Session>(Session{
             .nodes = {reference.uuid, mobile.uuid},
             .world = {scene_coords::nodeVisualizerWorldTransform(scene, reference.id), scene_coords::nodeVisualizerWorldTransform(scene, mobile.id)},
             .previous_mode = settings.split_view_mode,
@@ -344,6 +345,7 @@ namespace lfs::vis::op {
             .previous_secondary = renderer->projectSecondaryViewport(),
         });
         active_ = this;
+        published_session_.store(session_);
         renderer->restoreSplitViewMode(SplitViewMode::IndependentDual, primary,
                                        splitViewUsesIndependentPanels(settings.split_view_mode) ? std::nullopt : std::optional{0.5f});
         auto& secondary = renderer->projectSecondaryViewport();
@@ -362,17 +364,18 @@ namespace lfs::vis::op {
     void ModelAlignmentOperator::end() {
         if (!session_)
             return;
-        auto saved = std::move(*session_);
+        const auto saved = session_;
         session_.reset();
         active_ = nullptr;
         if (auto* renderer = services().renderingOrNull()) {
             renderer->setIndependentPanelOverrides(std::nullopt);
-            auto& primary = *saved.primary_viewport;
-            renderer->restoreSplitViewMode(saved.previous_mode, primary, saved.previous_position, saved.previous_offset);
-            restoreAlignmentCamera(primary, saved.previous_primary);
-            restoreAlignmentCamera(renderer->projectSecondaryViewport(), saved.previous_secondary);
-            renderer->setFocusedSplitPanel(saved.previous_focus);
+            auto& primary = *saved->primary_viewport;
+            renderer->restoreSplitViewMode(saved->previous_mode, primary, saved->previous_position, saved->previous_offset);
+            restoreAlignmentCamera(primary, saved->previous_primary);
+            restoreAlignmentCamera(renderer->projectSecondaryViewport(), saved->previous_secondary);
+            renderer->setFocusedSplitPanel(saved->previous_focus);
         }
+        published_session_.store({});
         publish_align_state_generation();
     }
     void ModelAlignmentOperator::publishView() {
