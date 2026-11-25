@@ -1,7 +1,21 @@
+/* Shared border roles and shape scale. */
+
+.preferences-mcp-switch-track {
+    border-radius: 6dp;
+}
+
+.preferences-mcp-switch-knob {
+    border-radius: 4dp;
+}
+
+.preferences-conflict-dialog {
+    border-radius: 6dp;
+}
+
 /* Theme-dependent styles for the Preferences panel. */
 
 .preferences-model-card { border-color: @{border}; }
-.preferences-model-dot { background-color: @{error}; }
+.preferences-model-dot { background-color: @{error}; border-radius: 4dp; }
 .preferences-model-dot.is-available { background-color: @{success}; }
 .preferences-model-dot.is-working { background-color: @{warning}; }
 
@@ -30,16 +44,16 @@
 .preferences-nav-item:focus-visible {
     color: @{text};
     background-color: @{panel.tab_hover_bg};
-    border-color: @{panel.tab_hover_border};
+    border-color: @{primary};
 }
 
 .preferences-nav-item.active {
     color: @{text};
     background-color: @{panel.tab_active_bg};
-    border-color: @{panel.tab_active_border};
+    border-color: @{primary};
     border-left-color: @{primary};
     border-left-width: 3dp;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .preferences-nav-child,

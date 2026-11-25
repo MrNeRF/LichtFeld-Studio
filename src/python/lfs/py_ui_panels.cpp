@@ -701,6 +701,27 @@ namespace lfs::python {
             },
             nb::arg("panel_id"), nb::arg("enabled"), "Enable or disable a panel by id");
 
+        m.def(
+            "get_panel_always_on_top", [](std::string panel_id) {
+                return invoke_on_viewer(
+                    [panel_id = std::move(panel_id)]() -> std::optional<bool> {
+                        auto* manager = static_cast<gui::RmlUIManager*>(get_rml_manager());
+                        return manager ? manager->nativeWindowPinned(panel_id) : std::nullopt;
+                    },
+                    std::optional<bool>{});
+            },
+            nb::arg("panel_id"), "Get the session pin choice, or None if the panel has no desktop window or pinning is unavailable.");
+        m.def(
+            "set_panel_always_on_top", [](std::string panel_id, const bool enabled) {
+                return invoke_on_viewer(
+                    [panel_id = std::move(panel_id), enabled] {
+                        auto* manager = static_cast<gui::RmlUIManager*>(get_rml_manager());
+                        return manager && manager->setNativeWindowPinned(panel_id, enabled);
+                    },
+                    false);
+            },
+            nb::arg("panel_id"), nb::arg("enabled"), "Pin a desktop panel above other windows for this session. Return whether the change succeeded.");
+
         m.def("save_startup_sidebar", [] { return invoke_on_viewer([] {
                                                auto* gui_manager = get_gui_manager();
                                                if (!gui_manager)

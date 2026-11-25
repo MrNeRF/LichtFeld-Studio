@@ -1085,7 +1085,6 @@ namespace lfs::core {
                 std::pair{"ppisp_lr", ppisp_lr},
                 std::pair{"ppisp_reg_weight", ppisp_reg_weight},
                 std::pair{"ppisp_controller_lr", ppisp_controller_lr},
-                std::pair{"growth_grad_threshold", growth_grad_threshold},
                 std::pair{"means_noise_weight", means_noise_weight},
                 std::pair{"screen_share_penalty", screen_share_penalty},
             };
@@ -1370,6 +1369,7 @@ namespace lfs::core {
             p.refine_every = 200;
             p.start_refine = 0;
             p.stop_refine = 28'500;
+            p.grow_until_iter = 27'500;
             p.max_cap = 5'000'000;
             p.grow_fraction = -1.0f;
             p.shs_lr = -1.0f;
@@ -1379,11 +1379,10 @@ namespace lfs::core {
             p.densify_structure_weight = 1.0f;
             p.min_opacity = 1.0f / 255.0f;
             p.means_lr_end = 2e-7f;
-            p.opacity_lr = 0.012f;
+            p.opacity_lr = 0.025f;
             p.scaling_lr_end = 5e-3f;
             p.late_lr_anneal = 0.3f;
             p.lambda_dssim = 0.22f;
-            p.growth_grad_threshold = 0.00309693f;
             p.max_screen_share = 0.586511f;
             p.screen_share_penalty = 0.847085f;
             p.means_lr = 2.17871e-5f;
@@ -1395,9 +1394,10 @@ namespace lfs::core {
             p.scale_reg_decay_power = 0.4f;
             p.erank_reg = 0.001f;
             p.dc_reg = 0.001f;
-            p.sh_rest_reg = 0.001f;
+            p.sh_rest_reg = 0.375f;
             p.use_error_map = true;
             p.use_edge_map = true;
+            p.sh_degree_interval = 1; // every SH degree from the first steps
             return p;
         }
 

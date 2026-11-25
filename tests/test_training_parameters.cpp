@@ -118,7 +118,7 @@ namespace {
     TEST_F(TrainingParametersTest, ResolvesMrnfFactorySentinels) {
         const auto defaults = OptimizationParameters::defaults_for_strategy("mrnf");
 
-        EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_lr"), 0.012f);
+        EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_lr"), 0.025f);
         EXPECT_EQ(resolved<int>(defaults, "max_cap"), 5'000'000);
         EXPECT_FLOAT_EQ(resolved<float>(defaults, "min_opacity"), 1.0f / 255.0f);
         EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_reg"), 0.0f);
@@ -136,10 +136,8 @@ namespace {
             {"ray_depth_lr", {"mrnf"}},
             {"scaling_lr_end", {"mrnf"}},
             {"late_lr_anneal", {"mrnf"}},
-            {"growth_grad_threshold", {"mrnf"}},
             {"grow_fraction", {"mrnf"}},
             {"grow_until_iter", {"mrnf"}},
-            {"growth_exchange", {"mrnf"}},
             {"opacity_decay", {"mrnf"}},
             {"scale_decay", {"mrnf"}},
             {"means_noise_weight", {"mrnf"}},
@@ -240,10 +238,11 @@ namespace {
     }
 
     TEST_F(TrainingParametersTest, DefaultsForStrategyCanonicalizesAliasesAndFallbacks) {
-        EXPECT_FLOAT_EQ(OptimizationParameters::defaults_for_strategy("mnrf").opacity_lr, 0.012f);
-        EXPECT_FLOAT_EQ(OptimizationParameters::defaults_for_strategy("lfs").opacity_lr, 0.012f);
-        EXPECT_FLOAT_EQ(OptimizationParameters::defaults_for_strategy("").opacity_lr, 0.012f);
-        EXPECT_FLOAT_EQ(OptimizationParameters::defaults_for_strategy("garbage").opacity_lr, 0.012f);
+        // refine_every 163 is MRNF's alone (MCMC 100, IGS+ 500).
+        EXPECT_EQ(OptimizationParameters::defaults_for_strategy("mnrf").refine_every, 163u);
+        EXPECT_EQ(OptimizationParameters::defaults_for_strategy("lfs").refine_every, 163u);
+        EXPECT_EQ(OptimizationParameters::defaults_for_strategy("").refine_every, 163u);
+        EXPECT_EQ(OptimizationParameters::defaults_for_strategy("garbage").refine_every, 163u);
     }
 
     // This checks the serialized surface, not C++ struct completeness: a member absent from both
@@ -798,15 +797,16 @@ namespace {
         EXPECT_FLOAT_EQ(params.scale_reg_decay_power, 0.4f);
         EXPECT_FLOAT_EQ(params.erank_reg, 0.001f);
         EXPECT_FLOAT_EQ(params.dc_reg, 0.001f);
-        EXPECT_FLOAT_EQ(params.sh_rest_reg, 0.001f);
+        EXPECT_FLOAT_EQ(params.sh_rest_reg, 0.375f);
         EXPECT_FLOAT_EQ(params.lambda_dssim, 0.22f);
-        EXPECT_FLOAT_EQ(params.growth_grad_threshold, 0.00309693f);
         EXPECT_FLOAT_EQ(params.max_screen_share, 0.586511f);
         EXPECT_FLOAT_EQ(params.screen_share_penalty, 0.847085f);
         EXPECT_FLOAT_EQ(params.means_lr, 2.17871e-5f);
         EXPECT_EQ(params.refine_every, 163u);
         EXPECT_FLOAT_EQ(params.scaling_lr, 0.00828016f);
+        EXPECT_EQ(params.grow_until_iter, 27'500u);
         EXPECT_FLOAT_EQ(params.rotation_lr, 0.0015f);
+        EXPECT_FLOAT_EQ(params.opacity_lr, 0.025f);
         EXPECT_NEAR(params.scale_reg_at(0), 0.014f, 1.0e-7f);
         EXPECT_FLOAT_EQ(params.scale_reg_at(static_cast<int>(params.iterations)), 0.0f);
         EXPECT_TRUE(params.validate().empty()) << params.validate();
@@ -817,7 +817,25 @@ namespace {
         EXPECT_FLOAT_EQ(roundtrip.scale_reg_decay_power, 0.4f);
         EXPECT_FLOAT_EQ(roundtrip.erank_reg, 0.001f);
         EXPECT_FLOAT_EQ(roundtrip.dc_reg, 0.001f);
-        EXPECT_FLOAT_EQ(roundtrip.sh_rest_reg, 0.001f);
+        EXPECT_FLOAT_EQ(roundtrip.sh_rest_reg, 0.375f);
+    }
+
+    // Files written before growth_exchange and growth_grad_threshold were removed still load; the keys are ignored.
+    TEST_F(TrainingParametersTest, RemovedGrowthKeysAreIgnoredOnLoad) {
+        auto expected = OptimizationParameters::mrnf_defaults();
+        expected.max_cap = 1234;
+        auto old_json = expected.to_json();
+        old_json["growth_exchange"] = true;
+        old_json["growth_grad_threshold"] = 0.5;
+        EXPECT_EQ(OptimizationParameters::from_json(old_json).to_json(), expected.to_json());
+
+        const auto path = std::filesystem::temp_directory_path() / "lfs_training_parameters_removed_keys.json";
+        std::ofstream(path) << old_json.dump();
+        const auto loaded = lfs::core::param::read_optim_params_from_json(path);
+        std::error_code ec;
+        std::filesystem::remove(path, ec);
+        ASSERT_TRUE(loaded.has_value()) << loaded.error();
+        EXPECT_EQ(loaded->to_json(), expected.to_json());
     }
 
     TEST_F(TrainingParametersTest, CapacityDefaultsRespectExplicitValues) {

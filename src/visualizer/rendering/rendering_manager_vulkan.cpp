@@ -1922,7 +1922,7 @@ namespace lfs::vis {
                                  !(frame.frame_dirty & ~camera_flags);
         // Camera motion needs color, not a new full-image exact-depth replay.
         // A pending point request marks VIEWPORT and still obtains exact depth.
-        frame.exact_surface_picking = exact_surface_picking_ &&
+        frame.exact_surface_picking = exactSurfacePicking() &&
                                       (!camera_only || frame.training_active || frame.deterministic_export ||
                                        splitViewUsesGTComparison(frame.settings.split_view_mode) ||
                                        splitViewUsesPLYComparison(frame.settings.split_view_mode));
@@ -2691,9 +2691,14 @@ namespace lfs::vis {
             }
         } viewer_borrow_publisher{live_trainer, vksplat_viewport_renderer_.get()};
 
-        scene_state.reveal = sequencer_reveal_;
-        if (scene_manager)
-            attachCustomEffect(scene_state, *scene_manager, scene_time_);
+        // Explicit panel models are rendered without scene-wide meshes or effects.
+        if (independent_panel_overrides_) {
+            scene_state.meshes.clear();
+        } else {
+            scene_state.reveal = sequencer_reveal_;
+            if (scene_manager)
+                attachCustomEffect(scene_state, *scene_manager, scene_time_);
+        }
         FrameContext frame_ctx{
             .viewport = context.viewport,
             .viewport_region = context.viewport_region,
@@ -3959,22 +3964,34 @@ namespace lfs::vis {
         } else if (splitViewUsesIndependentPanels(frame_settings.split_view_mode)) {
             if (const auto layouts = split_view_service_.panelLayouts(frame_settings, render_size.x);
                 layouts && render_size.x > 1) {
-                auto left = render_panel_image(
-                    context.viewport,
-                    {std::max((*layouts)[0].width, 1), render_size.y},
-                    SplitViewPanelId::Left,
-                    std::nullopt,
-                    nullptr,
-                    nullptr,
-                    VksplatViewportRenderer::OutputSlot::SplitLeft);
-                auto right = render_panel_image(
-                    split_view_service_.secondaryViewport(),
-                    {std::max((*layouts)[1].width, 1), render_size.y},
-                    SplitViewPanelId::Right,
-                    std::nullopt,
-                    nullptr,
-                    nullptr,
-                    VksplatViewportRenderer::OutputSlot::SplitRight);
+                const auto render_panel = [&](const SplitViewPanelId panel, const Viewport& viewport,
+                                              const VksplatViewportRenderer::OutputSlot output) {
+                    const auto index = splitViewPanelIndex(panel);
+                    const glm::ivec2 size{std::max((*layouts)[index].width, 1), render_size.y};
+                    const auto* overrides = independent_panel_overrides_ ? &independent_panel_overrides_->panels[index] : nullptr;
+                    if (!overrides || !scene_manager)
+                        return render_panel_image(viewport, size, panel, std::nullopt, nullptr, nullptr, output);
+
+                    const auto& scene = scene_manager->getScene();
+                    auto request = buildViewportRenderRequest(frame_ctx, size, &viewport, panel);
+                    auto transforms = frame_ctx.scene_state.model_transforms;
+                    std::vector<bool> visible(transforms.size(), false);
+                    for (const auto& slot : scene.getVisibleSplatNodeSlots()) {
+                        if (!slot.node || slot.slot_index >= transforms.size())
+                            continue;
+                        visible[slot.slot_index] = std::find(overrides->visible_nodes.begin(), overrides->visible_nodes.end(),
+                                                             slot.node->uuid) != overrides->visible_nodes.end();
+                        for (const auto& [uuid, transform] : overrides->transforms) {
+                            if (slot.node->uuid == uuid)
+                                transforms[slot.slot_index] = transform * transforms[slot.slot_index];
+                        }
+                    }
+                    return render_panel_image(viewport, size, panel, visible, nullptr, &transforms, output, &request);
+                };
+                auto left = render_panel(SplitViewPanelId::Left, context.viewport,
+                                         VksplatViewportRenderer::OutputSlot::SplitLeft);
+                auto right = render_panel(SplitViewPanelId::Right, split_view_service_.secondaryViewport(),
+                                          VksplatViewportRenderer::OutputSlot::SplitRight);
                 if (left && right) {
                     pending_split_view.enabled = true;
                     pending_split_view.split_position = frame_settings.split_position;
@@ -3991,6 +4008,7 @@ namespace lfs::vis {
                         .detail_label = "Primary | Secondary",
                         .left_name = "Primary View",
                         .right_name = "Secondary View"};
+
                 } else {
                     render_error = left ? right.error() : left.error();
                 }

@@ -5,6 +5,7 @@
 #include "lfs/core/memory_ops.cuh"
 #include "lfs/kernels/bilateral_grid.cuh"
 #include "ppisp_math_bwd.cuh"
+#include <algorithm>
 #include <cassert>
 #include <cuda_runtime.h>
 
@@ -519,81 +520,8 @@ namespace lfs::training::kernels {
         LFS_CUDA_LAUNCH_CHECK(stream, "training.bilateral.slice_backward_exposure_chroma_chw_reference");
     }
 
-    // 16x16 threads, each covering a 2x2 pixel micro-tile (32x32 pixels / block).
-    // At bicycle images_4 (1237x822) onto a 16x16 spatial grid that tile spans
-    // < 1 cell plus the interpolant, so the (x,y) footprint is 2x2; 3x3 is the
-    // documented fallback. Register-accumulating the 2x2 quarters shared atomics.
+    // grad_rgb kernels: 16x16 threads, one pixel each.
     constexpr int kBwdThreads = 16;
-    constexpr int kBwdPixX = 2;
-    constexpr int kBwdPixY = 2;
-    constexpr int kBwdTileX = kBwdThreads * kBwdPixX;
-    constexpr int kBwdTileY = kBwdThreads * kBwdPixY;
-    constexpr int kBwdMaxFootprint = 3;
-    // Pad the shared x-stride past the 2–3-cell footprint so adjacent (x,y)
-    // slots do not land in the same shared-memory bank.
-    constexpr int kBwdSmemStrideX = 4;
-
-    struct BwdTileFootprint {
-        int xmin;
-        int ymin;
-        int fx;
-        int fy;
-        int use_global;
-    };
-
-    __device__ __forceinline__ void compute_bwd_tile_footprint(
-        BwdTileFootprint& fp,
-        const int px0, const int py0, const int px1, const int py1,
-        const int h, const int w, const int H, const int W) {
-        const float x0f = (w > 1)
-                              ? static_cast<float>(px0) / static_cast<float>(w - 1) * static_cast<float>(W - 1)
-                              : 0.0f;
-        const float x1f = (w > 1)
-                              ? static_cast<float>(px1 - 1) / static_cast<float>(w - 1) * static_cast<float>(W - 1)
-                              : 0.0f;
-        const float y0f = (h > 1)
-                              ? static_cast<float>(py0) / static_cast<float>(h - 1) * static_cast<float>(H - 1)
-                              : 0.0f;
-        const float y1f = (h > 1)
-                              ? static_cast<float>(py1 - 1) / static_cast<float>(h - 1) * static_cast<float>(H - 1)
-                              : 0.0f;
-        fp.xmin = static_cast<int>(floorf(x0f));
-        fp.ymin = static_cast<int>(floorf(y0f));
-        const int xmax = min(static_cast<int>(floorf(x1f)) + 1, W - 1);
-        const int ymax = min(static_cast<int>(floorf(y1f)) + 1, H - 1);
-        fp.fx = xmax - fp.xmin + 1;
-        fp.fy = ymax - fp.ymin + 1;
-        fp.use_global = (fp.fx < 1 || fp.fy < 1 ||
-                         fp.fx > kBwdMaxFootprint || fp.fy > kBwdMaxFootprint)
-                            ? 1
-                            : 0;
-        assert(fp.use_global || (fp.fx <= kBwdMaxFootprint && fp.fy <= kBwdMaxFootprint));
-        if (fp.fx < 1) {
-            fp.fx = 1;
-            fp.xmin = 0;
-        }
-        if (fp.fy < 1) {
-            fp.fy = 1;
-            fp.ymin = 0;
-        }
-    }
-
-    __device__ __forceinline__ void scatter_grid_grad(
-        float* __restrict__ grad_grid,
-        float* __restrict__ smem,
-        const BwdTileFootprint& fp,
-        const int C, const int L, const int H, const int W,
-        const int ci, const int zi, const int yi, const int xi,
-        const float value) {
-        const int grid_idx = (ci * L + zi) * H * W + yi * W + xi;
-        if (fp.use_global) {
-            atomicAdd(grad_grid + grid_idx, value);
-            return;
-        }
-        const int smem_idx =
-            ((ci * L + zi) * fp.fy + (yi - fp.ymin)) * kBwdSmemStrideX + (xi - fp.xmin);
-        atomicAdd(smem + smem_idx, value);
-    }
 
     __device__ __forceinline__ void fill_trilinear_corners(
         int cx[8], int cy[8], int cz[8],
@@ -624,32 +552,232 @@ namespace lfs::training::kernels {
         cz[7] = z1;
     }
 
-    __device__ __forceinline__ void flush_smem_to_global(
+    // Grid gradient, shared by the affine (12 coefficients) and the exposure-chroma (9) kernels.
+    //
+    // A block covers kGradTileX x kGradTileY pixels, one warp per pixel row, 32 pixels at a time. Each lane computes
+    // dL/dcoefficient for its pixel and stages it in shared memory with fx, fz and the cell key (x0, z0); y0 and fy
+    // are the same for the whole row. Then the lanes swap roles: lane 2 * ci + zc owns coefficient ci at z corner zc
+    // and walks the 32 staged pixels in order, summing the weighted gradient for both x corners in registers while
+    // the key stays the same. When it changes, and at the end of the row, every owner adds its two sums, split by
+    // (1 - fy) and fy, to the block histogram: four atomics per lane, on addresses no other lane of the warp touches.
+    // The block histogram goes to global memory once at the end.
+    //
+    // Scattering every pixel's 8 corners x C coefficients from each lane instead serialised: on a large image every
+    // lane of a warp sits in the same grid cell, and a shared float atomicAdd is a compare-and-swap loop, so each of
+    // those 8 * C atomics retried up to 32 times on a single address.
+    constexpr int kGradWarps = 8;
+    constexpr int kGradSegments = 4;
+    constexpr int kGradTileX = 32 * kGradSegments;
+    constexpr int kGradTileY = kGradWarps;
+    // Odd stride: owners of different coefficients read the staged pixel from different banks.
+    constexpr int kGradStageStride = 33;
+    // Larger footprints (small images under a fine grid) add straight to global memory.
+    constexpr size_t kGradMaxHistBytes = 16 * 1024;
+
+    __host__ __device__ __forceinline__ float grid_coord(const int i, const int n, const int N) {
+        return n > 1 ? static_cast<float>(i) / (n - 1) * (N - 1) : 0.0f;
+    }
+
+    struct GridGradPixel {
+        float sr, sg, sb;
+        float dr, dg, db;
+        int x0, x1, y0, y1, z0, z1;
+        float fx, fy, fz;
+    };
+
+    // hist == nullptr: add to grad_grid directly. Histogram layout is (y, x, z, coefficient), coefficient fastest,
+    // so the 2 * C owners of one flush hit 2 * C consecutive words.
+    struct GridGradTarget {
+        float* hist;
+        int xmin, ymin, width;
+    };
+
+    template <int C>
+    __device__ __forceinline__ void add_grid_grad(
+        float* __restrict__ grad_grid, const GridGradTarget& target,
+        const int L, const int H, const int W,
+        const int ci, const int zi, const int yi, const int xi, const float value) {
+        if (target.hist)
+            atomicAdd(target.hist + ((((yi - target.ymin) * target.width + (xi - target.xmin)) * L + zi) * C + ci), value);
+        else
+            atomicAdd(grad_grid + ((ci * L + zi) * H + yi) * W + xi, value);
+    }
+
+    template <int C>
+    __device__ __forceinline__ void flush_grid_grad_run(
+        float* __restrict__ grad_grid, const GridGradTarget& target,
+        const int L, const int H, const int W,
+        const int key, const int ci, const int zc,
+        const int y0, const int y1, const float fy,
+        const float acc0, const float acc1) {
+        const int x0 = key >> 16;
+        const int x1 = min(x0 + 1, W - 1);
+        const int zi = min((key & 0xFFFF) + zc, L - 1);
+        add_grid_grad<C>(grad_grid, target, L, H, W, ci, zi, y0, x0, acc0 * (1 - fy));
+        add_grid_grad<C>(grad_grid, target, L, H, W, ci, zi, y0, x1, acc1 * (1 - fy));
+        add_grid_grad<C>(grad_grid, target, L, H, W, ci, zi, y1, x0, acc0 * fy);
+        add_grid_grad<C>(grad_grid, target, L, H, W, ci, zi, y1, x1, acc1 * fy);
+    }
+
+    // coeff_grad(const GridGradPixel&, float (&dL)[C]) fills dL/dcoefficient for one pixel.
+    template <int C, bool kCHW, typename CoeffGrad>
+    __device__ __forceinline__ void accumulate_slice_grid_grad(
+        const float* __restrict__ rgb,
+        const float* __restrict__ grad_output,
         float* __restrict__ grad_grid,
-        const float* __restrict__ smem,
-        const BwdTileFootprint& fp,
-        const int C, const int L, const int H, const int W,
-        const int tid, const int nthreads) {
-        if (fp.use_global)
-            return;
-        const int nslots = C * L * fp.fy * kBwdSmemStrideX;
-        const int HW = H * W;
-        for (int i = tid; i < nslots; i += nthreads) {
-            int tmp = i;
-            const int lx = tmp % kBwdSmemStrideX;
-            tmp /= kBwdSmemStrideX;
-            const int ly = tmp % fp.fy;
-            tmp /= fp.fy;
-            const int zi = tmp % L;
-            tmp /= L;
-            const int ci = tmp;
-            if (lx >= fp.fx)
-                continue;
-            const float v = smem[i];
+        const int L, const int H, const int W,
+        const int h, const int w,
+        const int fx_cap, const int fy_cap,
+        CoeffGrad coeff_grad) {
+        static_assert(2 * C <= 32, "one owner lane per coefficient and z corner");
+        extern __shared__ float hist[];
+        __shared__ float stage[kGradWarps][(C + 2) * kGradStageStride];
+        __shared__ int stage_key[kGradWarps][32];
+
+        const int lane = threadIdx.x & 31;
+        const int warp = threadIdx.x >> 5;
+        const int px0 = blockIdx.x * kGradTileX;
+        const int py0 = blockIdx.y * kGradTileY;
+        const int px1 = min(px0 + kGradTileX, w);
+        const int py1 = min(py0 + kGradTileY, h);
+
+        // Cells the tile touches; coordinates grow with the pixel index, so the end pixels bound them.
+        const int xmin = static_cast<int>(floorf(grid_coord(px0, w, W)));
+        const int ymin = static_cast<int>(floorf(grid_coord(py0, h, H)));
+        const int xmax = min(static_cast<int>(floorf(grid_coord(px1 - 1, w, W))) + 1, W - 1);
+        const int ymax = min(static_cast<int>(floorf(grid_coord(py1 - 1, h, H))) + 1, H - 1);
+        const int tile_fx = xmax - xmin + 1;
+        const int tile_fy = ymax - ymin + 1;
+        const bool use_hist = tile_fx <= fx_cap && tile_fy <= fy_cap;
+        const int nslots = use_hist ? C * L * tile_fx * tile_fy : 0;
+        for (int i = threadIdx.x; i < nslots; i += blockDim.x)
+            hist[i] = 0.0f;
+        __syncthreads();
+
+        const GridGradTarget target{use_hist ? hist : nullptr, xmin, ymin, tile_fx};
+        const bool owner = lane < 2 * C;
+        const int ci = lane >> 1;
+        const int zc = lane & 1;
+        float* const st = stage[warp];
+        int* const sk = stage_key[warp];
+        const int hw = h * w;
+
+        const int hi = py0 + warp;
+        if (hi < h) {
+            const float y = grid_coord(hi, h, H);
+            const int y0 = floorf(y);
+            const int y1 = min(y0 + 1, H - 1);
+            const float fy = y - y0;
+
+            int run_key = -1;
+            float acc0 = 0.0f, acc1 = 0.0f;
+            const auto switch_run = [&](const int key) {
+                if (owner && run_key >= 0)
+                    flush_grid_grad_run<C>(grad_grid, target, L, H, W, run_key, ci, zc, y0, y1, fy, acc0, acc1);
+                acc0 = 0.0f;
+                acc1 = 0.0f;
+                run_key = key;
+            };
+            const auto add_pixel = [&](const int p) {
+                const float fx = st[C * kGradStageStride + p];
+                const float fz = st[(C + 1) * kGradStageStride + p];
+                const float t = (zc ? fz : 1 - fz) * st[ci * kGradStageStride + p];
+                acc0 += (1 - fx) * t;
+                acc1 += fx * t;
+            };
+            for (int seg = px0; seg < px1; seg += 32) {
+                const int wi = seg + lane;
+                int key = -1;
+                if (wi < px1) {
+                    const int pixel_idx = hi * w + wi;
+                    GridGradPixel s;
+                    if constexpr (kCHW) {
+                        s.sr = rgb[0 * hw + pixel_idx];
+                        s.sg = rgb[1 * hw + pixel_idx];
+                        s.sb = rgb[2 * hw + pixel_idx];
+                        s.dr = grad_output[0 * hw + pixel_idx];
+                        s.dg = grad_output[1 * hw + pixel_idx];
+                        s.db = grad_output[2 * hw + pixel_idx];
+                    } else {
+                        const RGB rgb_val = load_rgb_cs(&rgb[pixel_idx * 3]);
+                        s.sr = rgb_val.r;
+                        s.sg = rgb_val.g;
+                        s.sb = rgb_val.b;
+                        const RGB grad = load_rgb_cs(&grad_output[pixel_idx * 3]);
+                        s.dr = grad.r;
+                        s.dg = grad.g;
+                        s.db = grad.b;
+                    }
+                    s.sr = isfinite(s.sr) ? s.sr : 0.5f;
+                    s.sg = isfinite(s.sg) ? s.sg : 0.5f;
+                    s.sb = isfinite(s.sb) ? s.sb : 0.5f;
+                    s.dr = isfinite(s.dr) ? s.dr : 0.0f;
+                    s.dg = isfinite(s.dg) ? s.dg : 0.0f;
+                    s.db = isfinite(s.db) ? s.db : 0.0f;
+
+                    const float x = grid_coord(wi, w, W);
+                    const float guidance = fminf(1.0f, fmaxf(0.0f, kC2G_r * s.sr + kC2G_g * s.sg + kC2G_b * s.sb));
+                    const float z = guidance * (L - 1);
+                    s.x0 = floorf(x);
+                    s.x1 = min(s.x0 + 1, W - 1);
+                    s.y0 = y0;
+                    s.y1 = y1;
+                    const int zf = floorf(z);
+                    s.z0 = min(max(zf, 0), L - 1);
+                    s.z1 = min(max(zf + 1, 0), L - 1);
+                    s.fx = x - s.x0;
+                    s.fy = fy;
+                    s.fz = z - s.z0;
+
+                    float dL[C];
+                    coeff_grad(s, dL);
+#pragma unroll
+                    for (int c = 0; c < C; ++c)
+                        st[c * kGradStageStride + lane] = dL[c];
+                    st[C * kGradStageStride + lane] = s.fx;
+                    st[(C + 1) * kGradStageStride + lane] = s.fz;
+                    key = (s.x0 << 16) | s.z0;
+                    sk[lane] = key;
+                }
+                __syncwarp();
+
+                // Whole segment in one cell (the usual case on large images): no key checks per pixel.
+                const int first = __shfl_sync(0xffffffffu, key, 0);
+                if (__all_sync(0xffffffffu, key == first)) {
+                    if (first != run_key)
+                        switch_run(first);
+                    if (owner) {
+#pragma unroll
+                        for (int p = 0; p < 32; ++p)
+                            add_pixel(p);
+                    }
+                } else {
+                    const int count = min(32, px1 - seg);
+                    for (int p = 0; p < count; ++p) {
+                        if (sk[p] != run_key)
+                            switch_run(sk[p]);
+                        if (owner)
+                            add_pixel(p);
+                    }
+                }
+                __syncwarp();
+            }
+            switch_run(-1);
+        }
+        __syncthreads();
+
+        for (int i = threadIdx.x; i < nslots; i += blockDim.x) {
+            const float v = hist[i];
             if (v == 0.0f)
                 continue;
-            const int grid_idx = (ci * L + zi) * HW + (fp.ymin + ly) * W + (fp.xmin + lx);
-            atomicAdd(grad_grid + grid_idx, v);
+            int rest = i;
+            const int c = rest % C;
+            rest /= C;
+            const int zi = rest % L;
+            rest /= L;
+            const int lx = rest % tile_fx;
+            const int ly = rest / tile_fx;
+            atomicAdd(grad_grid + ((c * L + zi) * H + ymin + ly) * W + xmin + lx, v);
         }
     }
 
@@ -763,114 +891,27 @@ namespace lfs::training::kernels {
     }
 
     template <bool kCHW>
-    __global__ void bilateral_grid_slice_gridgrad_kernel(
+    __global__ void __launch_bounds__(kGradWarps * 32) bilateral_grid_slice_gridgrad_kernel(
         const float* __restrict__ rgb,
         const float* __restrict__ grad_output,
         float* __restrict__ grad_grid,
         const int L, const int H, const int W,
-        const int h, const int w) {
-        extern __shared__ float smem[];
-        const int tid = threadIdx.y * blockDim.x + threadIdx.x;
-        const int nthreads = blockDim.x * blockDim.y;
-        const int px0 = blockIdx.x * kBwdTileX;
-        const int py0 = blockIdx.y * kBwdTileY;
-        const int px1 = min(px0 + kBwdTileX, w);
-        const int py1 = min(py0 + kBwdTileY, h);
-
-        __shared__ BwdTileFootprint fp;
-        if (tid == 0) {
-            compute_bwd_tile_footprint(fp, px0, py0, px1, py1, h, w, H, W);
-        }
-        __syncthreads();
-        if (!fp.use_global) {
-            const int nslots = 12 * L * fp.fy * kBwdSmemStrideX;
-            for (int i = tid; i < nslots; i += nthreads)
-                smem[i] = 0.0f;
-        }
-        __syncthreads();
-
-        const int hw = h * w;
-#pragma unroll
-        for (int dy = 0; dy < kBwdPixY; ++dy) {
-#pragma unroll
-            for (int dx = 0; dx < kBwdPixX; ++dx) {
-                const int wi = px0 + threadIdx.x * kBwdPixX + dx;
-                const int hi = py0 + threadIdx.y * kBwdPixY + dy;
-                if (wi >= w || hi >= h)
-                    continue;
-                const int pixel_idx = hi * w + wi;
-                float sr, sg, sb, dr, dg, db;
-                if constexpr (kCHW) {
-                    sr = rgb[0 * hw + pixel_idx];
-                    sg = rgb[1 * hw + pixel_idx];
-                    sb = rgb[2 * hw + pixel_idx];
-                    dr = grad_output[0 * hw + pixel_idx];
-                    dg = grad_output[1 * hw + pixel_idx];
-                    db = grad_output[2 * hw + pixel_idx];
-                } else {
-                    const int rgb_offset = pixel_idx * 3;
-                    const RGB rgb_val = load_rgb_cs(&rgb[rgb_offset]);
-                    sr = rgb_val.r;
-                    sg = rgb_val.g;
-                    sb = rgb_val.b;
-                    const RGB grad = load_rgb_cs(&grad_output[rgb_offset]);
-                    dr = grad.r;
-                    dg = grad.g;
-                    db = grad.b;
-                }
-                sr = isfinite(sr) ? sr : 0.5f;
-                sg = isfinite(sg) ? sg : 0.5f;
-                sb = isfinite(sb) ? sb : 0.5f;
-                dr = isfinite(dr) ? dr : 0.0f;
-                dg = isfinite(dg) ? dg : 0.0f;
-                db = isfinite(db) ? db : 0.0f;
-
-                const float x = w > 1 ? static_cast<float>(wi) / (w - 1) * (W - 1) : 0.0f;
-                const float y = h > 1 ? static_cast<float>(hi) / (h - 1) * (H - 1) : 0.0f;
-                const float guidance = fminf(1.0f, fmaxf(0.0f, kC2G_r * sr + kC2G_g * sg + kC2G_b * sb));
-                const float z = guidance * (L - 1);
-
-                const int x0 = floorf(x), y0 = floorf(y);
-                int z0 = floorf(z);
-                const int x1 = min(x0 + 1, W - 1);
-                const int y1 = min(y0 + 1, H - 1);
-                int z1 = z0 + 1;
-                z0 = min(max(z0, 0), L - 1);
-                z1 = min(max(z1, 0), L - 1);
-
-                const float fx = x - x0, fy = y - y0, fz = z - z0;
-                float weights[8];
-                weights[0] = (1 - fx) * (1 - fy) * (1 - fz);
-                weights[1] = fx * (1 - fy) * (1 - fz);
-                weights[2] = (1 - fx) * fy * (1 - fz);
-                weights[3] = fx * fy * (1 - fz);
-                weights[4] = (1 - fx) * (1 - fy) * fz;
-                weights[5] = fx * (1 - fy) * fz;
-                weights[6] = (1 - fx) * fy * fz;
-                weights[7] = fx * fy * fz;
-                int pcx[8], pcy[8], pcz[8];
-                fill_trilinear_corners(pcx, pcy, pcz, x0, x1, y0, y1, z0, z1);
-
+        const int h, const int w,
+        const int fx_cap, const int fy_cap) {
+        accumulate_slice_grid_grad<12, kCHW>(
+            rgb, grad_output, grad_grid, L, H, W, h, w, fx_cap, fy_cap,
+            [](const GridGradPixel& s, float(&dL)[12]) {
 #pragma unroll
                 for (int ci = 0; ci < 12; ++ci) {
                     const int si = ci % 4, di = ci / 4;
-                    const float r_coeff = (si == 0 ? sr : si == 1 ? sg
-                                                      : si == 2   ? sb
-                                                                  : 1.0f);
-                    const float gout = (di == 0 ? dr : di == 1 ? dg
-                                                               : db);
-                    const float dL = r_coeff * gout;
-#pragma unroll
-                    for (int corner = 0; corner < 8; ++corner) {
-                        scatter_grid_grad(grad_grid, smem, fp, 12, L, H, W,
-                                          ci, pcz[corner], pcy[corner], pcx[corner],
-                                          weights[corner] * dL);
-                    }
+                    const float r_coeff = (si == 0 ? s.sr : si == 1 ? s.sg
+                                                        : si == 2   ? s.sb
+                                                                    : 1.0f);
+                    const float gout = (di == 0 ? s.dr : di == 1 ? s.dg
+                                                                 : s.db);
+                    dL[ci] = r_coeff * gout;
                 }
-            }
-        }
-        __syncthreads();
-        flush_smem_to_global(grad_grid, smem, fp, 12, L, H, W, tid, nthreads);
+            });
     }
 
     template <bool kCHW>
@@ -969,121 +1010,55 @@ namespace lfs::training::kernels {
     }
 
     template <bool kCHW>
-    __global__ void bilateral_grid_slice_exposure_chroma_gridgrad_kernel(
+    __global__ void __launch_bounds__(kGradWarps * 32) bilateral_grid_slice_exposure_chroma_gridgrad_kernel(
         const float* __restrict__ grid,
         const float* __restrict__ rgb,
         const float* __restrict__ grad_output,
         float* __restrict__ grad_grid,
         const int L, const int H, const int W,
         const int h, const int w,
-        const float* __restrict__ shared_offset) {
-        extern __shared__ float smem[];
-        const int tid = threadIdx.y * blockDim.x + threadIdx.x;
-        const int nthreads = blockDim.x * blockDim.y;
-        const int px0 = blockIdx.x * kBwdTileX;
-        const int py0 = blockIdx.y * kBwdTileY;
-        const int px1 = min(px0 + kBwdTileX, w);
-        const int py1 = min(py0 + kBwdTileY, h);
-
-        __shared__ BwdTileFootprint fp;
-        if (tid == 0) {
-            compute_bwd_tile_footprint(fp, px0, py0, px1, py1, h, w, H, W);
-        }
-        __syncthreads();
-        if (!fp.use_global) {
-            const int nslots = 9 * L * fp.fy * kBwdSmemStrideX;
-            for (int i = tid; i < nslots; i += nthreads)
-                smem[i] = 0.0f;
-        }
-        __syncthreads();
-
-        const int hw = h * w;
-#pragma unroll
-        for (int dy = 0; dy < kBwdPixY; ++dy) {
-#pragma unroll
-            for (int dx = 0; dx < kBwdPixX; ++dx) {
-                const int wi = px0 + threadIdx.x * kBwdPixX + dx;
-                const int hi = py0 + threadIdx.y * kBwdPixY + dy;
-                if (wi >= w || hi >= h)
-                    continue;
-                const int pixel_idx = hi * w + wi;
-                float sr, sg, sb, dr, dg, db;
-                if constexpr (kCHW) {
-                    sr = rgb[0 * hw + pixel_idx];
-                    sg = rgb[1 * hw + pixel_idx];
-                    sb = rgb[2 * hw + pixel_idx];
-                    dr = grad_output[0 * hw + pixel_idx];
-                    dg = grad_output[1 * hw + pixel_idx];
-                    db = grad_output[2 * hw + pixel_idx];
-                } else {
-                    const int rgb_offset = pixel_idx * 3;
-                    const RGB rgb_val = load_rgb_cs(&rgb[rgb_offset]);
-                    sr = rgb_val.r;
-                    sg = rgb_val.g;
-                    sb = rgb_val.b;
-                    const RGB grad = load_rgb_cs(&grad_output[rgb_offset]);
-                    dr = grad.r;
-                    dg = grad.g;
-                    db = grad.b;
-                }
-                sr = isfinite(sr) ? sr : 0.5f;
-                sg = isfinite(sg) ? sg : 0.5f;
-                sb = isfinite(sb) ? sb : 0.5f;
-                dr = isfinite(dr) ? dr : 0.0f;
-                dg = isfinite(dg) ? dg : 0.0f;
-                db = isfinite(db) ? db : 0.0f;
-
-                const float x = w > 1 ? static_cast<float>(wi) / (w - 1) * (W - 1) : 0.0f;
-                const float y = h > 1 ? static_cast<float>(hi) / (h - 1) * (H - 1) : 0.0f;
-                const float guidance = fminf(1.0f, fmaxf(0.0f, kC2G_r * sr + kC2G_g * sg + kC2G_b * sb));
-                const float z = guidance * (L - 1);
-
-                const int x0 = floorf(x), y0 = floorf(y);
-                int z0 = floorf(z);
-                const int x1 = min(x0 + 1, W - 1);
-                const int y1 = min(y0 + 1, H - 1);
-                int z1 = z0 + 1;
-                z0 = min(max(z0, 0), L - 1);
-                z1 = min(max(z1, 0), L - 1);
-
-                const float fx = x - x0, fy = y - y0, fz = z - z0;
+        const float* __restrict__ shared_offset,
+        const int fx_cap, const int fy_cap) {
+        accumulate_slice_grid_grad<9, kCHW>(
+            rgb, grad_output, grad_grid, L, H, W, h, w, fx_cap, fy_cap,
+            [=](const GridGradPixel& s, float(&dL)[9]) {
                 float sampled[9];
                 sample_exposure_chroma_grid_bwd(
-                    grid, L, H, W, x0, y0, z0, x1, y1, z1, fx, fy, fz, shared_offset, sampled);
-
-                float dL[9];
+                    grid, L, H, W, s.x0, s.y0, s.z0, s.x1, s.y1, s.z1, s.fx, s.fy, s.fz, shared_offset, sampled);
                 float3 grad_rgb_in;
-                exposure_chroma_param_vjp(sr, sg, sb, sampled, dr, dg, db, grad_rgb_in, dL);
-
-                float weights[8];
-                weights[0] = (1 - fx) * (1 - fy) * (1 - fz);
-                weights[1] = fx * (1 - fy) * (1 - fz);
-                weights[2] = (1 - fx) * fy * (1 - fz);
-                weights[3] = fx * fy * (1 - fz);
-                weights[4] = (1 - fx) * (1 - fy) * fz;
-                weights[5] = fx * (1 - fy) * fz;
-                weights[6] = (1 - fx) * fy * fz;
-                weights[7] = fx * fy * fz;
-                int pcx[8], pcy[8], pcz[8];
-                fill_trilinear_corners(pcx, pcy, pcz, x0, x1, y0, y1, z0, z1);
-
-#pragma unroll
-                for (int ci = 0; ci < 9; ++ci) {
-#pragma unroll
-                    for (int corner = 0; corner < 8; ++corner) {
-                        scatter_grid_grad(grad_grid, smem, fp, 9, L, H, W,
-                                          ci, pcz[corner], pcy[corner], pcx[corner],
-                                          weights[corner] * dL[ci]);
-                    }
-                }
-            }
-        }
-        __syncthreads();
-        flush_smem_to_global(grad_grid, smem, fp, 9, L, H, W, tid, nthreads);
+                exposure_chroma_param_vjp(s.sr, s.sg, s.sb, sampled, s.dr, s.dg, s.db, grad_rgb_in, dL);
+            });
     }
 
-    inline size_t bwd_hist_smem_bytes(const int channels, const int L) {
-        return static_cast<size_t>(channels) * L * kBwdMaxFootprint * kBwdSmemStrideX * sizeof(float);
+    struct GridGradLaunch {
+        dim3 blocks;
+        int fx_cap;
+        int fy_cap;
+        size_t smem;
+    };
+
+    // Upper bound of the grid cells along one axis under a tile of `tile` pixels, the +1 corner included.
+    static int grid_grad_footprint_bound(const int tile, const int n, const int N) {
+        if (n <= 1)
+            return std::min(N, 2);
+        const double span = static_cast<double>(tile - 1) * (N - 1) / (n - 1);
+        return std::min(N, static_cast<int>(span) + 3);
+    }
+
+    static GridGradLaunch grid_grad_launch(const int C, const int L, const int H, const int W, const int h, const int w) {
+        GridGradLaunch launch{
+            dim3((w + kGradTileX - 1) / kGradTileX, (h + kGradTileY - 1) / kGradTileY),
+            grid_grad_footprint_bound(kGradTileX, w, W),
+            grid_grad_footprint_bound(kGradTileY, h, H),
+            0};
+        const size_t bytes = sizeof(float) * C * L * launch.fx_cap * launch.fy_cap;
+        if (bytes > kGradMaxHistBytes) {
+            launch.fx_cap = 0;
+            launch.fy_cap = 0;
+        } else {
+            launch.smem = bytes;
+        }
+        return launch;
     }
 
     void launch_bilateral_grid_slice_backward(
@@ -1091,16 +1066,15 @@ namespace lfs::training::kernels {
         float* grad_grid, float* grad_rgb,
         int L, int H, int W, int h, int w,
         const float* shared_offset,
-        cudaStream_t stream,
-        bool /*warp_aggregate*/) {
+        cudaStream_t stream) {
         assert(L > 0 && H > 0 && W > 0 && h > 0 && w > 0);
         stream = resolve_stream(stream);
         const dim3 block(kBwdThreads, kBwdThreads);
         const dim3 pix_grid((w + kBwdThreads - 1) / kBwdThreads, (h + kBwdThreads - 1) / kBwdThreads);
-        const dim3 tile_grid((w + kBwdTileX - 1) / kBwdTileX, (h + kBwdTileY - 1) / kBwdTileY);
+        const GridGradLaunch gg = grid_grad_launch(12, L, H, W, h, w);
         bilateral_grid_slice_gridgrad_kernel<false>
-            <<<tile_grid, block, bwd_hist_smem_bytes(12, L), stream>>>(
-                rgb, grad_output, grad_grid, L, H, W, h, w);
+            <<<gg.blocks, kGradWarps * 32, gg.smem, stream>>>(
+                rgb, grad_output, grad_grid, L, H, W, h, w, gg.fx_cap, gg.fy_cap);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.bilateral.slice_backward");
         bilateral_grid_slice_backward_rgbgrad_kernel<false>
             <<<pix_grid, block, 0, stream>>>(
@@ -1113,16 +1087,15 @@ namespace lfs::training::kernels {
         float* grad_grid, float* grad_rgb,
         int L, int H, int W, int h, int w,
         const float* shared_offset,
-        cudaStream_t stream,
-        bool /*warp_aggregate*/) {
+        cudaStream_t stream) {
         assert(L > 0 && H > 0 && W > 0 && h > 0 && w > 0);
         stream = resolve_stream(stream);
         const dim3 block(kBwdThreads, kBwdThreads);
         const dim3 pix_grid((w + kBwdThreads - 1) / kBwdThreads, (h + kBwdThreads - 1) / kBwdThreads);
-        const dim3 tile_grid((w + kBwdTileX - 1) / kBwdTileX, (h + kBwdTileY - 1) / kBwdTileY);
+        const GridGradLaunch gg = grid_grad_launch(12, L, H, W, h, w);
         bilateral_grid_slice_gridgrad_kernel<true>
-            <<<tile_grid, block, bwd_hist_smem_bytes(12, L), stream>>>(
-                rgb, grad_output, grad_grid, L, H, W, h, w);
+            <<<gg.blocks, kGradWarps * 32, gg.smem, stream>>>(
+                rgb, grad_output, grad_grid, L, H, W, h, w, gg.fx_cap, gg.fy_cap);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.bilateral.slice_backward_chw");
         bilateral_grid_slice_backward_rgbgrad_kernel<true>
             <<<pix_grid, block, 0, stream>>>(
@@ -1135,16 +1108,15 @@ namespace lfs::training::kernels {
         float* grad_grid, float* grad_rgb,
         int L, int H, int W, int h, int w,
         const float* shared_offset,
-        cudaStream_t stream,
-        bool /*warp_aggregate*/) {
+        cudaStream_t stream) {
         assert(L > 0 && H > 0 && W > 0 && h > 0 && w > 0);
         stream = resolve_stream(stream);
         const dim3 block(kBwdThreads, kBwdThreads);
         const dim3 pix_grid((w + kBwdThreads - 1) / kBwdThreads, (h + kBwdThreads - 1) / kBwdThreads);
-        const dim3 tile_grid((w + kBwdTileX - 1) / kBwdTileX, (h + kBwdTileY - 1) / kBwdTileY);
+        const GridGradLaunch gg = grid_grad_launch(9, L, H, W, h, w);
         bilateral_grid_slice_exposure_chroma_gridgrad_kernel<false>
-            <<<tile_grid, block, bwd_hist_smem_bytes(9, L), stream>>>(
-                grid, rgb, grad_output, grad_grid, L, H, W, h, w, shared_offset);
+            <<<gg.blocks, kGradWarps * 32, gg.smem, stream>>>(
+                grid, rgb, grad_output, grad_grid, L, H, W, h, w, shared_offset, gg.fx_cap, gg.fy_cap);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.bilateral.slice_backward_exposure_chroma");
         bilateral_grid_slice_backward_exposure_chroma_rgbgrad_kernel<false>
             <<<pix_grid, block, 0, stream>>>(
@@ -1157,16 +1129,15 @@ namespace lfs::training::kernels {
         float* grad_grid, float* grad_rgb,
         int L, int H, int W, int h, int w,
         const float* shared_offset,
-        cudaStream_t stream,
-        bool /*warp_aggregate*/) {
+        cudaStream_t stream) {
         assert(L > 0 && H > 0 && W > 0 && h > 0 && w > 0);
         stream = resolve_stream(stream);
         const dim3 block(kBwdThreads, kBwdThreads);
         const dim3 pix_grid((w + kBwdThreads - 1) / kBwdThreads, (h + kBwdThreads - 1) / kBwdThreads);
-        const dim3 tile_grid((w + kBwdTileX - 1) / kBwdTileX, (h + kBwdTileY - 1) / kBwdTileY);
+        const GridGradLaunch gg = grid_grad_launch(9, L, H, W, h, w);
         bilateral_grid_slice_exposure_chroma_gridgrad_kernel<true>
-            <<<tile_grid, block, bwd_hist_smem_bytes(9, L), stream>>>(
-                grid, rgb, grad_output, grad_grid, L, H, W, h, w, shared_offset);
+            <<<gg.blocks, kGradWarps * 32, gg.smem, stream>>>(
+                grid, rgb, grad_output, grad_grid, L, H, W, h, w, shared_offset, gg.fx_cap, gg.fy_cap);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.bilateral.slice_backward_exposure_chroma_chw");
         bilateral_grid_slice_backward_exposure_chroma_rgbgrad_kernel<true>
             <<<pix_grid, block, 0, stream>>>(

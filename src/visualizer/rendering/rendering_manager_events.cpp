@@ -19,6 +19,7 @@ namespace lfs::vis {
     using namespace lfs::core::events;
 
     namespace {
+
         [[nodiscard]] constexpr bool hasSceneMutation(const uint32_t flags, const lfs::core::Scene::MutationType type) {
             return (flags & static_cast<uint32_t>(type)) != 0;
         }
@@ -85,6 +86,8 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleToggleSplitView() {
+        if (independent_panel_overrides_)
+            return;
         if (!isPLYComparisonActive()) {
             const auto* const scene_manager = services().sceneOrNull();
             if (!scene_manager || plyComparisonNodes(scene_manager->getScene()).size() < 2) {
@@ -115,6 +118,8 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleToggleIndependentSplitView(const cmd::ToggleIndependentSplitView& event) {
+        if (independent_panel_overrides_)
+            return;
         if (!event.viewport) {
             return;
         }
@@ -133,6 +138,8 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleToggleGTComparison() {
+        if (independent_panel_overrides_)
+            return;
         if (!isGTComparisonActive() && !hasGTComparisonAvailable()) {
             LOG_WARN("GT comparison requires a loaded dataset with source images");
             return;
@@ -154,14 +161,22 @@ namespace lfs::vis {
 
     void RenderingManager::restoreSplitViewMode(
         const SplitViewMode mode,
-        Viewport& primary_viewport) {
+        Viewport& primary_viewport,
+        const std::optional<float> position,
+        const std::optional<size_t> offset) {
         std::vector<SplitViewService::ModeChangeResult>
             changes;
         {
             std::lock_guard<std::mutex> lock(
                 settings_mutex_);
-            if (settings_.split_view_mode == mode)
+            if (position)
+                settings_.split_position = std::clamp(*position, 0.0f, 1.0f);
+            if (offset)
+                settings_.split_view_offset = *offset;
+            if (settings_.split_view_mode == mode) {
+                markDirty(DirtyFlag::SPLIT_VIEW, FrameReason::SettingsChange);
                 return;
+            }
             if (settings_.split_view_mode !=
                 SplitViewMode::Disabled) {
                 changes.push_back(

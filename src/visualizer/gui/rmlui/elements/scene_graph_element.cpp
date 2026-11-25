@@ -9,6 +9,7 @@
 #include "gui/rmlui/elements/scene_graph_drop_target.hpp"
 #include "gui/scene_graph_context_actions.hpp"
 #include "gui/scene_tree_session.hpp"
+#include "operator/ops/model_alignment_ops.hpp"
 
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
@@ -33,7 +34,6 @@
 #include "gui/utils/splat_transfer.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/colmap.hpp"
-#include "operation/undo_history.hpp"
 #include "operator/operator_registry.hpp"
 #include "preferences.hpp"
 #include "python/python_runtime.hpp"
@@ -44,6 +44,7 @@
 #include "visualizer/core/parameter_manager.hpp"
 #include "visualizer/core/services.hpp"
 #include "visualizer/gui_capabilities.hpp"
+#include "visualizer_impl.hpp"
 #include "window/window_manager.hpp"
 #include <SDL3/SDL.h>
 
@@ -2088,14 +2089,11 @@ namespace lfs::vis::gui {
                 .visible = !static_cast<bool>(node->visible)}
                 .emit();
         } else if (action == "delete") {
-            if (node->type == core::NodeType::KEYFRAME) {
-                if (node->keyframe && !static_cast<bool>(node->locked))
-                    cmd::SequencerDeleteKeyframe{.keyframe_index = node->keyframe->keyframe_index}.emit();
-                return;
+            if (node->type != core::NodeType::KEYFRAME) {
+                const auto snapshot_it = node_snapshots_.find(node_id);
+                if (snapshot_it == node_snapshots_.end() || !snapshot_it->second.delete_enabled)
+                    return;
             }
-            const auto snapshot_it = node_snapshots_.find(node_id);
-            if (snapshot_it == node_snapshots_.end() || !snapshot_it->second.delete_enabled)
-                return;
             requestDeleteNodes({node_id});
         } else if (action == "toggle-training") {
             if (node->type == core::NodeType::CAMERA) {
@@ -3018,8 +3016,11 @@ namespace lfs::vis::gui {
             keyframe_ids.reserve(node_ids.size());
             for (const auto id : node_ids) {
                 const auto* node = scene.getNodeById(id);
-                if (!node || node->type != core::NodeType::KEYFRAME || !node->keyframe ||
-                    static_cast<bool>(node->locked))
+                if (node && static_cast<bool>(node->locked)) {
+                    LOG_WARN("Scene node deletion request aborted: node is locked");
+                    return;
+                }
+                if (!node || node->type != core::NodeType::KEYFRAME || !node->keyframe)
                     return;
                 const auto* keyframe = controller.timeline().getKeyframe(node->keyframe->keyframe_index);
                 if (!keyframe)
@@ -3027,13 +3028,7 @@ namespace lfs::vis::gui {
                 keyframe_ids.push_back(keyframe->id);
             }
             // Resolve stable IDs before deletion shifts indices and rebuilds scene nodes.
-            op::TransactionGuard transaction(keyframe_ids.size() == 1 ? "Delete Keyframe" : "Delete Keyframes");
-            bool removed_any = false;
-            for (const auto id : keyframe_ids)
-                removed_any |= controller.removeKeyframeById(id);
-            transaction.commit();
-            if (removed_any)
-                state::KeyframeListChanged{.count = controller.timeline().realKeyframeCount()}.emit();
+            controller.removeKeyframesById(keyframe_ids);
             return;
         }
         std::vector<core::Uuid> node_uuids;
@@ -3185,6 +3180,12 @@ namespace lfs::vis::gui {
             items.push_back(makeAction(tr("export.export") + "...",
                                        prefixedAction(std::format("export_splat:{}", node_id)), !items.empty()));
         }
+        if (selected_ids_.size() == 2 && selected_ids_.contains(node_id)) {
+            const auto other = std::ranges::find_if(selected_ids_, [node_id](const auto id) { return id != node_id; });
+            const auto* mobile = scene->getNodeById(*other);
+            if (mobile && op::ModelAlignmentOperator::canBegin(*scene, *node, *mobile))
+                items.push_back(makeAction(tr("align.models"), prefixedAction("align_models")));
+        }
         const bool selected_cameras_in_group = selectionContainsOnlyCamerasInGroup(node_id);
         if (selected_ids_.size() > 1 && !selected_cameras_in_group) {
             items.push_back(makeAction(tr("scene.select_hierarchy"),
@@ -3282,8 +3283,8 @@ namespace lfs::vis::gui {
                     }
                     items.push_back(makeAction(
                         tr(string_keys::Scene::DELETE_ITEM),
-                        prefixedAction(std::format("delete_kf:{}", node->keyframe->keyframe_index)),
-                        true));
+                        prefixedAction(std::format("delete:{}", node->id)),
+                        true, false, false, static_cast<bool>(node->locked)));
                 }
                 break;
             case core::NodeType::KEYFRAME_GROUP:
@@ -3316,6 +3317,8 @@ namespace lfs::vis::gui {
                                                prefixedAction(std::format("camera_selection:every_n:{}", node_id))));
                     items.push_back(makeAction(tr("scene.select_distinct_cameras") + "...",
                                                prefixedAction(std::format("camera_selection:distinct:{}", node_id))));
+                    items.push_back(makeAction(tr("scene.select_blurry_cameras") + "...",
+                                               prefixedAction(std::format("camera_selection:blurry:{}", node_id))));
                     items.push_back(makeAction(tr("scene.select_cropbox_cameras") + "...",
                                                prefixedAction(std::format("camera_selection:cropbox_visibility:{}", node_id))));
                 }
@@ -3474,6 +3477,26 @@ namespace lfs::vis::gui {
             return;
 
         const std::string& kind = parts[0];
+        if (kind == "align_models") {
+            auto* gui = services().guiOrNull();
+            auto* renderer = services().renderingOrNull();
+            if (!gui || !gui->getViewer() || !renderer || op::modelAlignmentSession() ||
+                selected_ids_.size() != 2 || !selected_ids_.contains(context_menu_node_id_))
+                return;
+            const auto other = std::ranges::find_if(selected_ids_, [&](const auto id) {
+                return id != context_menu_node_id_;
+            });
+            const auto* reference = scene->getNodeById(context_menu_node_id_);
+            const auto* mobile = scene->getNodeById(*other);
+            if (!reference || !mobile || !op::ModelAlignmentOperator::canBegin(*scene, *reference, *mobile))
+                return;
+            op::OperatorProperties props;
+            props.set("reference", reference->name);
+            props.set("moving", mobile->name);
+            op::operators().cancelModalOperator();
+            op::operators().invoke(op::BuiltinOp::ModelAlignment, &props);
+            return;
+        }
         if (kind == "select_hierarchy") {
             if (selectionContainsOnlyCamerasInGroup(context_menu_node_id_))
                 selectHierarchy(context_menu_node_id_);
@@ -3536,8 +3559,6 @@ namespace lfs::vis::gui {
             cmd::SequencerUpdateKeyframe{}.emit();
         } else if (kind == "select_kf" && parts.size() >= 2) {
             cmd::SequencerSelectKeyframe{.keyframe_index = static_cast<size_t>(std::stoul(parts[1]))}.emit();
-        } else if (kind == "delete_kf" && parts.size() >= 2) {
-            cmd::SequencerDeleteKeyframe{.keyframe_index = static_cast<size_t>(std::stoul(parts[1]))}.emit();
         } else if (kind == "add_kf") {
             cmd::SequencerAddKeyframe{}.emit();
         } else if ((kind == "enable_group_train" || kind == "disable_group_train" || kind == "invert_group_train") && parts.size() >= 2) {
@@ -3569,12 +3590,8 @@ namespace lfs::vis::gui {
             panels.bring_panel_to_front("lfs.camera_selection");
         } else if (kind == "delete" && parts.size() >= 2) {
             core::NodeId node_id = core::NULL_NODE;
-            if (parseNodeId(parts[1], node_id)) {
-                const auto snapshot_it = node_snapshots_.find(node_id);
-                if (snapshot_it == node_snapshots_.end() || !snapshot_it->second.delete_enabled)
-                    return;
+            if (parseNodeId(parts[1], node_id))
                 requestDeleteNodes({node_id});
-            }
         } else if (kind == "rename" && parts.size() >= 2) {
             core::NodeId node_id = core::NULL_NODE;
             if (parseNodeId(parts[1], node_id)) {

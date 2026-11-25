@@ -51,9 +51,13 @@ namespace lfs::vis::tools {
                    const char* text, const lfs::rendering::OverlayColor& color, float size);
     [[nodiscard]] ProjectedScreen projectToScreenChecked(const PanelProjection& proj, const glm::vec3& world_pos);
     [[nodiscard]] glm::vec2 projectToScreen(const PanelProjection& proj, const glm::vec3& world_pos);
-    [[nodiscard]] PointPickOverlayFrame pointPickOverlayFrame(const ToolContext& ctx);
+    [[nodiscard]] PointPickOverlayFrame pointPickOverlayFrame(const ToolContext& ctx,
+                                                              std::optional<SplitViewPanelId> panel = std::nullopt);
+    void drawPointMarker(lfs::rendering::ScreenOverlayRenderer& overlay, const PanelProjection& panel_proj,
+                         const glm::vec3& world, bool selected, const lfs::rendering::OverlayColor& color,
+                         float label_size, std::string_view label, bool translucent = false);
     void drawPointMarkers(lfs::rendering::ScreenOverlayRenderer& overlay, const PanelProjection& panel_proj,
-                          const std::vector<glm::vec3>& picked_points, std::optional<int> selected_point,
+                          const std::vector<glm::vec3>& points, std::optional<int> selected,
                           const lfs::rendering::OverlayColor& color, float label_size);
     void drawPointPickHud(lfs::rendering::ScreenOverlayRenderer& overlay, const PanelProjection& panel_proj,
                           std::string_view hint, const std::string& count_text, const std::string* status,

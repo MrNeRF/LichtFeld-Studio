@@ -13,7 +13,6 @@
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/sdl_rml_key_mapping.hpp"
-#include "operation/undo_history.hpp"
 #include "sequencer/interpolation.hpp"
 #include "sequencer/rml_sequencer_panel.hpp"
 #include "sequencer/timeline_view_math.hpp"
@@ -705,15 +704,9 @@ namespace lfs::vis {
             else if (auto selected_id = controller_.selectedKeyframeId(); selected_id.has_value())
                 to_delete.push_back(*selected_id);
 
-            op::TransactionGuard transaction("Delete Keyframes");
-            bool removed_any = false;
-            for (const auto id : to_delete)
-                removed_any |= controller_.removeKeyframeById(id);
-            transaction.commit();
             for (const auto id : to_delete)
                 removeSelectedKeyframe(selected_keyframes_, id);
-            if (removed_any)
-                lfs::core::events::state::KeyframeListChanged{.count = controller_.timeline().realKeyframeCount()}.emit();
+            controller_.removeKeyframesById(to_delete);
         }
 
         if (mouse_in_timeline && !mouse_in_scrollbar && input.mouse_clicked[1]) {

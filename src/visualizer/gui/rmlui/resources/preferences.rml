@@ -205,22 +205,15 @@
       <div class="preferences-section" data-if="show_viewport">
         <div class="section-header text-accent">@tr:preferences.viewport_defaults</div>
         <span class="preferences-description">@tr:preferences.viewport_defaults_hint</span>
+        <div class="preferences-inline-actions">
+          <button class="btn btn--secondary preferences-apply-defaults" data-event-click="apply_viewport_defaults"
+                  data-tooltip="rendering_panel.apply_defaults_hint">@tr:preferences.apply_viewport_defaults</button>
+        </div>
+        <span class="preferences-description status-error" data-if="rendering_defaults_error != ''">{{rendering_defaults_error}}</span>
         <div class="section-header text-accent">@tr:preferences.viewport_style_defaults</div>
-        <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.coord_axes">
-          <span class="preferences-label">@tr:main_panel.show_coord_axes</span>
-          <input type="checkbox" class="" data-checked="default_show_coord_axes" />
-        </div>
-        <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.pivot">
-          <span class="preferences-label">@tr:main_panel.show_pivot</span>
-          <input type="checkbox" class="" data-checked="default_show_pivot" />
-        </div>
-        <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.grid">
-          <span class="preferences-label">@tr:main_panel.show_grid</span>
-          <input type="checkbox" class="" data-checked="default_show_grid" />
-        </div>
-        <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.camera_frustums">
-          <span class="preferences-label">@tr:main_panel.camera_frustums</span>
-          <input type="checkbox" class="" data-checked="default_show_camera_frustums" />
+        <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.hide_outside_depth_box">
+          <span class="preferences-label">@tr:main_panel.hide_outside_depth_box</span>
+          <input type="checkbox" class="" data-checked="default_hide_outside_depth_box" />
         </div>
         <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.selection_outline">
           <span class="preferences-label">@tr:main_panel.selection_outline</span>
@@ -254,6 +247,22 @@
             <input type="checkbox" data-checked="default_selection_outline_holes" />
           </div>
         </div>
+        <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.coord_axes">
+          <span class="preferences-label">@tr:main_panel.show_coord_axes</span>
+          <input type="checkbox" class="" data-checked="default_show_coord_axes" />
+        </div>
+        <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.pivot">
+          <span class="preferences-label">@tr:main_panel.show_pivot</span>
+          <input type="checkbox" class="" data-checked="default_show_pivot" />
+        </div>
+        <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.grid">
+          <span class="preferences-label">@tr:main_panel.show_grid</span>
+          <input type="checkbox" class="" data-checked="default_show_grid" />
+        </div>
+        <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.camera_frustums">
+          <span class="preferences-label">@tr:main_panel.camera_frustums</span>
+          <input type="checkbox" class="" data-checked="default_show_camera_frustums" />
+        </div>
         <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.desaturate_unselected">
           <span class="preferences-label">@tr:main_panel.desaturate_unselected</span>
           <input type="checkbox" class="" data-checked="default_desaturate_unselected" />
@@ -261,10 +270,6 @@
         <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.desaturate_cropping">
           <span class="preferences-label">@tr:main_panel.desaturate_cropping</span>
           <input type="checkbox" class="" data-checked="default_desaturate_cropping" />
-        </div>
-        <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.hide_outside_depth_box">
-          <span class="preferences-label">@tr:main_panel.hide_outside_depth_box</span>
-          <input type="checkbox" class="" data-checked="default_hide_outside_depth_box" />
         </div>
         <div class="preferences-row" data-tooltip="tooltip.axes_size">
           <span class="preferences-label" data-reset-prop="axes_size">@tr:main_panel.axes_size</span>
@@ -306,11 +311,6 @@
         <div class="preferences-row" data-tooltip="tooltip.lod_pool_vram_fraction">
           <span class="preferences-label" data-reset-prop="lod_pool_vram_fraction">@tr:rendering_panel.lod_pool_vram_fraction</span>
           <input type="text" class="preferences-select" data-value="default_lod_pool_vram_fraction" />
-        </div>
-        <span class="preferences-description status-error">{{rendering_defaults_error}}</span>
-        <div class="preferences-inline-actions">
-          <button class="btn btn--secondary preferences-apply-defaults" data-event-click="apply_viewport_defaults"
-                  data-tooltip="rendering_panel.apply_defaults_hint">@tr:preferences.apply_viewport_defaults</button>
         </div>
       </div>
 

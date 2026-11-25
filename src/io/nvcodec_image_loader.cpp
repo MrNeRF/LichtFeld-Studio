@@ -1152,7 +1152,7 @@ namespace lfs::io {
             extensions_path_ptr = extensions_path_str.c_str();
             LOG_DEBUG("[NvCodecImageLoader] Extensions: {}", extensions_path_str);
         } else {
-            const auto exe_dir = lfs::core::getExecutableDir();
+            const auto exe_dir = lfs::core::getRuntimeDir();
             const auto lib_dir = lfs::core::getLibDir();
             LOG_WARN("[NvCodecImageLoader] GPU decode extensions unavailable: directory empty or missing. "
                      "Searched exe_dir/../extensions ({}), lib_dir/extensions ({}), exe_dir/extensions ({}). "

@@ -10,6 +10,7 @@
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/export.hpp"
 #include "core/tensor.hpp"
+#include "core/uuid.hpp"
 #include "dirty_flags.hpp"
 #include "frame_demand.hpp"
 #include "framerate_controller.hpp"
@@ -60,6 +61,7 @@
 namespace lfs::core {
     class Camera;
     class Scene;
+    class SceneNode;
     class SplatData;
     struct SplatLodTree;
     class Tensor;
@@ -417,7 +419,23 @@ namespace lfs::vis {
         // Project restore may only enter/leave split modes through the service
         // transition path; it must never assign RenderSettings::split_view_mode.
         void restoreSplitViewMode(SplitViewMode mode,
-                                  Viewport& primary_viewport);
+                                  Viewport& primary_viewport,
+                                  std::optional<float> position = std::nullopt,
+                                  std::optional<size_t> offset = std::nullopt);
+        struct IndependentPanelOverride {
+            std::vector<core::Uuid> visible_nodes;
+            std::vector<std::pair<core::Uuid, glm::mat4>> transforms;
+        };
+        struct IndependentSplitOverrides {
+            std::array<IndependentPanelOverride, 2> panels;
+            bool exact_surface_picking = false;
+        };
+        // Viewer-thread rendering inputs, borrowed from the active workflow's state.
+        void setIndependentPanelOverrides(std::optional<IndependentSplitOverrides> overrides) {
+            independent_panel_overrides_ = std::move(overrides);
+            markDirty(DirtyFlag::ALL, FrameReason::SceneChange);
+        }
+        const auto& independentPanelOverrides() const { return independent_panel_overrides_; }
         [[nodiscard]] float getSplitPosition() const;
         [[nodiscard]] std::optional<float> getSplitDividerScreenX(const glm::vec2& viewport_pos,
                                                                   const glm::vec2& viewport_size) const;
@@ -743,6 +761,9 @@ namespace lfs::vis {
                 return;
             exact_surface_picking_ = enabled;
             markDirty(DirtyFlag::VIEWPORT, FrameReason::SettingsChange);
+        }
+        [[nodiscard]] bool exactSurfacePicking() const {
+            return independent_panel_overrides_ ? independent_panel_overrides_->exact_surface_picking : exact_surface_picking_;
         }
         void configureSurfacePicking(FrameContext& frame) const;
 
@@ -1179,6 +1200,7 @@ namespace lfs::vis {
 
         CameraInteractionService camera_interaction_service_;
         SplitViewService split_view_service_;
+        std::optional<IndependentSplitOverrides> independent_panel_overrides_;
         ViewportFrameLifecycleService frame_lifecycle_service_;
 
         // Settings

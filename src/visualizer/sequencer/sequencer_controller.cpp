@@ -3,6 +3,7 @@
 
 #include "sequencer_controller.hpp"
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/events.hpp"
 #include "core/logger.hpp"
 #include "operation/undo_history.hpp"
 
@@ -607,6 +608,17 @@ namespace lfs::vis {
                 keyframe_removed_callback_(*before, duration_before);
         }
         return removed;
+    }
+
+    bool SequencerController::removeKeyframesById(const std::span<const sequencer::KeyframeId> ids) {
+        op::TransactionGuard transaction(ids.size() == 1 ? "Delete Keyframe" : "Delete Keyframes");
+        bool removed_any = false;
+        for (const auto id : ids)
+            removed_any |= removeKeyframeById(id);
+        transaction.commit();
+        if (removed_any)
+            core::events::state::KeyframeListChanged{.count = timeline_.realKeyframeCount()}.emit();
+        return removed_any;
     }
 
     bool SequencerController::removeSelectedKeyframe() {

@@ -25,6 +25,7 @@
 #include "gui/viewport_gizmo_geometry.hpp"
 #include "gui/volume_guide_visibility.hpp"
 #include "gui/vram_hud_sample_policy.hpp"
+#include "operator/ops/model_alignment_ops.hpp"
 #include "preferences.hpp"
 #include "window/vulkan_result.hpp"
 #include <ft2build.h>
@@ -6456,7 +6457,7 @@ namespace lfs::vis::gui {
             ui_hidden_ != last_ui_layout_ui_hidden_ ||
             python_console_visible != last_ui_layout_python_console_visible_ ||
             panel_layout_.isBottomDockVisible() != last_ui_layout_bottom_dock_visible_ ||
-            left_dock_rendered != last_ui_layout_left_dock_visible_ ||
+            left_dock_rendered != last_ui_layout_left_dock_rendered_ ||
             panel_layout_.getActiveTab() != last_ui_layout_active_tab_ ||
             panel_layout_.getBottomDockActiveTab() != last_ui_layout_bottom_dock_active_tab_ ||
             reg.visibility_revision() != last_ui_layout_panel_visibility_revision_;
@@ -6480,7 +6481,7 @@ namespace lfs::vis::gui {
                 reg.suspend_input(PanelSpace::SceneHeader);
                 reg.suspend_input(PanelSpace::MainPanelTab);
             }
-            if (last_ui_layout_left_dock_visible_ && !left_dock_rendered)
+            if (last_ui_layout_left_dock_rendered_ && !left_dock_rendered)
                 reg.suspend_input(PanelSpace::LeftDock);
             ui_layout_settle_frames_ = kUiLayoutSettleFrames;
             if (ui_visibility_resize_active_ &&
@@ -6503,7 +6504,7 @@ namespace lfs::vis::gui {
             last_ui_layout_ui_hidden_ = ui_hidden_;
             last_ui_layout_python_console_visible_ = python_console_visible;
             last_ui_layout_bottom_dock_visible_ = panel_layout_.isBottomDockVisible();
-            last_ui_layout_left_dock_visible_ = left_dock_rendered;
+            last_ui_layout_left_dock_rendered_ = left_dock_rendered;
             last_ui_layout_active_tab_ = panel_layout_.getActiveTab();
             last_ui_layout_bottom_dock_active_tab_ = panel_layout_.getBottomDockActiveTab();
             last_ui_layout_panel_visibility_revision_ = reg.visibility_revision();
@@ -6967,33 +6968,48 @@ namespace lfs::vis::gui {
             panel_layout_.isRightDockCollapsed());
         RmlViewportOverlay::SplitDividerOverlayState split_divider_state;
         if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr;
-            rendering && rendering->isSplitViewActive() && !rendering->isIndependentSplitViewActive()) {
-            const auto divider_x = rendering->getSplitDividerScreenX(viewport_layout_.pos, viewport_layout_.size);
-            const auto content_bounds = rendering->getContentBounds(glm::ivec2(
-                std::max(static_cast<int>(viewport_layout_.size.x), 0),
-                std::max(static_cast<int>(viewport_layout_.size.y), 0)));
-            if (divider_x && content_bounds.width > 0.0f && content_bounds.height > 0.0f) {
-                const auto& t = theme();
-                constexpr float kSplitDividerMinWidthPx = 10.0f;
-                const float divider_width =
-                    std::max(kSplitDividerMinWidthPx * current_ui_scale_,
-                             std::round(t.viewport.border_size * current_ui_scale_ * 4.0f));
-                split_divider_state.visible = true;
-                split_divider_state.x = std::round((*divider_x - screen.work_pos.x) - divider_width * 0.5f);
-                split_divider_state.y = content_bounds.y;
-                split_divider_state.width = divider_width;
-                split_divider_state.height = content_bounds.height;
-                const auto info = rendering->getSplitViewInfo();
-                if (splitViewUsesPLYComparison(rendering->getSettings().split_view_mode)) {
-                    const float inset = 10.0f * current_ui_scale_;
-                    split_divider_state.left_name = info.left_name;
-                    split_divider_state.right_name = info.right_name;
-                    split_divider_state.left_name_right = *divider_x - screen.work_pos.x - inset;
-                    split_divider_state.right_name_right = viewport_content_offset + content_bounds.x + content_bounds.width - inset;
-                    split_divider_state.name_bottom = content_bounds.y + content_bounds.height - inset;
-                    const float left_width = *divider_x - viewport_layout_.pos.x - content_bounds.x;
-                    const float right_width = content_bounds.width - left_width;
-                    split_divider_state.name_max_width = std::max(0.0f, std::min(left_width, right_width) - 2.0f * inset);
+            rendering && rendering->isSplitViewActive()) {
+            const auto* alignment = op::modelAlignmentSession();
+            const bool model_alignment = alignment != nullptr;
+            const bool comparison_divider = !rendering->isIndependentSplitViewActive();
+            if (comparison_divider || model_alignment) {
+                const auto divider_x = rendering->getSplitDividerScreenX(viewport_layout_.pos, viewport_layout_.size);
+                const auto content_bounds = rendering->getContentBounds(glm::ivec2(
+                    std::max(static_cast<int>(viewport_layout_.size.x), 0),
+                    std::max(static_cast<int>(viewport_layout_.size.y), 0)));
+                if (divider_x && content_bounds.width > 0.0f && content_bounds.height > 0.0f) {
+                    const auto& t = theme();
+                    constexpr float kSplitDividerMinWidthPx = 10.0f;
+                    const float divider_width =
+                        std::max(kSplitDividerMinWidthPx * current_ui_scale_,
+                                 std::round(t.viewport.border_size * current_ui_scale_ * 4.0f));
+                    split_divider_state.visible = true;
+                    split_divider_state.x = std::round((*divider_x - screen.work_pos.x) - divider_width * 0.5f);
+                    split_divider_state.y = content_bounds.y;
+                    split_divider_state.width = divider_width;
+                    split_divider_state.height = content_bounds.height;
+                    auto info = rendering->getSplitViewInfo();
+                    if (alignment) {
+                        const auto& scene = viewer_->getSceneManager()->getScene();
+                        const auto* reference = scene.getNodeByUuid(alignment->nodes[0]);
+                        const auto* mobile = scene.getNodeByUuid(alignment->nodes[1]);
+                        info.left_name = alignment->composite == SplitViewPanelId::Left ? LOC("align.composite_name")
+                                                                                        : LOCF("align.reference_name", reference ? reference->name : "");
+                        info.right_name = alignment->composite == SplitViewPanelId::Right ? LOC("align.composite_name")
+                                                                                          : LOCF("align.mobile_name", mobile ? mobile->name : "");
+                    }
+                    if (alignment ||
+                        splitViewUsesPLYComparison(rendering->getSettings().split_view_mode)) {
+                        const float inset = 10.0f * current_ui_scale_;
+                        split_divider_state.left_name = info.left_name;
+                        split_divider_state.right_name = info.right_name;
+                        split_divider_state.left_name_right = *divider_x - screen.work_pos.x - inset;
+                        split_divider_state.right_name_right = viewport_content_offset + content_bounds.x + content_bounds.width - inset;
+                        split_divider_state.name_bottom = content_bounds.y + content_bounds.height - inset;
+                        const float left_width = *divider_x - viewport_layout_.pos.x - content_bounds.x;
+                        const float right_width = content_bounds.width - left_width;
+                        split_divider_state.name_max_width = std::max(0.0f, std::min(left_width, right_width) - 2.0f * inset);
+                    }
                 }
             }
         }
@@ -8047,11 +8063,13 @@ namespace lfs::vis::gui {
         }
 
         auto* align_tool = ctx.viewer->getAlignTool();
-        if (align_tool && align_tool->isEnabled() && !ui_hidden_) {
+        const auto* renderer = ctx.viewer->getRenderingManager();
+        const bool model_alignment = renderer && op::modelAlignmentSession();
+        if (align_tool && (align_tool->isEnabled() || model_alignment) && !ui_hidden_) {
             align_tool->renderUI(ctx, nullptr);
         }
         auto* scale_distance_tool = ctx.viewer->getScaleDistanceTool();
-        if (scale_distance_tool && scale_distance_tool->isEnabled() && !ui_hidden_) {
+        if (!model_alignment && scale_distance_tool && scale_distance_tool->isEnabled() && !ui_hidden_) {
             scale_distance_tool->renderUI(ctx, nullptr);
         }
     }

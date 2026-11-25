@@ -1,13 +1,80 @@
+/* Shared border roles and shape scale. */
+
+#close-btn {
+    border-radius: 5dp;
+}
+
+input[type="radio"] {
+    border-radius: 7dp;
+}
+
+input[type="range"] slidertrack {
+    border-radius: 6dp;
+}
+
+input[type="range"] sliderprogress {
+    border-radius: 6dp;
+}
+
+input[type="range"] sliderbar {
+    border-radius: 6dp;
+}
+
+select:focus-visible,
+button:focus-visible,
+.btn:focus-visible,
+.context-menu-item:focus-visible,
+.section-header:focus-visible,
+.asset-filter-row:focus-visible,
+.asset-sidebar-title:focus-visible {
+    border-color: @{primary};
+}
+
+.scrub-field {
+    border-radius: 6dp;
+}
+
+.scrub-field-fill {
+    border-radius: 5dp;
+}
+
+.section-header {
+    border-radius: 0;
+}
+
+.color-comp {
+    border-color: @{border};
+}
+
+.color-channel {
+    border-color: @{border};
+}
+
+.color-hex {
+    border-color: @{border};
+}
+
+.frame-tooltip {
+    border-radius: 3dp;
+}
+
 /* Theme-dependent shared component styles.
  * Selectors live in RCSS; C++ only expands theme tokens from the active theme
  * presets and wraps this file in RmlUi theme media blocks. */
 
 #window-frame {
     @{window.body_decor};
-    border-color: @{alpha(border,0.4)};
+    border-width: @{stroke.normal}dp;
+    border-color: @{border};
     border-radius: @{num(size.window_rounding)}dp;
     position: relative;
     z-index: 1;
+}
+
+.text-body {
+    color: @{text};
+    font-size: @{num(font.base_size)}dp;
+    font-weight: 400;
 }
 
 #window-shadow-ambient,
@@ -248,8 +315,6 @@ progress fill {
     @{components.header_shape};
 }
 
-.section-header:hover,
-.section-header.is-expanded,
 .section-gap,
 .section-content {
     border-color: @{menu.background};
@@ -259,6 +324,12 @@ progress fill {
 .section-header.is-expanded {
     @{components.header_hover_decor};
     border-color: @{components.header_state_border};
+}
+
+.section-header:focus-visible {
+    border-top-width: 4dp;
+    padding-top: @{components.header_focus_padding_top}dp;
+    border-color: @{primary};
 }
 
 .section-header.text-accent,
@@ -342,66 +413,66 @@ progress fill {
 
 .btn--primary {
     background-color: @{blend(surface,primary,button.tint_normal)};
-    border-color: @{blend(surface,primary,button.tint_normal)};
+    border-color: @{primary};
     color: @{text};
 }
 
 .btn--primary:hover {
     background-color: @{blend(surface,primary,button.tint_hover)};
-    border-color: @{blend(surface,primary,button.tint_hover)};
+    border-color: @{primary};
 }
 
 .btn--primary:active {
     background-color: @{blend(surface,primary,button.tint_active)};
-    border-color: @{blend(surface,primary,button.tint_active)};
+    border-color: @{primary};
 }
 
 .btn--success {
     background-color: @{blend(surface,success,button.tint_normal)};
-    border-color: @{blend(surface,success,button.tint_normal)};
+    border-color: @{success};
     color: @{text};
 }
 
 .btn--success:hover {
     background-color: @{blend(surface,success,button.tint_hover)};
-    border-color: @{blend(surface,success,button.tint_hover)};
+    border-color: @{success};
 }
 
 .btn--success:active {
     background-color: @{blend(surface,success,button.tint_active)};
-    border-color: @{blend(surface,success,button.tint_active)};
+    border-color: @{success};
 }
 
 .btn--warning {
     background-color: @{blend(surface,warning,button.tint_normal)};
-    border-color: @{blend(surface,warning,button.tint_normal)};
+    border-color: @{warning};
     color: @{text};
 }
 
 .btn--warning:hover {
     background-color: @{blend(surface,warning,button.tint_hover)};
-    border-color: @{blend(surface,warning,button.tint_hover)};
+    border-color: @{warning};
 }
 
 .btn--warning:active {
     background-color: @{blend(surface,warning,button.tint_active)};
-    border-color: @{blend(surface,warning,button.tint_active)};
+    border-color: @{warning};
 }
 
 .btn--error {
     background-color: @{blend(surface,error,button.tint_normal)};
-    border-color: @{blend(surface,error,button.tint_normal)};
+    border-color: @{error};
     color: @{text};
 }
 
 .btn--error:hover {
     background-color: @{blend(surface,error,button.tint_hover)};
-    border-color: @{blend(surface,error,button.tint_hover)};
+    border-color: @{error};
 }
 
 .btn--error:active {
     background-color: @{blend(surface,error,button.tint_active)};
-    border-color: @{blend(surface,error,button.tint_active)};
+    border-color: @{error};
 }
 
 .border-error {
@@ -556,7 +627,7 @@ scrollbarhorizontal sliderbar:hover {
 .frame-tooltip {
     color: @{text};
     background-color: @{alpha(surface,0.94)};
-    border-color: @{alpha(border,0.50)};
+    border-color: @{border};
 }
 
 .window-minimize-line,
@@ -575,4 +646,21 @@ button.window-control .window-minimize-line {
 button.window-control .window-maximize-box,
 button.window-control .window-restore-box {
     border-color: @{text_dim};
+}
+
+.window-pin-icon {
+    image-color: @{text_dim};
+}
+#pin-btn.pinned {
+    background-color: @{alpha(primary,0.16)};
+}
+#pin-btn.pinned:hover {
+    background-color: @{alpha(primary,0.28)};
+}
+#pin-btn.pinned .window-pin-icon {
+    image-color: @{primary};
+}
+
+button.window-control {
+    border-radius: 5dp;
 }

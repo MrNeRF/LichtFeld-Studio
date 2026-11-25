@@ -6,6 +6,7 @@
 #include "core/services.hpp"
 #include "gui/gui_manager.hpp"
 #include "gui/string_keys.hpp"
+#include "model_alignment_ops.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "operator/operator_registry.hpp"
@@ -343,11 +344,14 @@ namespace lfs::vis::op {
     }
 
     void registerAlignOperators() {
+        operators().registerOperator(BuiltinOp::ModelAlignment, ModelAlignmentOperator::DESCRIPTOR,
+                                     [] { return std::make_unique<ModelAlignmentOperator>(); });
         operators().registerOperator(BuiltinOp::AlignPickPoint, AlignPickPointOperator::DESCRIPTOR,
                                      [] { return std::make_unique<AlignPickPointOperator>(); });
     }
 
     void unregisterAlignOperators() {
+        operators().unregisterOperator(BuiltinOp::ModelAlignment);
         operators().unregisterOperator(BuiltinOp::AlignPickPoint);
     }
 

@@ -14,6 +14,7 @@
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
 #include "io/cache_image_loader.hpp"
+#include "licht_test_support.hpp"
 #include "training/components/calibration_correction.hpp"
 #include "training/dataset.hpp"
 #include "training/metrics/eval_image_labels.hpp"
@@ -1966,6 +1967,61 @@ TEST(ViewEvaluationJson, StepsBeyondTheLastIterationAreReported) {
     EXPECT_EQ(unreachable_eval_steps({7000, 10000, 200000}, 30000), (std::vector<size_t>{200000}));
     EXPECT_EQ(unreachable_eval_steps({7000, 30000}, 30000), (std::vector<size_t>{}));
     EXPECT_EQ(unreachable_eval_steps({7000, 30000}, 5000), (std::vector<size_t>{7000, 30000}));
+}
+
+TEST(MetricsEvaluator, SavedPngNamesPreserveOriginalsAndDistinguishAliases) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    ensure_image_loader();
+    const lfs::test::licht::TemporaryDirectory temp("lfs_eval_png_aliases");
+    const auto& tmp = temp.path;
+    std::filesystem::create_directories(tmp / "a");
+    std::filesystem::create_directories(tmp / "b");
+    std::filesystem::create_directories(tmp / "c");
+    constexpr int width = 16, height = 12;
+    const auto first_path = tmp / "a" / "view.png";
+    const auto second_path = tmp / "b" / "view.png";
+    const auto third_path = tmp / "b" / "view_1.png";
+    const auto fourth_path = tmp / "c" / "View.png";
+    write_rgb_png(first_path, 126, 126, 126, height, width);
+    write_rgb_png(second_path, 20, 200, 60, height, width);
+    write_rgb_png(third_path, 200, 20, 60, height, width);
+    write_rgb_png(fourth_path, 60, 20, 200, height, width);
+    auto first = make_eval_camera(first_path, {}, width, height);
+    auto second = make_eval_camera(second_path, {}, width, height);
+    auto third = make_eval_camera(third_path, {}, width, height);
+    auto fourth = make_eval_camera(fourth_path, {}, width, height);
+    auto dataset = std::make_shared<CameraDataset>(
+        std::vector<std::shared_ptr<Camera>>{first, second, third, fourth}, DatasetConfig{}, CameraDataset::Split::ALL);
+    auto params = make_eval_params(tmp / "out");
+    params.optimization.calibration_correction = false;
+    params.optimization.enable_save_eval_images = true;
+    std::filesystem::create_directories(params.dataset.output_path);
+    MetricsEvaluator evaluator(params);
+    auto background = Tensor::zeros({3}, Device::CUDA);
+    const auto result = evaluator.evaluate(3, make_front_facing_splat(), dataset, background);
+    ASSERT_TRUE(result.valid);
+    ASSERT_EQ(result.views.size(), 4u);
+    const auto image_dir = params.dataset.output_path / "eval_step_3";
+    const auto expect_source_pixel = [&](const char* filename, std::array<uint8_t, 3> rgb) {
+        SCOPED_TRACE(filename);
+        const auto [pixels, saved_width, saved_height, channels] = lfs::core::load_image(image_dir / filename);
+        const std::unique_ptr<unsigned char, decltype(&lfs::core::free_image)> owner(pixels, &lfs::core::free_image);
+        ASSERT_NE(pixels, nullptr);
+        const int y = lfs::training::caption_band_height(height);
+        ASSERT_GT(saved_height, y);
+        ASSERT_GT(saved_width, 0);
+        ASSERT_GE(channels, 3);
+        const auto offset = static_cast<size_t>(y) * saved_width * channels;
+        for (size_t channel = 0; channel < rgb.size(); ++channel)
+            EXPECT_EQ(pixels[offset + channel], rgb[channel]);
+    };
+    expect_source_pixel("view.png", {126, 126, 126});
+    expect_source_pixel("view_1.png", {200, 20, 60});
+    expect_source_pixel("view_1_1.png", {20, 200, 60});
+    const bool case_alias = std::filesystem::exists(image_dir / "VIEW.PNG");
+    expect_source_pixel(case_alias ? "View_3.png" : "View.png", {60, 20, 200});
 }
 
 // per_image_metrics.json is read by scripts outside LichtFeld Studio: its keys

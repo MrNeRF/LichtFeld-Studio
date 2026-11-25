@@ -100,14 +100,28 @@ def installed_ports(triplet_dir: Path, vcpkg_root: Path | None = None) -> list[d
         text = read_text(metadata.parent / "copyright")
         license_texts = [text] if text else []
         if vcpkg_root:
-            references = re.findall(r"(?i)([A-Za-z0-9_./+-]*(?:LICENSE|COPYING|NOTICE|PATENTS)[A-Za-z0-9_.+-]*)", text)
+            references = [Path(reference) for reference in dict.fromkeys(re.findall(
+                r"(?i)([A-Za-z0-9_./+-]*(?:LICENSE|COPYING|NOTICE|PATENTS)[A-Za-z0-9_.+-]*)", text))]
             source_root = vcpkg_root / "buildtrees" / name / "src"
-            for reference in references:
-                basename = Path(reference).name
-                candidates = [metadata.parent / reference]
-                if source_root.exists():
-                    candidates.extend(source_root.glob(f"**/{basename}"))
+            source_matches = {reference.name: [] for reference in references if reference.name}
+            if source_matches and source_root.exists():
+                # Traverse directories once; let glob retain its filesystem and
+                # Python-version-specific matching rules for each basename.
+                for directory in source_root.glob("**"):
+                    for basename, matches in source_matches.items():
+                        matches.extend(directory.glob(basename))
+            read_paths = set()
+            for reference_path in references:
+                # URL tails can look like UNC paths on Windows. Only open
+                # relative references here; keep the local source lookup below.
+                candidates = [] if reference_path.anchor else [metadata.parent / reference_path]
+                candidates.extend(source_matches.get(reference_path.name, []))
                 for candidate in candidates:
+                    # Exact spellings preserve distinct files in case-sensitive
+                    # directories, including those enabled on Windows.
+                    if str(candidate) in read_paths:
+                        continue
+                    read_paths.add(str(candidate))
                     body = read_text(candidate)
                     if body and body not in license_texts:
                         license_texts.append(body)
@@ -188,7 +202,7 @@ def python_components(roots: list[Path]) -> list[dict[str, str]]:
     return result
 
 
-def ffmpeg_details(args: argparse.Namespace) -> str:
+def ffmpeg_details(args: argparse.Namespace, ports: list[dict[str, str]]) -> str:
     status = read_text(args.vcpkg_root / "installed" / "vcpkg" / "status") if args.vcpkg_root else ""
     # CMake's installed root can differ from the vcpkg checkout.
     status = status or read_text(args.triplet_dir.parent / "vcpkg" / "status")
@@ -227,7 +241,7 @@ def ffmpeg_details(args: argparse.Namespace) -> str:
         source_tag = source or source_tag
     overlays = sorted(p for p in args.source.glob(".github/overlays/*/portfile.cmake") if p.parent.name in {"ffmpeg", "x264"})
     overlay_text = ", ".join(str(p.relative_to(args.source).parent) for p in overlays) or "none found"
-    x264_package = next((p for p in installed_ports(args.triplet_dir, args.vcpkg_root) if p["name"] == "x264"), None)
+    x264_package = next((p for p in ports if p["name"] == "x264"), None)
     x264_source = "not installed in this triplet"
     x264_spdx = args.triplet_dir / "share" / "x264" / "vcpkg.spdx.json"
     if x264_spdx.exists():
@@ -245,7 +259,7 @@ def ffmpeg_details(args: argparse.Namespace) -> str:
         "### FFmpeg build configuration",
         "",
         f"- Generated from the vcpkg triplet installed at package time: `{args.triplet_dir.name}`.",
-        f"- Version: {next((p['version'] for p in installed_ports(args.triplet_dir, args.vcpkg_root) if p['name'] == 'ffmpeg'), 'not installed')}",
+        f"- Version: {next((p['version'] for p in ports if p['name'] == 'ffmpeg'), 'not installed')}",
         f"- Installed vcpkg features: {', '.join(features) or 'not available in vcpkg status'}",
         f"- Configure options ({option_source}): {', '.join(sorted(set(options))) or 'not found in available vcpkg logs/port recipe'}",
         f"- Resulting build license: {'GPL (x264 feature is installed)' if gpl else 'x264 is not installed in this triplet; do not label this build GPL because of x264'}{status_note}",
@@ -293,8 +307,9 @@ def validate_coverage(document: str, triplet_dir: Path, install_prefix: Path) ->
     return errors
 
 
-def generate(args: argparse.Namespace) -> str:
-    ports = installed_ports(args.triplet_dir, args.vcpkg_root)
+def generate(args: argparse.Namespace, ports: list[dict[str, str]] | None = None) -> str:
+    if ports is None:
+        ports = installed_ports(args.triplet_dir, args.vcpkg_root)
     components = ports + vendored_components(args.source / "external", args.source)
     components += vendored_components(args.source / "resources/licenses", args.source)
     components += python_components([args.install_prefix, args.triplet_dir / "tools" / "python3", args.source])
@@ -376,7 +391,7 @@ def generate(args: argparse.Namespace) -> str:
     if nvjpeg2k_present:
         notice.append("The applicable nvJPEG2000 Supplement and NVIDIA SDK distribution requirements are reproduced under `LicenseRef-NVIDIA-nvJPEG2000`.")
     notice.append("nvImageCodec and its extensions are built from vendored source and carry their own source notices.")
-    lines += ["## Installed shared libraries", "", *[f"- `{name}`" for name in shared_names], "", ffmpeg_details(args), "", "### NVIDIA notices", "", *notice, "", "References: https://docs.nvidia.com/cuda/eula/index.html and https://docs.nvidia.com/cuda/nvjpeg2000/license.html", ""]
+    lines += ["## Installed shared libraries", "", *[f"- `{name}`" for name in shared_names], "", ffmpeg_details(args, ports), "", "### NVIDIA notices", "", *notice, "", "References: https://docs.nvidia.com/cuda/eula/index.html and https://docs.nvidia.com/cuda/nvjpeg2000/license.html", ""]
     for path in nvidia_paths:
         name = path.name
         lower = name.lower()
@@ -401,14 +416,15 @@ def main() -> int:
     parser.add_argument("--vcpkg-root", type=Path)
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
-    document = generate(args)
+    ports = installed_ports(args.triplet_dir, args.vcpkg_root)
+    document = generate(args, ports)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(document, encoding="utf-8")
     errors = validate_coverage(document, args.triplet_dir, args.install_prefix) if args.check else []
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1
-    print(f"Generated {args.output} ({len(installed_ports(args.triplet_dir, args.vcpkg_root))} vcpkg ports)")
+    print(f"Generated {args.output} ({len(ports)} vcpkg ports)")
     return 0
 
 
