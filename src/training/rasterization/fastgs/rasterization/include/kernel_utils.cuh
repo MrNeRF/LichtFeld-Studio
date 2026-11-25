@@ -111,7 +111,7 @@ namespace fast_lfs::rasterization::kernels {
         if (sh_value_bits == 16u) {
             const __half* sh_h = reinterpret_cast<const __half*>(sh_f4);
             auto load_half4 = [&](const uint slot) -> float4 {
-                const uint base = shAt(primitive_idx, slot, slots_per_primitive) * 4u;
+                const size_t base = static_cast<size_t>(shAt(primitive_idx, slot, slots_per_primitive)) * 4u;
                 return make_float4(__half2float(sh_h[base + 0]),
                                    __half2float(sh_h[base + 1]),
                                    __half2float(sh_h[base + 2]),
@@ -217,7 +217,7 @@ namespace fast_lfs::rasterization::kernels {
         const uint sh_value_bits) {
         if (sh_value_bits == 16u) {
             const __half* sh_h = reinterpret_cast<const __half*>(sh_f4);
-            const uint base = shAt(primitive_idx, slot, slots_per_primitive) * 4u;
+            const size_t base = static_cast<size_t>(shAt(primitive_idx, slot, slots_per_primitive)) * 4u;
             return make_float4(__half2float(sh_h[base + 0]),
                                __half2float(sh_h[base + 1]),
                                __half2float(sh_h[base + 2]),
@@ -745,7 +745,7 @@ namespace fast_lfs::rasterization::kernels {
             return make_float4(px, py, pz, pw);
         }
         if (value_f16) {
-            const uint base = slot * 4u;
+            const size_t base = static_cast<size_t>(slot) * 4u;
             return make_float4(__half2float(param_h[base + 0]),
                                __half2float(param_h[base + 1]),
                                __half2float(param_h[base + 2]),
@@ -969,7 +969,7 @@ namespace fast_lfs::rasterization::kernels {
                 }
                 if (apply_step && active_slot && !defer_value_write) {
                     if (value_f16) {
-                        const uint base = slot * 4u;
+                        const size_t base = static_cast<size_t>(slot) * 4u;
                         param_h[base + 0] = __float2half(pc.x);
                         param_h[base + 1] = __float2half(pc.y);
                         param_h[base + 2] = __float2half(pc.z);
@@ -1074,7 +1074,7 @@ namespace fast_lfs::rasterization::kernels {
                 }
                 if (defer_value_write && apply_step && active_slot && !value_q16) {
                     if (value_f16) {
-                        const uint base = slot * 4u;
+                        const size_t base = static_cast<size_t>(slot) * 4u;
                         param_h[base + 0] = __float2half(pc.x);
                         param_h[base + 1] = __float2half(pc.y);
                         param_h[base + 2] = __float2half(pc.z);
