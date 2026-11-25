@@ -87,13 +87,16 @@ def test_default_text_saves_on_commit_not_per_keystroke(preferences_panel_module
     assert getter() == "15"
     section._commit("axes_size")
     assert state.rendering_defaults["axes_size"] == 9.0
-    assert section._error and getter() == 9.0
+    assert section._error and getter() == "15"
     setter("4")
     section._commit("axes_size")
     assert state.rendering_defaults["axes_size"] == 4.0
     assert not section._error
-    setter("7")
+    setter("15")
+    section._commit("axes_size")
+    assert section._error
     section._discard("axes_size")
+    assert not section._error and getter() == 4.0
     section._commit("axes_size")
     assert state.rendering_defaults["axes_size"] == 4.0
 
@@ -197,7 +200,11 @@ def test_preferences_invalid_pending_default_cannot_apply_old_values(preferences
     dialogs, applied = [], []
     module.lf.ui.confirm_dialog = lambda *args: dialogs.append(args)
     module.lf.ui.apply_rendering_defaults = lambda: applied.append(True)
-    model.bindings["default_axes_size"][1]("nan")
+    state.rendering_defaults = {"selection_outline_opacity": 1.0}
+    getter, setter = model.bindings["default_selection_outline_opacity"]
+    setter("7")
+    section._commit_text("selection_outline_opacity")
+    assert getter() == "7"
     section._confirm_apply()
     assert model.func_bindings["rendering_defaults_error"]() == "preferences.viewport_defaults_invalid"
     assert dialogs == [] and applied == []
@@ -208,6 +215,17 @@ def test_preferences_invalid_pending_default_cannot_apply_old_values(preferences
     adjacent_error = list(viewport)[list(viewport).index(action) + 1]
     assert adjacent_error.get("data-if") == "rendering_defaults_error != ''"
     assert adjacent_error.text == "{{rendering_defaults_error}}"
+    assert sum(element.text == "{{rendering_defaults_error}}" for element in viewport.iter("span")) == 1
+    assert state.rendering_defaults["selection_outline_opacity"] == 1.0
+
+    setter("0.75")
+    section._confirm_apply()
+    assert state.rendering_defaults["selection_outline_opacity"] == 0.75
+    assert model.func_bindings["rendering_defaults_error"]() == ""
+    assert len(dialogs) == 1 and applied == []
+    _, _, buttons, callback = dialogs.pop()
+    callback(buttons[0])
+    assert applied == [True]
 
 
 def test_preferences_exposes_explicit_project_apply_and_translates_it_everywhere():

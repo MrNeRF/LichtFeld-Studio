@@ -312,7 +312,6 @@
           <span class="preferences-label" data-reset-prop="lod_pool_vram_fraction">@tr:rendering_panel.lod_pool_vram_fraction</span>
           <input type="text" class="preferences-select" data-value="default_lod_pool_vram_fraction" />
         </div>
-        <span class="preferences-description status-error">{{rendering_defaults_error}}</span>
       </div>
 
       <div class="preferences-section" data-if="show_appearance">
