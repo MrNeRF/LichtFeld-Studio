@@ -70,9 +70,10 @@ void main(uint3 groupId:SV_GroupID,uint lane:SV_GroupIndex,uniform Parameters p)
         let step = (Ptr<float, Access.ReadWrite>)p.a;
         let peak = (Ptr<float, Access.ReadWrite>)p.b;
         float value = step[i];
-        step[i] = 0;
         if (value > 0) ((Ptr<float, Access.ReadWrite>)p.c)[i] += 1;
         peak[i] = max(peak[i] * p.x, value);
+        // Cleared after its last use: through MoltenVK the uses after an earlier clear saw 0.
+        step[i] = 0;
     } else if (operation == 19) {
         float reach = ((Ptr<float, Access.Read>)p.b)[i] >= p.x
             ? rowReach(((Ptr<float, Access.Read>)p.a)[i], ((Ptr<float, Access.Read>)p.c)[i]) : 1.0f;
