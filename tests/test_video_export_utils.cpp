@@ -195,6 +195,29 @@ TEST(VideoExportUtilsTest, CaptureSnapshotUsesRenderableModelAndTransforms) {
     EXPECT_EQ(snapshot.transform_indices->cpu().to_vector_int(), (std::vector<int>{0, 1}));
 }
 
+TEST(VideoExportUtilsTest, CudaDeviceIdentityRejectsMismatchAndRecovers) {
+    int device = 0;
+    if (cudaGetDevice(&device) != cudaSuccess)
+        GTEST_SKIP() << "CUDA device required";
+    cudaDeviceProp properties{};
+    ASSERT_EQ(cudaGetDeviceProperties(&properties, device), cudaSuccess);
+    std::array<std::uint8_t, 16> uuid{};
+    std::copy_n(properties.uuid.bytes, uuid.size(), uuid.begin());
+    auto other_uuid = uuid;
+    other_uuid[0] ^= 1;
+
+    lfs::rendering::setExpectedVulkanDeviceUuid(other_uuid);
+    const auto mismatch = lfs::rendering::verifyCudaMatchesVulkanDevice();
+    const auto repeated_mismatch = lfs::rendering::verifyCudaMatchesVulkanDevice();
+    // Restore the matching identity before assertions, including failure paths.
+    lfs::rendering::setExpectedVulkanDeviceUuid(uuid);
+    EXPECT_TRUE(mismatch.has_value());
+    if (mismatch)
+        EXPECT_NE(mismatch->find("does not match"), std::string::npos);
+    EXPECT_EQ(repeated_mismatch, mismatch);
+    EXPECT_FALSE(lfs::rendering::verifyCudaMatchesVulkanDevice().has_value());
+}
+
 TEST(VideoExportUtilsTest, UnconsolidatedAllNodeCacheVisibilityReachesCudaAndVulkan) {
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO))
         GTEST_SKIP() << SDL_GetError();

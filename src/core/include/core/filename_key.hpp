@@ -6,9 +6,8 @@ namespace lfs::core::detail {
     // Stable sibling keys must follow the containing directory's case semantics.
     // In ordinary Windows directories, casing aliases must share one key even
     // before the source exists. Case-sensitive directories keep distinct keys.
-    [[nodiscard]] inline native_fs::path artifact_filename_key(const native_fs::path& source) {
+    [[nodiscard]] inline bool artifact_directory_case_sensitive(native_fs::path directory) {
 #ifdef _WIN32
-        auto directory = source.parent_path();
         if (directory.empty())
             directory = native_fs::current_path();
         std::error_code error;
@@ -26,6 +25,15 @@ namespace lfs::core::detail {
                 case_sensitive = (info.Flags & FILE_CS_FLAG_CASE_SENSITIVE_DIR) != 0;
             CloseHandle(handle);
         }
+        return case_sensitive;
+#else
+        (void)directory;
+        return true;
+#endif
+    }
+
+    [[nodiscard]] inline native_fs::path artifact_filename_key(const native_fs::path& source, bool case_sensitive) {
+#ifdef _WIN32
         if (!case_sensitive) {
             auto units = source.filename().native();
             using Upcase = WCHAR(NTAPI*)(WCHAR);
@@ -41,7 +49,13 @@ namespace lfs::core::detail {
             }
             return native_fs::path(units);
         }
+#else
+        (void)case_sensitive;
 #endif
         return source.filename();
+    }
+
+    [[nodiscard]] inline native_fs::path artifact_filename_key(const native_fs::path& source) {
+        return artifact_filename_key(source, artifact_directory_case_sensitive(source.parent_path()));
     }
 } // namespace lfs::core::detail

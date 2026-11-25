@@ -4,11 +4,13 @@
 
 #include "core/cuda_error.hpp"
 #include "core/cuda_safe_format.hpp"
+#include "core/memory_pressure.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "lfs/kernels/loss_tensor_contract.hpp"
 #include "lfs/kernels/ssim.cuh"
 #include "lfs/kernels/ssim_reduction.cuh"
 #include <algorithm>
+#include <cmath>
 #include <cooperative_groups.h>
 #include <cstdint>
 #include <cuda_fp16.h>
@@ -2748,10 +2750,28 @@ namespace lfs::training::kernels {
             .W = ctx.W};
     }
 
+    namespace {
+        __global__ void add_gradient_kernel(float* __restrict__ dst, const float* __restrict__ src, const size_t n) {
+            const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+            if (idx < n)
+                dst[idx] += src[idx];
+        }
+    } // namespace
+
     void accumulate_decoupled_raw_gradient(const DecoupledRawGradient& raw, lfs::core::Tensor& grad_image) {
-        validate_loss_context_images(raw.raw_img, raw.gt_img, raw.H, raw.W);
         LFS_ASSERT(grad_image.is_contiguous() && grad_image.dtype() == lfs::core::DataType::Float32 &&
                    grad_image.numel() == raw.raw_img.numel());
+        if (raw.precomputed.is_valid()) {
+            LFS_ASSERT(raw.precomputed.is_contiguous() && raw.precomputed.dtype() == lfs::core::DataType::Float32 &&
+                       raw.precomputed.numel() == grad_image.numel());
+            const size_t n = grad_image.numel();
+            const auto stream = lfs::core::getCurrentCUDAStream();
+            add_gradient_kernel<<<static_cast<unsigned>((n + 255) / 256), 256, 0, stream>>>(
+                grad_image.ptr<float>(), raw.precomputed.ptr<float>(), n);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.decoupled_raw_precomputed");
+            return;
+        }
+        validate_loss_context_images(raw.raw_img, raw.gt_img, raw.H, raw.W);
 
         constexpr float C1 = 0.01f * 0.01f;
         constexpr float C2 = 0.03f * 0.03f;
@@ -3137,7 +3157,7 @@ namespace lfs::training::kernels {
         __global__ void ssim_to_error_map_kernel(
             const float* __restrict__ ssim_map,
             float* __restrict__ error_map,
-            int C, int H, int W) {
+            int C, int H, int W, bool square) {
 
             int idx = blockIdx.x * blockDim.x + threadIdx.x;
             int HW = H * W;
@@ -3149,14 +3169,15 @@ namespace lfs::training::kernels {
                 sum += ssim_map[c * HW + idx];
             }
             float inv_c = 1.0f / static_cast<float>(C);
-            float err = 1.0f - sum * inv_c;
-            error_map[idx] = fmaxf(err, 0.0f);
+            const float err = fmaxf(1.0f - sum * inv_c, 0.0f);
+            error_map[idx] = square ? err * err : err;
         }
     } // namespace
 
     void launch_ssim_to_error_map(
         const lfs::core::Tensor& ssim_map,
-        lfs::core::Tensor& error_map) {
+        lfs::core::Tensor& error_map,
+        const bool square) {
 
         LFS_ASSERT_MSG(ssim_map.is_valid() && ssim_map.device() == lfs::core::Device::CUDA &&
                            ssim_map.dtype() == lfs::core::DataType::Float32 &&
@@ -3189,8 +3210,484 @@ namespace lfs::training::kernels {
         ssim_to_error_map_kernel<<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
             ssim_map.ptr<float>(),
             error_map.ptr<float>(),
-            C, H, W);
+            C, H, W, square);
         LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.to_error_map");
+    }
+
+    // =========================================================================
+    // Blur-tolerant SSIM (MRNF)
+    // =========================================================================
+    // G is a normalised Gaussian blur over the kept pixels: G v = n * T(keep v) with n = 1 / T(keep), T the separable
+    // taps of the photo's blur sigma (radius R <= HALO). Three passes over 16 x 16 pixel blocks:
+    //   forward:  the sharp window moments, then G corrected and G raw over the SSIM tile (blurred in shared memory)
+    //             and the blurred moments with the same photo statistics; the soft-maximum map the loss reduces, the
+    //             sharp SSIM map, the blend's contrast-structure map and fp16 partials of both branches;
+    //   branch:   the blurred branch's backward at G raw, times the pixel's weight * n (fp16);
+    //   gradient: both images' gradients, the sharp backward plus the adjoint T of the branch pass.
+    namespace {
+        constexpr int BT_THREADS = BLOCK_X * BLOCK_Y;
+
+        // Centre-first normalised taps of a blur sigma in (0, 1.5]: radius ceil(3 sigma) <= HALO.
+        struct BlurTaps {
+            float weight[HALO + 1];
+            int radius;
+            __device__ float operator()(const int d) const { return weight[d < 0 ? -d : d]; }
+        };
+
+        BlurTaps blur_taps(const float sigma) {
+            LFS_ASSERT_MSG(std::isfinite(sigma) && sigma > 0.0f && sigma <= BLUR_TOLERANT_SSIM_MAX_SIGMA,
+                           "Blur-tolerant SSIM sigma must be within (0, 1.5]");
+            BlurTaps taps{.weight = {}, .radius = static_cast<int>(std::ceil(3.0 * sigma))};
+            double raw[HALO + 1] = {}, sum = 0.0;
+            for (int d = 0; d <= taps.radius; ++d) {
+                raw[d] = std::exp(-0.5 * d * d / (static_cast<double>(sigma) * sigma));
+                sum += d == 0 ? raw[d] : 2.0 * raw[d];
+            }
+            for (int d = 0; d <= taps.radius; ++d)
+                taps.weight[d] = static_cast<float>(raw[d] / sum);
+            return taps;
+        }
+
+        template <typename Fn>
+        void dispatch_blur_radius(const int radius, Fn&& fn) {
+            switch (radius) {
+            case 1: fn(std::integral_constant<int, 1>{}); break;
+            case 2: fn(std::integral_constant<int, 2>{}); break;
+            case 3: fn(std::integral_constant<int, 3>{}); break;
+            case 4: fn(std::integral_constant<int, 4>{}); break;
+            case 5: fn(std::integral_constant<int, 5>{}); break;
+            default: LFS_ASSERT_MSG(false, "Blur radius must be within [1, 5]");
+            }
+        }
+
+        struct WindowTaps { // the SSIM window
+            __device__ float operator()(const int d) const { return cGauss[HALO + d]; }
+        };
+
+        struct Partials {
+            __half* p[4]; // raw mean, raw sigma^2, raw sigma12, corrected mean
+        };
+
+        struct alignas(8) Half4 { // the four partials of one pixel
+            __half2 lo, hi;
+        };
+
+        __device__ __forceinline__ void unpack(const float2 a, float (&v)[2]) { v[0] = a.x, v[1] = a.y; }
+        __device__ __forceinline__ void unpack(const float4 a, float (&v)[4]) { v[0] = a.x, v[1] = a.y, v[2] = a.z, v[3] = a.w; }
+        __device__ __forceinline__ void unpack(const Half4 a, float (&v)[4]) { unpack(make_float4(__low2float(a.lo), __high2float(a.lo), __low2float(a.hi), __high2float(a.hi)), v); }
+        __device__ __forceinline__ float2 pack(const float (&a)[2]) { return make_float2(a[0], a[1]); }
+        __device__ __forceinline__ float4 pack(const float (&a)[4]) { return make_float4(a[0], a[1], a[2], a[3]); }
+
+        // Block-local pixel coordinates ((0, 0) is the block's first pixel) and the pixel weights.
+        template <bool Masked, typename MaskT>
+        struct BtBlock {
+            int H, W, x0, y0;
+            const MaskT* mask;
+            __device__ BtBlock(const int H, const int W, const MaskT* mask)
+                : H(H), W(W), x0(blockIdx.x * BLOCK_X), y0(blockIdx.y * BLOCK_Y), mask(mask) {}
+            __device__ bool inside(const int y, const int x) const { return y0 + y >= 0 && y0 + y < H && x0 + x >= 0 && x0 + x < W; }
+            __device__ int index(const int y, const int x) const { return (y0 + y) * W + x0 + x; }
+            // The loss weight of a pixel (the blur keeps the pixels above 0): the mask, or 1 inside the image.
+            __device__ float weight(const int y, const int x) const {
+                if (!inside(y, x))
+                    return 0.f;
+                if constexpr (Masked)
+                    return mask_value(mask, index(y, x));
+                return 1.f;
+            }
+            // Whether a window centre has partials: masked partials carry their own window weights; unmasked, the
+            // valid padding counts only centres 5 pixels or more inside the border.
+            __device__ bool valid(const int y, const int x) const {
+                const int gy = y0 + y, gx = x0 + x;
+                return inside(y, x) && (Masked || ((H <= 10 || (gy >= 5 && gy < H - 5)) && (W <= 10 || (gx >= 5 && gx < W - 5))));
+            }
+        };
+
+        // fn(y, x) over the Rows x Cols region from block-local (Y0, X0), row-major with a column per thread.
+        template <int Rows, int Cols, int Y0, int X0, typename Fn>
+        __device__ __forceinline__ void for_region(const Fn& fn) {
+            constexpr int step = BT_THREADS / Cols;
+            const int t = threadIdx.y * BLOCK_X + threadIdx.x, r = t / Cols, x = X0 + t % Cols;
+#pragma unroll
+            for (int k = 0; k < (Rows + step - 1) / step; ++k)
+                if (t < step * Cols && r + k * step < Rows)
+                    fn(Y0 + r + k * step, x);
+        }
+
+        // One pass of a separable filter over the Rows x Cols outputs at array position (Y0, X0): store(y, x, sums)
+        // takes the K sums of tap(d) * sample(the output + d along the axis) over |d| <= R; sample(y, x, v) reads the
+        // K inputs at (y, x). A thread takes a strip of S outputs along the axis and reads each input once for all of
+        // them; neighbouring threads take neighbouring strips across the axis (rows of a horizontal pass: an odd row
+        // pitch keeps them on distinct banks).
+        template <int K, int R, int S, bool Vertical, int Y0, int X0, int Rows, int Cols, typename Tap, typename Sample,
+                  typename Store>
+        __device__ __forceinline__ void filter_pass(const Tap tap, const Sample& sample, const Store& store) {
+            static_assert((Vertical ? Rows : Cols) % S == 0, "Strips must tile the filter axis");
+            constexpr int across = Vertical ? Cols : Rows;
+            for (int i = threadIdx.y * BLOCK_X + threadIdx.x; i < Rows * Cols / S; i += BT_THREADS) {
+                const int a = i % across, b = i / across * S;
+                const int y = Y0 + (Vertical ? b : a), x = X0 + (Vertical ? a : b);
+                float acc[S][K] = {};
+#pragma unroll
+                for (int j = 0; j < S + 2 * R; ++j) {
+                    float v[K];
+                    sample(Vertical ? y + j - R : y, Vertical ? x : x + j - R, v);
+#pragma unroll
+                    for (int s = 0; s < S; ++s)
+                        if (j - s >= 0 && j - s <= 2 * R)
+#pragma unroll
+                            for (int k = 0; k < K; ++k)
+                                acc[s][k] += tap(j - s - R) * v[k];
+                }
+#pragma unroll
+                for (int s = 0; s < S; ++s)
+                    store(Vertical ? y + s : y, Vertical ? x : x + s, acc[s]);
+            }
+        }
+
+        // A separable filter of the K planes of `source` over the Rows x Cols outputs at array position (R, R): rows
+        // into `rows` (strips of 2), then columns (strips of SV) into store(y, x, sums) at output position (y, x).
+        template <int K, int R, int SV, int Rows, int Cols, typename Tap, typename Source, typename RowSums, typename Store>
+        __device__ __forceinline__ void separable(const Tap tap, const Source& source, RowSums& rows, const Store& store) {
+            filter_pass<K, R, 2, false, 0, R, Rows + 2 * R, Cols>(
+                tap, [&](const int y, const int x, float(&v)[K]) { unpack(source[y][x], v); },
+                [&](const int y, const int x, const float(&a)[K]) { rows[y][x - R] = pack(a); });
+            __syncthreads();
+            filter_pass<K, R, SV, true, R, 0, Rows, Cols>(
+                tap, [&](const int y, const int x, float(&v)[K]) { unpack(rows[y][x], v); },
+                [&](const int y, const int x, const float(&a)[K]) { store(y - R, x, a); });
+        }
+
+        // Row sums of five window moments, column-major for conflict-free row writes and column reads.
+        struct MomentRows {
+            float4 a[BLOCK_X][SHARED_Y + 1];
+            float b[BLOCK_X][SHARED_Y];
+        };
+
+        // Five window moments at this thread's pixel from sample(r, q, v) at SSIM tile positions.
+        template <typename Sample>
+        __device__ __forceinline__ void window_moments(MomentRows& rows, const Sample& sample, const float inv_window, float (&m)[5]) {
+            filter_pass<5, HALO, 4, false, 0, HALO, SHARED_Y, BLOCK_X>(
+                WindowTaps{}, sample, [&](const int y, const int x, const float(&a)[5]) {
+                    rows.a[x - HALO][y] = make_float4(a[0], a[1], a[2], a[3]);
+                    rows.b[x - HALO][y] = a[4]; });
+            __syncthreads();
+            filter_pass<5, HALO, 1, true, HALO, 0, BLOCK_Y, BLOCK_X>(
+                WindowTaps{}, [&](const int y, const int x, float(&v)[5]) {
+                    unpack(rows.a[x][y], reinterpret_cast<float (&)[4]>(v));
+                    v[4] = rows.b[x][y]; },
+                [&](int, int, const float(&a)[5]) {
+#pragma unroll
+                    for (int k = 0; k < 5; ++k)
+                        m[k] = a[k] * inv_window; });
+            __syncthreads();
+        }
+
+        // One decoupled SSIM branch from window means (luminance of mc, contrast-structure of the raw render), as
+        // decoupledFusedL1SSIMForwardCUDA: returns S, writes cs and the partials in Partials order.
+        __device__ __forceinline__ float bt_branch(const float mc, const float mr, const float mrr, const float my,
+                                                   const float myy, const float mry, const float ssim_weight, float& cs,
+                                                   float (&p)[4]) {
+            constexpr float C1 = 0.01f * 0.01f, C2 = 0.03f * 0.03f;
+            const float A = mc * mc + my * my + C1;
+            const float Cn = 2.f * mc * my + C1;
+            const float lum = Cn / A;
+            const float B = (mrr - mr * mr) + (myy - my * my) + C2;
+            const float D = 2.f * (mry - mr * my) + C2;
+            cs = D / B;
+            const float ds1 = ssim_weight * (-(lum * D) / (B * B));
+            const float ds12 = ssim_weight * ((2.f * lum) / B);
+            p[0] = ds1 * (-2.f * mr) + ds12 * (-my);
+            p[1] = ds1;
+            p[2] = ds12;
+            p[3] = cs * (2.f * (my * A - mc * Cn) / (A * A));
+            return lum * cs;
+        }
+
+        // Forward: both branches from the same photo window statistics and their soft maximum. A photo window flatter
+        // than BLUR_TOLERANT_SSIM_FLAT_VARIANCE keeps the sharp branch alone.
+        template <bool Masked, int R, typename TargetT, typename MaskT>
+        __global__ void __launch_bounds__(BT_THREADS) blurTolerantForwardCUDA(
+            const int H, const int W, const int CH, const float ssim_weight, const float* __restrict__ xc,
+            const float* __restrict__ xr, const TargetT* __restrict__ y, const MaskT* __restrict__ mask,
+            const BlurTaps taps, const Partials sharp, Half4* __restrict__ blurred, float* __restrict__ ssim_map,
+            float* __restrict__ cs_map, float* __restrict__ blend_map) {
+            constexpr int E = SHARED_X + 2 * R; // the SSIM tile and the blur's reach
+            const BtBlock<Masked, MaskT> at(H, W, mask);
+            const int b = blockIdx.z, num_pix = H * W, pix = at.index(threadIdx.y, threadIdx.x);
+            const bool in_image = at.inside(threadIdx.y, threadIdx.x);
+            __shared__ float2 source[E][E + 1]; // keep corrected, keep raw; G corrected, G raw over the tile once blurred
+            __shared__ float photo[SHARED_Y][SHARED_X + 1];
+            __shared__ float support[SHARED_Y][SHARED_X]; // n
+            __shared__ float weights[SHARED_Y][SHARED_X]; // window weights (masked loss)
+            __shared__ union {
+                float2 rows[E][SHARED_X];
+                MomentRows moments;
+                float mask_scratch[CONV_Y][CONV_X][1];
+            } s;
+
+            float inv_window = 1.f, center = 1.f;
+            if constexpr (Masked) {
+                bool full_support;
+                inv_window = load_mask_window(mask, H, W, weights, s.mask_scratch, full_support);
+                center = weights[threadIdx.y + HALO][threadIdx.x + HALO];
+                if (!__syncthreads_or(in_image && center != 0.0f)) { // no loss term in the block
+                    for (int c = 0; in_image && c < CH; ++c) {
+                        for (int k = 0; k < 4; ++k)
+                            sharp.p[k][(b * CH + c) * num_pix + pix] = __float2half(0.f);
+                        blurred[(b * CH + c) * num_pix + pix] = {__float2half2_rn(0.f), __float2half2_rn(0.f)};
+                    }
+                    if (in_image)
+                        ssim_map[b * num_pix + pix] = cs_map[b * num_pix + pix] = blend_map[b * num_pix + pix] = 1.f;
+                    return;
+                }
+            }
+            bool region_kept = true; // n = 1 when the blur's reach is all kept
+            for_region<E, E, -HALO - R, -HALO - R>([&](const int yy, const int xx) {
+                const bool keep = at.weight(yy, xx) > 0.f;
+                source[yy + HALO + R][xx + HALO + R] = make_float2(keep ? 1.f : 0.f, 0.f);
+                region_kept = region_kept && keep;
+            });
+            const bool all_kept = __syncthreads_and(region_kept);
+            if (!all_kept)
+                separable<2, R, 2, SHARED_Y, SHARED_X>(taps, source, s.rows, [&](const int r, const int q, const float(&a)[2]) {
+                    support[r][q] = at.inside(r - HALO, q - HALO) && a[0] > 1.0e-30f ? 1.f / a[0] : 0.f;
+                });
+
+            float ssim_sum = 0.f, blend_sum = 0.f, cs_sum = 0.f;
+            for (int c = 0; c < CH; ++c) {
+                const int plane = (b * CH + c) * num_pix;
+                __syncthreads();
+                for_region<E, E, -HALO - R, -HALO - R>([&](const int yy, const int xx) {
+                    const int g = plane + at.index(yy, xx);
+                    source[yy + HALO + R][xx + HALO + R] = at.weight(yy, xx) > 0.f ? make_float2(xc[g], xr[g]) : make_float2(0.f, 0.f);
+                });
+                for_region<SHARED_Y, SHARED_X, -HALO, -HALO>([&](const int yy, const int xx) {
+                    photo[yy + HALO][xx + HALO] = at.inside(yy, xx) ? pixel_value(y, plane + at.index(yy, xx)) : 0.f;
+                });
+                __syncthreads();
+                // Sharp moments: corrected, raw, raw^2, raw photo, photo; blurred: photo^2, G corrected, G raw,
+                // (G raw)^2, G raw photo.
+                float ms[5], mb[5];
+                window_moments(s.moments, [&](const int r, const int q, float(&v)[5]) {
+                    const float2 x = source[r + R][q + R];
+                    const float py = photo[r][q], w = Masked ? weights[r][q] : 1.f;
+                    v[0] = w * x.x, v[1] = w * x.y, v[2] = w * (x.y * x.y), v[3] = w * (x.y * py), v[4] = w * py; }, inv_window, ms);
+                separable<2, R, 2, SHARED_Y, SHARED_X>(taps, source, s.rows, [&](const int r, const int q, const float(&a)[2]) {
+                    const float n = all_kept ? 1.f : support[r][q];
+                    source[r + R][q + R] = make_float2(a[0] * n, a[1] * n);
+                });
+                __syncthreads();
+                window_moments(s.moments, [&](const int r, const int q, float(&v)[5]) {
+                    const float2 g = source[r + R][q + R];
+                    const float py = photo[r][q], w = Masked ? weights[r][q] : 1.f;
+                    v[0] = w * (py * py), v[1] = w * g.x, v[2] = w * g.y, v[3] = w * (g.y * g.y), v[4] = w * (g.y * py); }, inv_window, mb);
+                if (!in_image)
+                    continue;
+                float p0[4], p1[4], cs0, cs1;
+                const float s0 = bt_branch(ms[0], ms[1], ms[2], ms[4], mb[0], ms[3], ssim_weight, cs0, p0);
+                const float s1 = bt_branch(mb[1], mb[2], mb[3], ms[4], mb[0], mb[4], ssim_weight, cs1, p1);
+                const float d = BLUR_TOLERANT_SSIM_TEMPERATURE * (s0 - s1), e = expf(-fabsf(d));
+                const float high = 1.f / (1.f + e), low = e * high;                         // the soft-max weights of the larger, smaller branch
+                const bool flat = mb[0] - ms[4] * ms[4] < BLUR_TOLERANT_SSIM_FLAT_VARIANCE; // flat photo window: plain SSIM
+                const float w0 = flat ? 1.f : (d >= 0.f ? high : low), w1 = flat ? 0.f : (d >= 0.f ? low : high);
+                ssim_sum += s0;
+                blend_sum += flat ? s0 : fmaxf(s0, s1) + (log1pf(e) - 0.69314718055994531f) / BLUR_TOLERANT_SSIM_TEMPERATURE;
+                cs_sum += w0 * cs0 + w1 * cs1;
+                // Partial scaling as the masked decoupled kernels: the masked raw mean partial is stored / 16.
+                const float dw = center * inv_window;
+#pragma unroll
+                for (int k = 0; k < 4; ++k) {
+                    const float scale = Masked && k == 0 ? dw * (1.f / 16.f) : dw;
+                    sharp.p[k][plane + pix] = __float2half(p0[k] * (w0 * scale));
+                    p1[k] *= w1 * scale * (k == 3 ? ssim_weight : 1.f);
+                }
+                blurred[plane + pix] = {__floats2half2_rn(p1[0], p1[1]), __floats2half2_rn(p1[2], p1[3])};
+            }
+            if (in_image) {
+                const float inv_c = 1.f / static_cast<float>(CH);
+                const bool kept = !Masked || center > 0.f;
+                ssim_map[b * num_pix + pix] = kept ? ssim_sum * inv_c : 1.f;
+                cs_map[b * num_pix + pix] = kept ? cs_sum * inv_c : 1.f;
+                blend_map[b * num_pix + pix] = kept ? blend_sum * inv_c : 1.f;
+            }
+        }
+
+        // Backward: the window adjoint of the partials and T of two planes per channel, then per pixel
+        //   branch (Gradient false): the blurred branch's backward at G raw = T(keep raw) / T(keep) and the photo,
+        //     times weight * n: v, u for the corrected image and the raw render (fp16);
+        //   gradient: the sharp backward (SSIM weight sw, L1 1 - sw) plus keep * T(v) and keep * T(u); without out_r
+        //     both images' gradients go to out_c (the plain loss).
+        template <bool Gradient, bool Masked, int R, typename TargetT, typename MaskT>
+        __global__ void __launch_bounds__(BT_THREADS, 4) blurTolerantBackwardCUDA(
+            const int H, const int W, const int CH, const float sw, const float chain, const float* __restrict__ xc,
+            const float* __restrict__ xr, const TargetT* __restrict__ y, const MaskT* __restrict__ mask,
+            const BlurTaps taps, const Partials sharp, const Half4* __restrict__ blurred, __half2* __restrict__ vu,
+            float* __restrict__ out_c, float* __restrict__ out_r) {
+            constexpr int F = BLOCK_X + 2 * R;
+            const BtBlock<Masked, MaskT> at(H, W, mask);
+            const int b = blockIdx.z, num_pix = H * W, pix = at.index(threadIdx.y, threadIdx.x);
+            const bool in_image = at.inside(threadIdx.y, threadIdx.x);
+            const float center = at.weight(threadIdx.y, threadIdx.x);
+            if (Masked && !__syncthreads_or(center != 0.0f)) { // the masked rule: no gradient crosses into the block
+                for (int c = 0; in_image && c < CH; ++c) {
+                    const int q = (b * CH + c) * num_pix + pix;
+                    if (!Gradient)
+                        vu[q] = __float2half2_rn(0.f);
+                    else if (out_r)
+                        out_c[q] = out_r[q] = 0.f;
+                    else
+                        out_c[q] = 0.f;
+                }
+                return;
+            }
+            __shared__ Half4 data[SHARED_Y][SHARED_X + 1]; // the partials
+            __shared__ float4 conv[SHARED_Y][BLOCK_X];
+            __shared__ float2 source[F][F + 1]; // keep raw, keep; or v, u
+            __shared__ float2 rows[F][BLOCK_X];
+            for (int c = 0; c < CH; ++c) {
+                const int plane = (b * CH + c) * num_pix;
+                __syncthreads();
+                for_region<SHARED_Y, SHARED_X, -HALO, -HALO>([&](const int yy, const int xx) {
+                    const int g = plane + at.index(yy, xx);
+                    Half4 p = {__float2half2_rn(0.f), __float2half2_rn(0.f)};
+                    if (at.valid(yy, xx)) {
+                        if constexpr (Gradient)
+                            p = {__halves2half2(sharp.p[0][g], sharp.p[1][g]), __halves2half2(sharp.p[2][g], sharp.p[3][g])};
+                        else
+                            p = blurred[g];
+                    }
+                    data[yy + HALO][xx + HALO] = p;
+                });
+                for_region<F, F, -R, -R>([&](const int yy, const int xx) {
+                    const int g = plane + at.index(yy, xx);
+                    if constexpr (Gradient)
+                        source[yy + R][xx + R] = at.inside(yy, xx) ? __half22float2(vu[g]) : make_float2(0.f, 0.f);
+                    else
+                        source[yy + R][xx + R] = at.weight(yy, xx) > 0.f ? make_float2(xr[g], 1.f) : make_float2(0.f, 0.f);
+                });
+                __syncthreads();
+                float m[4], t[2]; // W(partials), T(source) at this pixel
+                separable<4, HALO, 1, BLOCK_Y, BLOCK_X>(WindowTaps{}, data, conv, [&](int, int, const float(&a)[4]) {
+#pragma unroll
+                    for (int k = 0; k < 4; ++k)
+                        m[k] = a[k];
+                });
+                separable<2, R, 1, BLOCK_Y, BLOCK_X>(taps, source, rows, [&](int, int, const float(&a)[2]) { t[0] = a[0], t[1] = a[1]; });
+                if (!in_image)
+                    continue;
+                const int q = plane + pix;
+                const float p2 = pixel_value(y, q), s0 = (Masked ? -16.f : -1.f) * m[0]; // the masked mean partial is / 16
+                if constexpr (Gradient) {
+                    const float pc = xc[q], pr = xr[q], keep = center > 0.f ? 1.f : 0.f; // the adjoint lands on kept pixels
+                    const float sign = pc == p2 ? 0.f : copysignf(1.f, pc - p2);
+                    const float l1 = (1.f - sw) * sign * (Masked ? center : at.valid(threadIdx.y, threadIdx.x));
+                    const float gc = chain * (center * -sw * m[3] + l1 + keep * t[0]);
+                    const float gr = chain * (center * (s0 - 2.f * pr * m[1] - p2 * m[2]) + keep * t[1]);
+                    if (out_r)
+                        out_c[q] = gc, out_r[q] = gr;
+                    else
+                        out_c[q] = gc + gr;
+                } else {
+                    const float n = t[1] > 1.0e-30f ? 1.f / t[1] : 0.f, kn = center * n;
+                    vu[q] = __floats2half2_rn(-kn * m[3], kn * (s0 - 2.f * (t[0] * n) * m[1] - p2 * m[2]));
+                }
+            }
+        }
+    } // namespace
+
+    BlurTolerantResult blur_tolerant_loss(const lfs::core::Tensor& corrected_input, const lfs::core::Tensor& raw_input,
+                                          const lfs::core::Tensor& target_input, const lfs::core::Tensor& weight,
+                                          const float ssim_weight, const float blur_sigma, LossWorkspaceArena& arena,
+                                          const float denominator) {
+        using lfs::core::DataType;
+        using lfs::core::Tensor;
+        validate_loss_weight(ssim_weight);
+        LFS_ASSERT(std::isfinite(denominator) && denominator >= 0.0f);
+        const BlurTaps taps = blur_taps(blur_sigma);
+        const bool decoupled = raw_input.is_valid() && raw_input.numel() > 0;
+        const auto corrected = prepare_loss_prediction(corrected_input, "Corrected loss image");
+        const auto raw = decoupled ? prepare_loss_prediction(raw_input, "Raw loss image") : corrected;
+        const auto gt = prepare_loss_target(target_input, "Loss target");
+        LFS_ASSERT_MSG(corrected.shape() == raw.shape() && corrected.shape() == gt.shape(),
+                       lfs::core::detail::format_cuda_safe(
+                           "Blur-tolerant loss image shapes must match (corrected={}, raw={}, target={})",
+                           corrected.shape().str(), raw.shape().str(), gt.shape().str()));
+        const bool masked = weight.is_valid() && weight.numel() > 0;
+        const Tensor mask = masked ? prepare_loss_mask(weight, corrected) : Tensor{};
+        const auto& dims = corrected.shape().dims();
+        const int N = static_cast<int>(dims[0]), C = static_cast<int>(dims[1]);
+        const int H = static_cast<int>(dims[2]), W = static_cast<int>(dims[3]);
+        const auto stream = lfs::core::getCurrentCUDAStream();
+        const dim3 grid((W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, N);
+        const dim3 block(BLOCK_X, BLOCK_Y);
+
+        BlurTolerantResult result;
+        const auto run = [&](auto& aws, const auto* y, const auto* m) {
+            using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(y)>>;
+            using MaskT = std::remove_cv_t<std::remove_pointer_t<decltype(m)>>;
+            constexpr bool Masked = std::is_same_v<std::remove_reference_t<decltype(aws)>, MaskedDecoupledFusedL1SSIMWorkspace>;
+            // The sharp branch, the maps and the corrected-image gradient live in the decoupled workspace. The
+            // blurred branch's partials, the branch pass's images, the map the loss reduces and the raw-render
+            // gradient are read only until the gradients are formed: step scratch.
+            aws.ensure_size(dims);
+            const auto aligned = [](const size_t bytes) { return (bytes + 255) & ~size_t{255}; };
+            const size_t image = static_cast<size_t>(N) * C * H * W, quads = aligned(image * 8), pairs = aligned(image * 4);
+            const size_t blend = aligned(static_cast<size_t>(N) * H * W * 4);
+            char* const base = arena.take_step_scratch(quads + pairs + blend + (decoupled ? image * 4 : 0), "loss.blur_tolerant");
+            const auto blurred = reinterpret_cast<Half4*>(base);
+            const auto vu = reinterpret_cast<__half2*>(base + quads);
+            const auto blend_map = reinterpret_cast<float*>(base + quads + pairs);
+            const Partials sharp{{aws.raw_dm_dmu1.template ptr<__half>(), aws.raw_dm_dsigma1_sq.template ptr<__half>(),
+                                  aws.raw_dm_dsigma12.template ptr<__half>(), aws.app_dm_dmu1.template ptr<__half>()}};
+            Tensor raw_grad = decoupled ? Tensor::from_blob(base + quads + pairs + blend, corrected.shape(), lfs::core::Device::CUDA,
+                                                            DataType::Float32, stream)
+                                        : Tensor{};
+            dispatch_blur_radius(taps.radius, [&](auto radius) {
+                constexpr int R = decltype(radius)::value;
+                blurTolerantForwardCUDA<Masked, R, TargetT, MaskT><<<grid, block, 0, stream>>>(
+                    H, W, C, ssim_weight, corrected.ptr<float>(), raw.ptr<float>(), y, m, taps, sharp, blurred,
+                    aws.ssim_map.template ptr<float>(), aws.cs_map.template ptr<float>(), blend_map);
+                LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.blur_tolerant_forward");
+                float chain;
+                if constexpr (Masked) {
+                    launch_masked_fused_l1_ssim_mean_device(corrected.ptr<float>(), y, blend_map, m, ssim_weight,
+                                                            aws.reduction_temp.template ptr<float>(),
+                                                            aws.masked_loss.template ptr<float>(),
+                                                            aws.mask_sum.template ptr<float>(), N, C, H, W, stream, denominator);
+                    result.loss = aws.masked_loss;
+                    result.mask_sum_value = denominator > 0.0f ? denominator : aws.mask_sum.template item<float>();
+                    LFS_ASSERT_MSG(std::isfinite(result.mask_sum_value) && result.mask_sum_value > 0.0f,
+                                   "Masked loss normalization must be positive and finite");
+                    chain = 1.0f / result.mask_sum_value;
+                } else {
+                    launch_fused_l1_ssim_mean_device(corrected.ptr<float>(), y, blend_map, ssim_weight,
+                                                     aws.reduction_temp.template ptr<float>(),
+                                                     aws.reduction_result.template ptr<float>(), N, C, H, W,
+                                                     /*apply_valid_padding=*/true, stream);
+                    result.loss = aws.reduction_result;
+                    chain = 1.0f / static_cast<float>(static_cast<size_t>(N) * C * (H > 10 ? H - 10 : H) * (W > 10 ? W - 10 : W));
+                }
+                blurTolerantBackwardCUDA<false, Masked, R, TargetT, MaskT><<<grid, block, 0, stream>>>(
+                    H, W, C, ssim_weight, chain, corrected.ptr<float>(), raw.ptr<float>(), y, m, taps, sharp, blurred, vu,
+                    nullptr, nullptr);
+                LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.blur_tolerant_branch");
+                blurTolerantBackwardCUDA<true, Masked, R, TargetT, MaskT><<<grid, block, 0, stream>>>(
+                    H, W, C, ssim_weight, chain, corrected.ptr<float>(), raw.ptr<float>(), y, m, taps, sharp, blurred, vu,
+                    aws.grad_corrected.template ptr<float>(), decoupled ? raw_grad.ptr<float>() : nullptr);
+                LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.blur_tolerant_gradient");
+            });
+            result.grad_corrected = aws.grad_corrected;
+            if (decoupled)
+                result.raw = DecoupledRawGradient{.raw_img = raw, .precomputed = raw_grad};
+        };
+        dispatch_target_ptr(gt, [&](const auto* y) {
+            if (masked)
+                dispatch_mask_ptr(mask, [&](const auto* m) { run(arena.masked_decoupled(), y, m); });
+            else
+                run(arena.decoupled(), y, static_cast<const float*>(nullptr));
+        });
+        return result;
     }
 
     // =========================================================================
@@ -3350,27 +3847,29 @@ namespace lfs::training::kernels {
         ensure_independent_cs_map(cs_map, ssim_map);
     }
 
-    size_t LossWorkspaceArena::fused_layout_bytes(const std::vector<size_t>& shape) {
+    size_t LossWorkspaceArena::fused_layout_bytes(const std::vector<size_t>& shape, const bool step_partials) {
+        const size_t partial = step_partials ? 0 : field_bytes(shape, lfs::core::DataType::Float16);
         std::vector<size_t> map_shape = shape;
         map_shape[1] = 1;
         return pack_fields({
             field_bytes(map_shape, lfs::core::DataType::Float32),
-            field_bytes(shape, lfs::core::DataType::Float16),
-            field_bytes(shape, lfs::core::DataType::Float16),
-            field_bytes(shape, lfs::core::DataType::Float16),
+            partial,
+            partial,
+            partial,
             field_bytes(shape, lfs::core::DataType::Float32),
             1024 * sizeof(float),
             sizeof(float),
         });
     }
 
-    size_t LossWorkspaceArena::pure_ssim_layout_bytes(const std::vector<size_t>& shape) {
+    size_t LossWorkspaceArena::pure_ssim_layout_bytes(const std::vector<size_t>& shape, const bool step_partials) {
+        const size_t partial = step_partials ? 0 : field_bytes(shape, lfs::core::DataType::Float16);
         // 3× dm_* fp16; ssim_map / dL_dmap / dL_dimg1 stay fp32.
         return pack_fields({
             field_bytes(shape, lfs::core::DataType::Float32),
-            field_bytes(shape, lfs::core::DataType::Float16),
-            field_bytes(shape, lfs::core::DataType::Float16),
-            field_bytes(shape, lfs::core::DataType::Float16),
+            partial,
+            partial,
+            partial,
             field_bytes(shape, lfs::core::DataType::Float32),
             field_bytes(shape, lfs::core::DataType::Float32),
             1024 * sizeof(float),
@@ -3378,31 +3877,33 @@ namespace lfs::training::kernels {
         });
     }
 
-    size_t LossWorkspaceArena::decoupled_layout_bytes(const std::vector<size_t>& shape) {
+    size_t LossWorkspaceArena::decoupled_layout_bytes(const std::vector<size_t>& shape, const bool step_partials) {
+        const size_t partial = step_partials ? 0 : field_bytes(shape, lfs::core::DataType::Float16);
         std::vector<size_t> map_shape = shape;
         map_shape[1] = 1;
         // Four dm_* fields use fp16; the corrected gradient remains fp32. The raw-render
         // gradient accumulates into the caller's buffer. There is no zero_terms field.
         return pack_fields({
             field_bytes(map_shape, lfs::core::DataType::Float32),
-            field_bytes(shape, lfs::core::DataType::Float16),
-            field_bytes(shape, lfs::core::DataType::Float16),
-            field_bytes(shape, lfs::core::DataType::Float16),
-            field_bytes(shape, lfs::core::DataType::Float16),
+            partial,
+            partial,
+            partial,
+            partial,
             field_bytes(shape, lfs::core::DataType::Float32),
             1024 * sizeof(float),
             sizeof(float),
         });
     }
 
-    size_t LossWorkspaceArena::masked_fused_layout_bytes(const std::vector<size_t>& shape) {
+    size_t LossWorkspaceArena::masked_fused_layout_bytes(const std::vector<size_t>& shape, const bool step_partials) {
+        const size_t partial = step_partials ? 0 : field_bytes(shape, lfs::core::DataType::Float16);
         std::vector<size_t> map_shape = shape;
         map_shape[1] = 1;
         return pack_fields({
             field_bytes(map_shape, lfs::core::DataType::Float32),
-            field_bytes(shape, lfs::core::DataType::Float16),
-            field_bytes(shape, lfs::core::DataType::Float16),
-            field_bytes(shape, lfs::core::DataType::Float16),
+            partial,
+            partial,
+            partial,
             field_bytes(shape, lfs::core::DataType::Float32),
             2048 * sizeof(float),
             sizeof(float),
@@ -3410,16 +3911,17 @@ namespace lfs::training::kernels {
         });
     }
 
-    size_t LossWorkspaceArena::masked_decoupled_layout_bytes(const std::vector<size_t>& shape) {
+    size_t LossWorkspaceArena::masked_decoupled_layout_bytes(const std::vector<size_t>& shape, const bool step_partials) {
+        const size_t partial = step_partials ? 0 : field_bytes(shape, lfs::core::DataType::Float16);
         std::vector<size_t> map_shape = shape;
         map_shape[1] = 1;
         // Four dm_* fields use fp16, with no zero_terms field.
         return pack_fields({
             field_bytes(map_shape, lfs::core::DataType::Float32),
-            field_bytes(shape, lfs::core::DataType::Float16),
-            field_bytes(shape, lfs::core::DataType::Float16),
-            field_bytes(shape, lfs::core::DataType::Float16),
-            field_bytes(shape, lfs::core::DataType::Float16),
+            partial,
+            partial,
+            partial,
+            partial,
             field_bytes(shape, lfs::core::DataType::Float32),
             2048 * sizeof(float),
             sizeof(float),
@@ -3439,15 +3941,15 @@ namespace lfs::training::kernels {
         }
         switch (active_kind_) {
         case Kind::Fused:
-            return fused_layout_bytes(active_shape_);
+            return fused_layout_bytes(active_shape_, active_step_partials_);
         case Kind::PureSSIM:
-            return pure_ssim_layout_bytes(active_shape_);
+            return pure_ssim_layout_bytes(active_shape_, active_step_partials_);
         case Kind::Decoupled:
-            return decoupled_layout_bytes(active_shape_);
+            return decoupled_layout_bytes(active_shape_, active_step_partials_);
         case Kind::MaskedFused:
-            return masked_fused_layout_bytes(active_shape_);
+            return masked_fused_layout_bytes(active_shape_, active_step_partials_);
         case Kind::MaskedDecoupled:
-            return masked_decoupled_layout_bytes(active_shape_);
+            return masked_decoupled_layout_bytes(active_shape_, active_step_partials_);
         case Kind::None:
             return 0;
         }
@@ -3474,14 +3976,16 @@ namespace lfs::training::kernels {
 
     void LossWorkspaceArena::ensure_capacity_for(const Kind kind, const size_t bytes) {
         const size_t required_capacity = align_up_bytes(bytes);
-        const bool variant_changed = active_kind_ != Kind::None && active_kind_ != kind;
+        const bool variant_changed = active_kind_ != Kind::None &&
+                                     (active_kind_ != kind || active_step_partials_ != static_cast<bool>(step_scratch_));
         const bool must_allocate = !storage_.is_valid() || variant_changed ||
                                    required_capacity > capacity_bytes_;
         if (!must_allocate) {
             return;
         }
-        // Variant switches are exact in either direction. Within one variant,
-        // shape changes only grow; smaller shapes rebind into the retained block.
+        // Variant switches, including moving the partials to or from the step
+        // allocator, are exact in either direction. Within one variant, shape
+        // changes only grow; smaller shapes rebind into the retained block.
         replace_storage_exact(required_capacity);
     }
 
@@ -3573,14 +4077,67 @@ namespace lfs::training::kernels {
                                             lfs::core::Device::CUDA, dtype, home);
     }
 
+    lfs::core::Tensor LossWorkspaceArena::partial_view(size_t& offset, const std::vector<size_t>& shape) {
+        if (!step_scratch_) {
+            return make_view(offset, shape, lfs::core::DataType::Float16);
+        }
+        const size_t nbytes = field_bytes(shape, lfs::core::DataType::Float16);
+        char* const ptr = step_scratch_(nbytes);
+        if (!ptr)
+            throw lfs::core::MemoryAllocationError(lfs::core::AllocationFailure{
+                .requested_bytes = nbytes,
+                .label = "training.loss_step_scratch",
+                .operation = "loss.partials"});
+        cudaStream_t home = lfs::core::getCurrentCUDAStream();
+        if (home == nullptr) {
+            home = storage_.stream();
+        }
+        return lfs::core::Tensor::from_blob(ptr, lfs::core::TensorShape(shape), lfs::core::Device::CUDA,
+                                            lfs::core::DataType::Float16, home);
+    }
+
+    void LossWorkspaceArena::bind_step_scratch(const std::function<char*(size_t)>& allocator) {
+        LFS_ASSERT_MSG(allocator, "Loss step scratch needs an allocator");
+        step_scratch_ = allocator;
+        clear_all_views();
+    }
+
+    void LossWorkspaceArena::release_step_scratch() {
+        if (!step_scratch_) {
+            return;
+        }
+        step_scratch_ = {};
+        clear_all_views();
+    }
+
+    char* LossWorkspaceArena::take_step_scratch(const size_t bytes, const char* const operation) {
+        if (step_scratch_) {
+            char* const ptr = step_scratch_(bytes);
+            if (!ptr)
+                throw lfs::core::MemoryAllocationError(lfs::core::AllocationFailure{
+                    .requested_bytes = bytes,
+                    .label = "training.loss_step_scratch",
+                    .operation = operation});
+            return ptr;
+        }
+        if (step_fallback_.numel() < bytes) {
+            step_fallback_ = {};
+            step_fallback_ = lfs::core::Tensor::empty_exact({align_up_bytes(bytes)}, lfs::core::DataType::UInt8);
+            if (step_fallback_.stream() != lfs::core::getCurrentCUDAStream()) {
+                step_fallback_.set_stream(lfs::core::getCurrentCUDAStream());
+            }
+        }
+        return static_cast<char*>(step_fallback_.data_ptr());
+    }
+
     void LossWorkspaceArena::bind_fused(const std::vector<size_t>& shape) {
         std::vector<size_t> map_shape = shape;
         map_shape[1] = 1;
         size_t off = 0;
         fused_.ssim_map = make_view(off, map_shape, lfs::core::DataType::Float32);
-        fused_.dm_dmu1 = make_view(off, shape, lfs::core::DataType::Float16);
-        fused_.dm_dsigma1_sq = make_view(off, shape, lfs::core::DataType::Float16);
-        fused_.dm_dsigma12 = make_view(off, shape, lfs::core::DataType::Float16);
+        fused_.dm_dmu1 = partial_view(off, shape);
+        fused_.dm_dsigma1_sq = partial_view(off, shape);
+        fused_.dm_dsigma12 = partial_view(off, shape);
         fused_.grad_img = make_view(off, shape, lfs::core::DataType::Float32);
         fused_.reduction_temp = make_view(off, {1024}, lfs::core::DataType::Float32);
         fused_.reduction_result = make_view(off, {1}, lfs::core::DataType::Float32);
@@ -3591,9 +4148,9 @@ namespace lfs::training::kernels {
     void LossWorkspaceArena::bind_pure_ssim(const std::vector<size_t>& shape) {
         size_t off = 0;
         pure_ssim_.ssim_map = make_view(off, shape, lfs::core::DataType::Float32);
-        pure_ssim_.dm_dmu1 = make_view(off, shape, lfs::core::DataType::Float16);
-        pure_ssim_.dm_dsigma1_sq = make_view(off, shape, lfs::core::DataType::Float16);
-        pure_ssim_.dm_dsigma12 = make_view(off, shape, lfs::core::DataType::Float16);
+        pure_ssim_.dm_dmu1 = partial_view(off, shape);
+        pure_ssim_.dm_dsigma1_sq = partial_view(off, shape);
+        pure_ssim_.dm_dsigma12 = partial_view(off, shape);
         pure_ssim_.dL_dmap = make_view(off, shape, lfs::core::DataType::Float32);
         pure_ssim_.dL_dimg1 = make_view(off, shape, lfs::core::DataType::Float32);
         pure_ssim_.reduction_temp = make_view(off, {1024}, lfs::core::DataType::Float32);
@@ -3607,10 +4164,10 @@ namespace lfs::training::kernels {
         map_shape[1] = 1;
         size_t off = 0;
         decoupled_.ssim_map = make_view(off, map_shape, lfs::core::DataType::Float32);
-        decoupled_.app_dm_dmu1 = make_view(off, shape, lfs::core::DataType::Float16);
-        decoupled_.raw_dm_dmu1 = make_view(off, shape, lfs::core::DataType::Float16);
-        decoupled_.raw_dm_dsigma1_sq = make_view(off, shape, lfs::core::DataType::Float16);
-        decoupled_.raw_dm_dsigma12 = make_view(off, shape, lfs::core::DataType::Float16);
+        decoupled_.app_dm_dmu1 = partial_view(off, shape);
+        decoupled_.raw_dm_dmu1 = partial_view(off, shape);
+        decoupled_.raw_dm_dsigma1_sq = partial_view(off, shape);
+        decoupled_.raw_dm_dsigma12 = partial_view(off, shape);
         decoupled_.grad_corrected = make_view(off, shape, lfs::core::DataType::Float32);
         decoupled_.reduction_temp = make_view(off, {1024}, lfs::core::DataType::Float32);
         decoupled_.reduction_result = make_view(off, {1}, lfs::core::DataType::Float32);
@@ -3623,9 +4180,9 @@ namespace lfs::training::kernels {
         map_shape[1] = 1;
         size_t off = 0;
         masked_fused_.ssim_map = make_view(off, map_shape, lfs::core::DataType::Float32);
-        masked_fused_.dm_dmu1 = make_view(off, shape, lfs::core::DataType::Float16);
-        masked_fused_.dm_dsigma1_sq = make_view(off, shape, lfs::core::DataType::Float16);
-        masked_fused_.dm_dsigma12 = make_view(off, shape, lfs::core::DataType::Float16);
+        masked_fused_.dm_dmu1 = partial_view(off, shape);
+        masked_fused_.dm_dsigma1_sq = partial_view(off, shape);
+        masked_fused_.dm_dsigma12 = partial_view(off, shape);
         masked_fused_.grad_img = make_view(off, shape, lfs::core::DataType::Float32);
         masked_fused_.reduction_temp = make_view(off, {2048}, lfs::core::DataType::Float32);
         masked_fused_.masked_loss = make_view(off, {1}, lfs::core::DataType::Float32);
@@ -3639,10 +4196,10 @@ namespace lfs::training::kernels {
         map_shape[1] = 1;
         size_t off = 0;
         masked_decoupled_.ssim_map = make_view(off, map_shape, lfs::core::DataType::Float32);
-        masked_decoupled_.app_dm_dmu1 = make_view(off, shape, lfs::core::DataType::Float16);
-        masked_decoupled_.raw_dm_dmu1 = make_view(off, shape, lfs::core::DataType::Float16);
-        masked_decoupled_.raw_dm_dsigma1_sq = make_view(off, shape, lfs::core::DataType::Float16);
-        masked_decoupled_.raw_dm_dsigma12 = make_view(off, shape, lfs::core::DataType::Float16);
+        masked_decoupled_.app_dm_dmu1 = partial_view(off, shape);
+        masked_decoupled_.raw_dm_dmu1 = partial_view(off, shape);
+        masked_decoupled_.raw_dm_dsigma1_sq = partial_view(off, shape);
+        masked_decoupled_.raw_dm_dsigma12 = partial_view(off, shape);
         masked_decoupled_.grad_corrected = make_view(off, shape, lfs::core::DataType::Float32);
         masked_decoupled_.reduction_temp = make_view(off, {2048}, lfs::core::DataType::Float32);
         masked_decoupled_.masked_loss = make_view(off, {1}, lfs::core::DataType::Float32);
@@ -3652,7 +4209,7 @@ namespace lfs::training::kernels {
     }
 
     FusedL1SSIMWorkspace& LossWorkspaceArena::ensure_fused(const std::vector<size_t>& shape) {
-        ensure_capacity_for(Kind::Fused, fused_layout_bytes(shape));
+        ensure_capacity_for(Kind::Fused, fused_layout_bytes(shape, static_cast<bool>(step_scratch_)));
         if (active_kind_ == Kind::Fused && active_shape_ == shape && fused_.ssim_map.is_valid()) {
             return fused_;
         }
@@ -3660,11 +4217,12 @@ namespace lfs::training::kernels {
         bind_fused(shape);
         active_kind_ = Kind::Fused;
         active_shape_ = shape;
+        active_step_partials_ = static_cast<bool>(step_scratch_);
         return fused_;
     }
 
     SSIMWorkspace& LossWorkspaceArena::ensure_pure_ssim(const std::vector<size_t>& shape) {
-        ensure_capacity_for(Kind::PureSSIM, pure_ssim_layout_bytes(shape));
+        ensure_capacity_for(Kind::PureSSIM, pure_ssim_layout_bytes(shape, static_cast<bool>(step_scratch_)));
         if (active_kind_ == Kind::PureSSIM && active_shape_ == shape && pure_ssim_.ssim_map.is_valid()) {
             return pure_ssim_;
         }
@@ -3672,11 +4230,12 @@ namespace lfs::training::kernels {
         bind_pure_ssim(shape);
         active_kind_ = Kind::PureSSIM;
         active_shape_ = shape;
+        active_step_partials_ = static_cast<bool>(step_scratch_);
         return pure_ssim_;
     }
 
     DecoupledFusedL1SSIMWorkspace& LossWorkspaceArena::ensure_decoupled(const std::vector<size_t>& shape) {
-        ensure_capacity_for(Kind::Decoupled, decoupled_layout_bytes(shape));
+        ensure_capacity_for(Kind::Decoupled, decoupled_layout_bytes(shape, static_cast<bool>(step_scratch_)));
         if (active_kind_ == Kind::Decoupled && active_shape_ == shape && decoupled_.ssim_map.is_valid()) {
             return decoupled_;
         }
@@ -3684,11 +4243,12 @@ namespace lfs::training::kernels {
         bind_decoupled(shape);
         active_kind_ = Kind::Decoupled;
         active_shape_ = shape;
+        active_step_partials_ = static_cast<bool>(step_scratch_);
         return decoupled_;
     }
 
     MaskedFusedL1SSIMWorkspace& LossWorkspaceArena::ensure_masked_fused(const std::vector<size_t>& shape) {
-        ensure_capacity_for(Kind::MaskedFused, masked_fused_layout_bytes(shape));
+        ensure_capacity_for(Kind::MaskedFused, masked_fused_layout_bytes(shape, static_cast<bool>(step_scratch_)));
         if (active_kind_ == Kind::MaskedFused && active_shape_ == shape &&
             masked_fused_.ssim_map.is_valid()) {
             return masked_fused_;
@@ -3697,12 +4257,13 @@ namespace lfs::training::kernels {
         bind_masked_fused(shape);
         active_kind_ = Kind::MaskedFused;
         active_shape_ = shape;
+        active_step_partials_ = static_cast<bool>(step_scratch_);
         return masked_fused_;
     }
 
     MaskedDecoupledFusedL1SSIMWorkspace&
     LossWorkspaceArena::ensure_masked_decoupled(const std::vector<size_t>& shape) {
-        ensure_capacity_for(Kind::MaskedDecoupled, masked_decoupled_layout_bytes(shape));
+        ensure_capacity_for(Kind::MaskedDecoupled, masked_decoupled_layout_bytes(shape, static_cast<bool>(step_scratch_)));
         if (active_kind_ == Kind::MaskedDecoupled && active_shape_ == shape &&
             masked_decoupled_.ssim_map.is_valid()) {
             return masked_decoupled_;
@@ -3711,10 +4272,12 @@ namespace lfs::training::kernels {
         bind_masked_decoupled(shape);
         active_kind_ = Kind::MaskedDecoupled;
         active_shape_ = shape;
+        active_step_partials_ = static_cast<bool>(step_scratch_);
         return masked_decoupled_;
     }
 
     void LossWorkspaceArena::shrink_to_required() {
+        step_fallback_ = {};
         if (active_kind_ == Kind::None || active_shape_.empty()) {
             reset();
             return;
@@ -3727,7 +4290,15 @@ namespace lfs::training::kernels {
             return;
         }
 
+        const bool step_partials = active_step_partials_;
         replace_storage_exact(required_capacity);
+        if (step_partials) {
+            // The views are carved again with the next step's partials.
+            active_kind_ = kind;
+            active_shape_ = shape;
+            active_step_partials_ = true;
+            return;
+        }
         switch (kind) {
         case Kind::Fused:
             bind_fused(shape);
@@ -3754,9 +4325,11 @@ namespace lfs::training::kernels {
     void LossWorkspaceArena::reset() {
         clear_all_views();
         storage_ = {};
+        step_fallback_ = {};
         capacity_bytes_ = 0;
         active_kind_ = Kind::None;
         active_shape_.clear();
+        active_step_partials_ = false;
     }
 
 } // namespace lfs::training::kernels

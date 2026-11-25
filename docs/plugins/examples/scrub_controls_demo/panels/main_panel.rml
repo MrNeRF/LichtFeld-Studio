@@ -2,11 +2,11 @@
 <head>
   <link type="text/rcss" href="main_panel.rcss"/>
 </head>
-<body id="body" data-model="scrub_controls_demo" class="plugin-panel scrub-controls-demo">
+<body id="body" data-model="scrub_controls_demo" class="plugin-panel scrub-controls-demo text-body">
   <div class="demo-shell">
     <div class="demo-header">
-      <span class="demo-title">Scrub Controls Demo</span>
-      <span class="demo-note">{{summary}}</span>
+      <span class="panel-title">Scrub Controls Demo</span>
+      <span class="text-muted">{{summary}}</span>
     </div>
 
     <div class="demo-card">
@@ -31,7 +31,7 @@
     </div>
 
     <div class="demo-actions">
-      <button data-event-click="do_reset">Reset</button>
+      <button class="btn btn--secondary" data-event-click="do_reset">Reset</button>
     </div>
   </div>
 </body>

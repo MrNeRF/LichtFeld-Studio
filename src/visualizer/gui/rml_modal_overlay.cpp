@@ -385,7 +385,7 @@ namespace lfs::vis::gui {
 
         active_ = std::move(req);
         rml_context_->Update();
-        rml_manager_->activateInput(rml_context_, [this](const PanelInputState& event) { processInput(event); });
+        rml_manager_->activateInput(rml_context_, [this](const PanelInputState& event) { processInput(event); }, true, {}, true);
         bindTextInputRevert();
         if (active_->has_input)
             el_input_->Focus();

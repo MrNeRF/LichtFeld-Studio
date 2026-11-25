@@ -89,10 +89,11 @@ namespace lfs::training {
         virtual lfs::core::Tensor edge_score_scratch(int /*iter*/) { return {}; }
         virtual void on_edge_score_accumulated(int /*iter*/) {}
 
-        virtual std::pair<lfs::core::Tensor, lfs::core::Tensor> impact_scratch(int /*iter*/) {
-            return {};
-        }
-        virtual void on_impact_accumulated(int /*iter*/) {}
+        // Optional FastGS [N] row the backward raises to each splat's largest blend weight (alpha x T)
+        // over the pixels of the view. Empty when not in use.
+        virtual lfs::core::Tensor blend_peak_scratch(int /*iter*/) { return {}; }
+        // FastGS: the scale, rank and flatten regularizers skip splats that did not contribute to the view.
+        virtual bool regularize_rendered_only() const { return false; }
     };
 
     class ICheckpointStateAdopter {

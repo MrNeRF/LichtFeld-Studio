@@ -420,7 +420,6 @@ namespace lfs::test::licht {
                 .undistort = true,
                 .steps_scaler = 1.2f + delta,
                 .image_count_scaler = 1.1f + delta,
-                .growth_grad_threshold = 0.023f + delta,
                 .grow_fraction = 0.24f + delta,
                 .grow_until_iter = 12'000 + tag,
                 .opacity_decay = 0.025f + delta,

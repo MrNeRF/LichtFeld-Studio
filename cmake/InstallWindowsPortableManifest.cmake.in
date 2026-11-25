@@ -1,0 +1,48 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Run after all runtime installs, including Python and the vcpkg DLL bundle.
+# The private assembly is found at <root>/bin/bin.manifest by the Windows loader.
+set(_root "${CMAKE_INSTALL_PREFIX}")
+cmake_path(ABSOLUTE_PATH _root NORMALIZE)
+set(_runtime "${_root}/bin")
+set(_exe "${_root}/@PROJECT_NAME@@CMAKE_EXECUTABLE_SUFFIX@")
+set(_mt "@CMAKE_MT@")
+set(_scratch "@CMAKE_CURRENT_BINARY_DIR@/portable-manifest")
+file(MAKE_DIRECTORY "${_scratch}")
+
+file(GLOB _dlls LIST_DIRECTORIES FALSE RELATIVE "${_runtime}" "${_runtime}/*.dll")
+if(NOT _dlls)
+    message(FATAL_ERROR "The installed Windows portable runtime contains no DLLs")
+endif()
+list(SORT _dlls)
+set(_assembly "<assembly xmlns=\"urn:schemas-microsoft-com:asm.v1\" manifestVersion=\"1.0\">\n<assemblyIdentity type=\"win32\" name=\"bin\" version=\"1.0.0.0\" processorArchitecture=\"amd64\"/>\n")
+foreach(_dll IN LISTS _dlls)
+    string(TOLOWER "${_dll}" _lower)
+    # API sets and driver libraries are resolved by Windows, not this assembly.
+    if(_lower MATCHES "^(api-ms-|ext-ms-)" OR
+       _lower MATCHES "^(ucrtbase|nvcuda|nvml|nvapi|nvapi64)[.]dll$")
+        continue()
+    endif()
+    string(REPLACE "&" "&amp;" _name "${_dll}")
+    string(REPLACE "\"" "&quot;" _name "${_name}")
+    string(APPEND _assembly "<file name=\"${_name}\"/>\n")
+endforeach()
+string(APPEND _assembly "</assembly>\n")
+file(WRITE "${_runtime}/bin.manifest" "${_assembly}")
+file(WRITE "${_scratch}/dependency.manifest"
+    "<assembly xmlns=\"urn:schemas-microsoft-com:asm.v1\" manifestVersion=\"1.0\"><dependency><dependentAssembly><assemblyIdentity type=\"win32\" name=\"bin\" version=\"1.0.0.0\" processorArchitecture=\"amd64\"/></dependentAssembly></dependency></assembly>\n")
+
+# Preserve the linker's existing manifest, including UTF-8 and long-path opt-in.
+# Modify only the installed copy, before any distribution signing step.
+execute_process(COMMAND "${_mt}" -nologo "-inputresource:${_exe};#1"
+    "-out:${_scratch}/application.manifest" RESULT_VARIABLE _result)
+if(NOT _result STREQUAL "0")
+    message(FATAL_ERROR "Cannot extract the installed application manifest: ${_result}")
+endif()
+execute_process(COMMAND "${_mt}" -nologo -manifest
+    "${_scratch}/application.manifest" "${_scratch}/dependency.manifest"
+    "-outputresource:${_exe};#1" RESULT_VARIABLE _result)
+if(NOT _result STREQUAL "0")
+    message(FATAL_ERROR "Cannot embed the portable runtime dependency: ${_result}")
+endif()

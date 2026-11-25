@@ -189,7 +189,7 @@ sys.stderr = OutputCapture(True)
 #ifdef _WIN32
         // Python 3.8+ on Windows requires os.add_dll_directory() for DLL loading
         // First add the executable directory using C++ (more reliable)
-        const auto exe_dir = lfs::core::getExecutableDir();
+        const auto exe_dir = lfs::core::getRuntimeDir();
         const auto exe_dir_str = lfs::core::path_to_native_utf8(exe_dir);
 
         std::string add_dll_code = std::format(R"(
@@ -1281,7 +1281,7 @@ _add_dll_dirs()
                 if (!python_module_dir.empty()) {
                     prepend_sys_path_once(sys_path, python_module_dir, "Python module dir");
                 } else {
-                    const auto exe_dir_utf8 = lfs::core::path_to_utf8(lfs::core::getExecutableDir());
+                    const auto exe_dir_utf8 = lfs::core::path_to_utf8(lfs::core::getRuntimeDir());
                     LOG_WARN("Python module 'lichtfeld' not found. Expected a lichtfeld*.so/.pyd in: {}/src/python, {}",
                              exe_dir_utf8, exe_dir_utf8);
                 }

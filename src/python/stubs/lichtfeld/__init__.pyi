@@ -528,9 +528,9 @@ def set_camera_training_enabled(name: str, enabled: bool) -> None:
 def remove_disabled_cameras(camera_group_id: int) -> int:
     """Remove disabled direct camera children and return their count"""
 
-def camera_selection_start(operation: str, camera_group_id: int, percentage: float = 25.0, every_n: int = 2, overlap: float = 65.0, coverage: float = 40.0, cropbox_id: int = 0) -> dict:
+def camera_selection_start(operation: str, camera_group_id: int, percentage: float = 25.0, every_n: int = 2, overlap: float = 65.0, coverage: float = 40.0, cropbox_id: int = 0, sharpness_threshold: float = 10.0) -> dict:
     """
-    Start a cancellable camera-group selection job. Returns its runtime id and opaque handle; no training selection changes until it finishes.
+    Start a cancellable camera-group selection job. Blurry selects enabled cameras visually without changing training flags; other operations update training selection on completion.
     """
 
 def camera_selection_status() -> dict:

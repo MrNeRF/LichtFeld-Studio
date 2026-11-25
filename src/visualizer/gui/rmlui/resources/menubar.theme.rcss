@@ -1,3 +1,38 @@
+/* Shared border roles and shape scale. */
+
+.menu-portal-connection {
+    border-radius: 5dp;
+}
+
+.menu-gallery-progress {
+    border-radius: 5dp;
+}
+
+.menu-gallery-progress-track {
+    border-radius: 2dp;
+}
+
+.menu-gallery-progress-fill {
+    border-radius: 2dp;
+}
+
+.menu-toolbar-btn {
+    border-color: transparent;
+    border-radius: 6dp;
+}
+
+.menu-window-btn {
+    border-radius: 0;
+}
+
+.dropdown-popup {
+    border-radius: 4dp;
+}
+
+.submenu-popup {
+    border-radius: 4dp;
+}
+
 /* Theme-dependent menu bar styles. */
 
 body {
@@ -93,7 +128,7 @@ body {
 
 .dropdown-popup {
     background-color: @{menu.popup_background};
-    border-color: @{menu.border};
+    border-color: @{border};
 }
 
 .menu-item:hover {

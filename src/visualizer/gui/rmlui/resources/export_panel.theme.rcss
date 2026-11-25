@@ -1,3 +1,13 @@
+/* Shared border roles and shape scale. */
+
+.ep-format-dot {
+    border-radius: 4dp;
+}
+
+.ep-model-list {
+    border-radius: 2dp;
+}
+
 /* Export panel theme overrides. */
 
 .ep-section-title {

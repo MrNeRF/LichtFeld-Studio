@@ -173,6 +173,7 @@ namespace lfs::vis::gui {
         void bindReactiveStore();
         void refreshGTMetricsOverlayFromStore();
         void applySplitDividerOverlay();
+        bool updateSplitDividerToolbarClearance();
         void applyLeftDockResizeIndicator();
         void applyGTMetricsOverlay();
         void applyLodStatsOverlay();
@@ -270,6 +271,7 @@ namespace lfs::vis::gui {
         bool left_dock_resize_active_ = false;
         float left_dock_resize_thickness_ = 0.0f;
         SplitDividerOverlayState split_divider_overlay_;
+        float split_divider_toolbar_clearance_ = 0.0f;
         GTMetricsOverlayState gt_metrics_overlay_;
         LodStatsOverlayState lod_stats_overlay_;
         ProjectDragOverlayState project_drag_overlay_;

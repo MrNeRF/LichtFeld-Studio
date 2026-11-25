@@ -39,6 +39,7 @@ namespace lfs::vis {
             Clear,
             TogglePreview,
             RefreshPreview,
+            DeleteSelected,
         };
 
         void setPickedPoints(std::vector<glm::vec3> points) {

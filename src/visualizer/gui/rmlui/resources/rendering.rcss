@@ -38,7 +38,7 @@ body {
     margin: 6dp 0 4dp;
     border-top-width: 1dp;
     font-size: 12dp;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 #selection-groups-list {
@@ -93,7 +93,6 @@ body {
     min-width: 0;
     padding: 10dp 12dp;
     border-width: 1dp;
-    border-radius: 10dp;
 }
 
 .rendering-simplify-stat__label {
@@ -107,7 +106,7 @@ body {
 .rendering-simplify-stat__value {
     display: block;
     font-size: 16dp;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .rendering-simplify-actions {

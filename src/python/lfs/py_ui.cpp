@@ -31,6 +31,7 @@
 #include "io/exporter.hpp"
 #include "io/video/video_export_options.hpp"
 #include "mcp/mcp_http_server.hpp"
+#include "operator/ops/model_alignment_ops.hpp"
 #include "preferences.hpp"
 #include "preprocessing/preprocess.hpp"
 #include "py_command.hpp"
@@ -70,6 +71,7 @@
 #include "visualizer/tools/unified_tool_registry.hpp"
 #include "visualizer/training/training_manager.hpp"
 #include "visualizer/visualizer.hpp"
+#include "visualizer/visualizer_impl.hpp"
 #include "vr/openxr_runtimes.hpp"
 #include "window/window_manager.hpp"
 #include <RmlUi/Core/Core.h>
@@ -131,6 +133,7 @@ namespace lfs::python {
             event.type = vis::op::ModalEvent::Type::NONE;
             return vis::op::operators().dispatchModalEvent(event);
         }
+
     } // namespace
 
     using lfs::training::CommandCenter;
@@ -172,6 +175,16 @@ namespace lfs::python {
                     return viewer->postWork(std::move(work));
                 },
                 std::forward<F>(fn), [] {});
+        }
+
+        std::optional<vis::op::OperatorResult> dispatchModelAlignmentUiAction(vis::PointPickState::UiAction action) {
+            return invoke_on_viewer([action]() -> std::optional<vis::op::OperatorResult> {
+                auto* alignment = vis::op::ModelAlignmentOperator::active();
+                if (!alignment)
+                    return std::nullopt;
+                return dispatchPointPickUiAction(vis::op::BuiltinOp::ModelAlignment, alignment->pointState(), action);
+            },
+                                    std::nullopt);
         }
 
         std::string get_class_id(nb::object cls) {
@@ -4612,6 +4625,62 @@ namespace lfs::python {
                 }
             },
             "Edit the selected splat's or point cloud's crop polygon, or start drawing one on a camera-facing plane");
+
+        nb::enum_<vis::op::ModelAlignmentDisplayMode>(m, "ModelAlignmentDisplayMode")
+            .value("SEPARATE", vis::op::ModelAlignmentDisplayMode::Separate)
+            .value("OVERLAY_LEFT", vis::op::ModelAlignmentDisplayMode::OverlayLeft)
+            .value("OVERLAY_RIGHT", vis::op::ModelAlignmentDisplayMode::OverlayRight);
+        nb::class_<vis::op::ModelAlignmentState>(m, "ModelAlignmentState")
+            .def_ro("active", &vis::op::ModelAlignmentState::active)
+            .def_ro("preview", &vis::op::ModelAlignmentState::preview)
+            .def_ro("can_apply", &vis::op::ModelAlignmentState::can_apply)
+            .def_ro("linked", &vis::op::ModelAlignmentState::linked)
+            .def_ro("display_mode", &vis::op::ModelAlignmentState::display_mode)
+            .def_ro("can_swap_roles", &vis::op::ModelAlignmentState::can_swap_roles)
+            .def_ro("can_delete_pair", &vis::op::ModelAlignmentState::can_delete_pair)
+            .def_ro("can_undo", &vis::op::ModelAlignmentState::can_undo);
+        m.def("get_model_alignment_state", [] {
+            if (!vis::op::operators().isModal(vis::op::BuiltinOp::ModelAlignment)) return vis::op::ModelAlignmentState{};
+            return invoke_on_viewer([] {
+                const auto* alignment = vis::op::ModelAlignmentOperator::active();
+                return alignment ? alignment->state() : vis::op::ModelAlignmentState{};
+            }, vis::op::ModelAlignmentState{}); }, "Current model alignment controls with named fields");
+        m.def("swap_model_alignment_roles", [] { invoke_on_viewer([] {
+                                                     auto* alignment = vis::op::ModelAlignmentOperator::active();
+                                                     const auto* scene = vis::services().sceneOrNull();
+                                                     if (alignment && scene && alignment->state().can_swap_roles)
+                                                         alignment->swapRoles(scene->getScene());
+                                                 }); }, "Swap reference and moving model before picking points");
+        m.def("set_model_alignment_display", [](vis::op::ModelAlignmentDisplayMode mode) { invoke_on_viewer([mode] {
+                                                                                               if (auto* alignment = vis::op::ModelAlignmentOperator::active()) {
+                                                                                                   alignment->setComposite(mode == vis::op::ModelAlignmentDisplayMode::Separate ? std::nullopt : std::optional{mode == vis::op::ModelAlignmentDisplayMode::OverlayLeft ? vis::SplitViewPanelId::Left : vis::SplitViewPanelId::Right});
+                                                                                               }
+                                                                                           }); }, nb::arg("mode"), "Choose separate models or an overlay in the left or right panel");
+        m.def("set_model_alignment_camera_link", [](bool linked) { invoke_on_viewer([linked] {
+                                                                       if (auto* alignment = vis::op::ModelAlignmentOperator::active(); alignment && alignment->state().linked != linked)
+                                                                           alignment->toggleCameraLink();
+                                                                   }); }, nb::arg("linked"), "Link or unlink navigation in the alignment preview");
+        m.def("cancel_model_alignment", [] { invoke_on_viewer([] {
+                                                 if (vis::op::operators().isModal(vis::op::BuiltinOp::ModelAlignment))
+                                                     vis::op::operators().cancelModalOperator();
+                                             }); }, "Cancel model alignment and restore the previous views");
+        m.def("undo_model_alignment", [] { invoke_on_viewer([] {
+                                               if (!vis::op::operators().isModal(vis::op::BuiltinOp::ModelAlignment))
+                                                   return;
+                                               vis::op::ModalEvent event{};
+                                               event.type = vis::op::ModalEvent::Type::ACTION;
+                                               event.data = vis::op::ActionEvent{vis::input::Action::UNDO, 0, {0, 0}};
+                                               (void)vis::op::operators().dispatchModalEvent(event);
+                                           }); }, "Undo the last point edit or exit alignment preview");
+        m.def("delete_model_alignment_pair", [] { invoke_on_viewer([] {
+                                                      if (auto* alignment = vis::op::ModelAlignmentOperator::active())
+                                                          (void)dispatchPointPickUiAction(vis::op::BuiltinOp::ModelAlignment, alignment->pointState(),
+                                                                                          vis::PointPickState::UiAction::DeleteSelected);
+                                                  }); }, "Delete the selected matching point pair");
+
+        m.def("apply_model_alignment", [] { return dispatchModelAlignmentUiAction(vis::PointPickState::UiAction::Apply) == vis::op::OperatorResult::FINISHED; }, "Apply the matching-point alignment and end the session");
+        m.def("clear_model_alignment_points", [] { (void)dispatchModelAlignmentUiAction(vis::PointPickState::UiAction::Clear); }, "Clear matching points while keeping them available to Undo");
+        m.def("toggle_model_alignment_preview", [] { (void)dispatchModelAlignmentUiAction(vis::PointPickState::UiAction::TogglePreview); }, "Switch between picking matching points and previewing model alignment");
 
         m.def(
             "can_apply_align",

@@ -4,6 +4,8 @@
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
+#include "core/image_io.hpp"
+#include "core/native_fs.hpp"
 #include "core/point_cloud.hpp"
 #include "core/services.hpp"
 #include "gui/bounds_gizmo.hpp"
@@ -34,6 +36,7 @@
 #include "input/frame_input_buffer.hpp"
 #include "input/input_controller.hpp"
 #include "input/key_codes.hpp"
+#include "io/video_frame_extractor.hpp"
 #include "licht_test_support.hpp"
 #include "operation/undo_history.hpp"
 #include "operator/operator_registry.hpp"
@@ -57,10 +60,13 @@
 #include <future>
 #include <glm/gtc/type_ptr.hpp>
 #include <gtest/gtest.h>
+#include <limits>
 #include <set>
 #include <thread>
 #include <vector>
-#ifndef _WIN32
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <cstdlib>
 #endif
 
@@ -3791,7 +3797,7 @@ namespace lfs::vis {
             if (index == 0) {
                 auto* menu_document = openCameraMenu(panel, ctx, node->id);
                 ASSERT_NE(menu_document, nullptr);
-                EXPECT_NE(menu_document->QuerySelector("[data-ctx-action='scene_panel:delete_kf:0']"), nullptr);
+                EXPECT_NE(menu_document->QuerySelector("[data-ctx-action='scene_panel:delete:" + std::to_string(node->id) + "']"), nullptr);
                 menu().request({}, 0, 0);
             }
             auto* icon = document->QuerySelector(".trash-icon[data-node-id='" + std::to_string(node->id) + "']");
@@ -3808,6 +3814,62 @@ namespace lfs::vis {
             ASSERT_TRUE(history.redo().success);
             EXPECT_EQ(sequencer.timeline().getKeyframeById(ids[index]), nullptr);
             ASSERT_TRUE(history.undo().success);
+        }
+        history.clear();
+    }
+
+    TEST_F(ScenePanelRefreshTest, KeyframeContextDeleteRespectsLocksAndPreservesOtherSelection) {
+        auto& scene = viewer_->getSceneManager()->getScene();
+        auto& sequencer = gui_->sequencer();
+        std::array<sequencer::KeyframeId, 3> ids;
+        for (size_t i = 0; i < ids.size(); ++i) {
+            sequencer::Keyframe keyframe;
+            keyframe.time = static_cast<float>(i);
+            ids[i] = sequencer.addKeyframe(keyframe);
+        }
+        core::events::state::KeyframeListChanged{.count = ids.size()}.emit();
+        gui::NativeScenePanel panel(&manager());
+        gui::PanelDrawContext ctx;
+        ctx.scene = &scene;
+        auto& history = op::undoHistory();
+        for (const size_t index : {0u, 1u, 2u}) {
+            for (const auto [locked_at_open, locked] : {std::pair{true, true}, {false, true}, {false, false}}) {
+                SCOPED_TRACE(std::format("index={} locked_at_open={} locked_at_click={}", index, locked_at_open, locked));
+                history.clear();
+                const auto name = std::format("Keyframe {}", index + 1);
+                scene.setNodeLocked(name, locked_at_open);
+                const auto* node = scene.getNode(name);
+                ASSERT_NE(node, nullptr);
+                auto* menu_document = openCameraMenu(panel, ctx, node->id);
+                ASSERT_NE(menu_document, nullptr);
+                auto* remove = menu_document->QuerySelector("[data-ctx-action^='scene_panel:delete']");
+                ASSERT_NE(remove, nullptr);
+                EXPECT_EQ(remove->HasAttribute("disabled"), locked_at_open);
+                const auto other = ids[(index + 1) % ids.size()];
+                ASSERT_TRUE(sequencer.selectKeyframeById(other));
+                // Validate the live lock even when it changes after opening the menu.
+                scene.setNodeLocked(name, locked);
+                remove->DispatchEvent("click", {});
+                panel.preload(ctx);
+                EXPECT_EQ(sequencer.selectedKeyframeId(), other);
+                if (locked) {
+                    ASSERT_EQ(sequencer.timeline().realKeyframeCount(), ids.size());
+                    EXPECT_NE(sequencer.timeline().getKeyframeById(ids[index]), nullptr);
+                    EXPECT_EQ(history.undoCount(), 0u);
+                    continue;
+                }
+                EXPECT_EQ(sequencer.timeline().realKeyframeCount(), 2u);
+                for (size_t i = 0; i < ids.size(); ++i)
+                    EXPECT_EQ(sequencer.timeline().getKeyframeById(ids[i]) == nullptr, i == index);
+                ASSERT_EQ(history.undoCount(), 1u);
+                ASSERT_TRUE(history.undo().success);
+                for (const auto id : ids)
+                    EXPECT_NE(sequencer.timeline().getKeyframeById(id), nullptr);
+                ASSERT_TRUE(history.redo().success);
+                for (size_t i = 0; i < ids.size(); ++i)
+                    EXPECT_EQ(sequencer.timeline().getKeyframeById(ids[i]) == nullptr, i == index);
+                ASSERT_TRUE(history.undo().success);
+            }
         }
         history.clear();
     }
@@ -3955,11 +4017,13 @@ namespace lfs::vis {
             html = open_menu(id);
             EXPECT_EQ(html.find("scene_panel:enable_group_train:"), std::string::npos);
             EXPECT_EQ(html.find("scene_panel:disable_group_train:"), std::string::npos);
+            EXPECT_EQ(html.find("scene_panel:camera_selection:blurry:"), std::string::npos);
             EXPECT_EQ(html.find("scene_panel:duplicate:"), std::string::npos);
         }
         html = open_menu(full);
         EXPECT_NE(html.find("scene_panel:enable_group_train:"), std::string::npos);
         EXPECT_NE(html.find("scene_panel:disable_group_train:"), std::string::npos);
+        EXPECT_NE(html.find("scene_panel:camera_selection:blurry:" + std::to_string(full)), std::string::npos);
         EXPECT_EQ(html.find("scene_panel:enable_all_selected_train"), std::string::npos);
         EXPECT_EQ(html.find("scene_panel:disable_all_selected_train"), std::string::npos);
         EXPECT_EQ(html.find("scene_panel:duplicate:"), std::string::npos);
@@ -4072,6 +4136,165 @@ namespace lfs::vis {
             const auto selected = scene_manager.getSelectedNodeIds();
             EXPECT_EQ(std::set<core::NodeId>(selected.begin(), selected.end()), (std::set<core::NodeId>{first, second}));
         }
+    }
+
+    TEST_F(ScenePanelRefreshTest, BlurryCameraSelectionOnlySelectsEnabledImagesAndCommitsOnSuccess) {
+        lfs::test::licht::TemporaryDirectory temp("blurry-cameras");
+        std::filesystem::create_directories(temp.path / "sharp");
+        std::filesystem::create_directories(temp.path / "blurred");
+        const auto sharp_path = temp.path / "sharp" / "image.png";
+        const auto blurred_path = temp.path / "blurred" / "image.png";
+        std::vector<uint8_t> pixels(64 * 48 * 3, 128);
+        ASSERT_TRUE(core::save_png(blurred_path, pixels.data(), 64, 48, 3, 8, 1));
+        for (int y = 0; y < 48; ++y)
+            for (int x = 0; x < 64; ++x)
+                for (int channel = 0; channel < 3; ++channel)
+                    pixels[(y * 64 + x) * 3 + channel] = (x / 4 + y / 4) % 2 ? 255 : 0;
+        ASSERT_TRUE(core::save_png(sharp_path, pixels.data(), 64, 48, 3, 8, 1));
+        const auto sharp_score = io::computeSharpnessScore(pixels.data(), 64, 48, io::SharpnessAlgorithm::COMBINED);
+        ASSERT_GT(sharp_score, 10.0);
+        auto& manager = *viewer_->getSceneManager();
+        auto& scene = manager.getScene();
+        const auto group = scene.addCameraGroup("Cameras", core::NULL_NODE, 0);
+        const auto sharp = addCamera(scene, "Sharp", group, sharp_path, 71);
+        const auto blurred = addCamera(scene, "Blurred", group, blurred_path, 72);
+        const auto disabled = addCamera(scene, "Disabled", group, temp.path / "missing.png", 73);
+        const auto other = addCamera(scene, "Other", core::NULL_NODE, {}, 74);
+        const auto unavailable = addCamera(scene, "Unavailable image", group, {}, 76);
+        scene.getNodeById(unavailable)->camera->set_has_image(false);
+        scene.setCameraTrainingEnabled(disabled, false);
+        auto& tasks = viewer_->getGuiManager()->asyncTasks();
+        const auto start = [&](double threshold) {
+            return tasks.startCameraSelection({.operation = gui::AsyncTaskManager::CameraSelectionOperation::Blurry,
+                                               .sharpness_threshold = threshold,
+                                               .camera_group_id = group});
+        };
+        const auto finish = [&] {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            auto state = tasks.cameraSelectionStatus();
+            while (state && state->running() && std::chrono::steady_clock::now() < deadline) {
+                tasks.pollCameraSelectionCompletion();
+                std::this_thread::yield();
+                state = tasks.cameraSelectionStatus();
+            }
+            return state;
+        };
+        manager.selectNodesById({other});
+        const auto generation = scene.renderGeneration();
+        ASSERT_TRUE(start(sharp_score));
+        scene.syncTrainingModelTopology(42);
+        const auto refined_generation = scene.renderGeneration();
+        ASSERT_NE(refined_generation, generation);
+        auto state = finish();
+        ASSERT_TRUE(state);
+        ASSERT_EQ(state->status, JobStatus::Completed) << state->error;
+        EXPECT_EQ(manager.getSelectedNodeIds(), (std::vector<core::NodeId>{blurred}));
+        EXPECT_EQ(scene.renderGeneration(), refined_generation);
+        EXPECT_TRUE(scene.getNodeById(sharp)->training_enabled);
+        EXPECT_TRUE(scene.getNodeById(blurred)->training_enabled);
+        EXPECT_FALSE(scene.getNodeById(disabled)->training_enabled);
+        EXPECT_TRUE(scene.getNodeById(other)->training_enabled);
+        EXPECT_TRUE(scene.getNodeById(unavailable)->training_enabled);
+
+        ASSERT_TRUE(start(0.0));
+        state = finish();
+        ASSERT_TRUE(state);
+        ASSERT_EQ(state->status, JobStatus::Completed) << state->error;
+        EXPECT_TRUE(manager.getSelectedNodeIds().empty());
+        manager.selectNodesById({sharp});
+        scene.setCameraTrainingEnabled(disabled, true);
+        ASSERT_TRUE(start(10.0));
+        state = finish();
+        ASSERT_TRUE(state);
+        ASSERT_EQ(state->status, JobStatus::Completed) << state->error;
+        EXPECT_FALSE(state->stage.empty());
+        EXPECT_EQ(manager.getSelectedNodeIds(), (std::vector<core::NodeId>{blurred}));
+        scene.setCameraTrainingEnabled(disabled, false);
+
+        manager.selectNodesById({sharp});
+        scene.setCameraTrainingEnabled(sharp, false);
+        scene.setCameraTrainingEnabled(blurred, false);
+        scene.setCameraTrainingEnabled(unavailable, false);
+        ASSERT_TRUE(start(10.0));
+        state = finish();
+        ASSERT_TRUE(state);
+        ASSERT_EQ(state->status, JobStatus::Completed) << state->error;
+        EXPECT_TRUE(state->stage.empty());
+        EXPECT_EQ(manager.getSelectedNodeIds(), (std::vector<core::NodeId>{sharp}));
+        scene.setCameraTrainingEnabled(sharp, true);
+        scene.setCameraTrainingEnabled(blurred, true);
+        scene.setCameraTrainingEnabled(unavailable, true);
+
+        ASSERT_TRUE(start(10.0));
+        tasks.cancelCameraSelection();
+        state = finish();
+        ASSERT_TRUE(state);
+        EXPECT_EQ(state->status, JobStatus::Canceled);
+        EXPECT_EQ(manager.getSelectedNodeIds(), (std::vector<core::NodeId>{sharp}));
+        ASSERT_TRUE(start(10.0));
+        scene.setCameraTrainingEnabled(blurred, false);
+        state = finish();
+        ASSERT_TRUE(state);
+        EXPECT_EQ(state->status, JobStatus::Failed);
+        EXPECT_EQ(manager.getSelectedNodeIds(), (std::vector<core::NodeId>{sharp}));
+        scene.setCameraTrainingEnabled(blurred, true);
+
+        auto& blurred_camera = *scene.getNodeById(blurred)->camera;
+        ASSERT_TRUE(start(10.0));
+        blurred_camera.set_has_image(false);
+        state = finish();
+        ASSERT_TRUE(state);
+        EXPECT_EQ(state->status, JobStatus::Failed);
+        EXPECT_EQ(manager.getSelectedNodeIds(), (std::vector<core::NodeId>{sharp}));
+        blurred_camera.set_has_image(true);
+
+        ASSERT_TRUE(start(10.0));
+        blurred_camera.rebase_asset_paths(temp.path, temp.path / "relocated");
+        ASSERT_NE(blurred_camera.image_path(), blurred_path);
+        state = finish();
+        ASSERT_TRUE(state);
+        EXPECT_EQ(state->status, JobStatus::Failed);
+        EXPECT_EQ(manager.getSelectedNodeIds(), (std::vector<core::NodeId>{sharp}));
+        blurred_camera.rebase_asset_paths(temp.path / "relocated", temp.path);
+
+        ASSERT_TRUE(start(10.0));
+        addCamera(scene, "New camera", group, sharp_path, 75);
+        state = finish();
+        ASSERT_TRUE(state);
+        EXPECT_EQ(state->status, JobStatus::Failed);
+        EXPECT_EQ(manager.getSelectedNodeIds(), (std::vector<core::NodeId>{sharp}));
+        EXPECT_FALSE(start(-1.0));
+        EXPECT_FALSE(start(101.0));
+        EXPECT_FALSE(start(std::numeric_limits<double>::quiet_NaN()));
+
+#ifdef _WIN32
+        // Deny payload reads while leaving the path and its metadata untouched.
+        {
+            const auto native_path = core::native_fs::native_path(blurred_path);
+            const HANDLE handle = CreateFileW(native_path.c_str(), GENERIC_READ, FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                              nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            ASSERT_NE(handle, INVALID_HANDLE_VALUE);
+            const std::unique_ptr<void, decltype(&CloseHandle)> held(handle, &CloseHandle);
+            EXPECT_THROW(static_cast<void>(core::load_image(blurred_path)), std::runtime_error);
+            ASSERT_TRUE(start(10.0));
+            state = finish();
+            ASSERT_TRUE(state);
+            ASSERT_EQ(state->status, JobStatus::Completed) << state->error;
+            EXPECT_EQ(manager.getSelectedNodeIds(), (std::vector<core::NodeId>{blurred}));
+        }
+#endif
+
+        // A replacement with a preserved timestamp must still invalidate a different file size.
+        const auto old_write_time = std::filesystem::last_write_time(blurred_path);
+        const auto old_size = std::filesystem::file_size(blurred_path);
+        ASSERT_TRUE(core::save_png(blurred_path, pixels.data(), 64, 48, 3, 8, 1));
+        ASSERT_NE(std::filesystem::file_size(blurred_path), old_size);
+        std::filesystem::last_write_time(blurred_path, old_write_time);
+        ASSERT_TRUE(start(10.0));
+        state = finish();
+        ASSERT_TRUE(state);
+        ASSERT_EQ(state->status, JobStatus::Completed) << state->error;
+        EXPECT_TRUE(manager.getSelectedNodeIds().empty());
     }
 
     TEST_F(ScenePanelRefreshTest, CameraMenuRemovesDisabledCameras) {

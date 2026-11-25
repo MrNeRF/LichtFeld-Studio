@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "../components/calibration_correction.hpp"
 #include "core/cuda_error.hpp"
+#include "core/memory_pressure.hpp"
 #include "kernel_stream.hpp"
 #include "lfs/kernels/ssim.cuh"
 #include "normal_loss.hpp"
@@ -451,17 +452,32 @@ namespace lfs::training {
     }
 
     void CalibrationCorrection::accumulate(const Tensor& render, const Tensor& gradient, const Tensor& weight, float values,
-                                           int margin, const kernels::DecoupledRawGradient* raw) {
+                                           int margin, const kernels::DecoupledRawGradient* raw,
+                                           const std::function<char*(size_t)>& scratch) {
         const auto stream = getCurrentCUDAStream();
         const int side = tile_.side, cells = side - 1, points = side * side;
         const int chunks = chunks_for(tile_);
         const Tensor* full = &gradient;
+        Tensor scratch_sum;
         if (raw && gradient.is_valid()) {
             // The target enters both parts of the decoupled loss, so its gradient is their sum.
-            reserve(gradient_, gradient.shape());
-            gradient_.copy_from(gradient);
-            kernels::accumulate_decoupled_raw_gradient(*raw, gradient_);
-            full = &gradient_;
+            Tensor* sum = &gradient_;
+            if (scratch) {
+                const size_t bytes = gradient.numel() * sizeof(float);
+                char* const memory = scratch(bytes);
+                if (!memory)
+                    throw MemoryAllocationError(AllocationFailure{
+                        .requested_bytes = bytes,
+                        .label = "training.loss_step_scratch",
+                        .operation = "calibration.gradient"});
+                scratch_sum = Tensor::from_blob(memory, gradient.shape(), Device::CUDA, DataType::Float32, stream);
+                sum = &scratch_sum;
+            } else {
+                reserve(gradient_, gradient.shape());
+            }
+            sum->copy_from(gradient);
+            kernels::accumulate_decoupled_raw_gradient(*raw, *sum);
+            full = sum;
         }
         reserve(partials_, {size_t(cells * cells), size_t(chunks), partial_size});
         const float2* row = reinterpret_cast<const float2*>(field_.ptr<float>()) + slot_ * points;

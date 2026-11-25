@@ -9,6 +9,7 @@
 #include "operator.hpp"
 #include "operator_id.hpp"
 #include <array>
+#include <atomic>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -59,6 +60,7 @@ namespace lfs::vis::op {
         OperatorReturnValue invoke(const std::string& class_id, OperatorProperties* props = nullptr);
 
         [[nodiscard]] bool hasModalOperator() const;
+        [[nodiscard]] bool isModal(BuiltinOp op) const { return active_modal_builtin_.load(std::memory_order_acquire) == op; }
         [[nodiscard]] ModalState modalState() const;
         [[nodiscard]] std::string activeModalId() const;
         [[nodiscard]] bool canLockMutexForTest() const;
@@ -86,6 +88,7 @@ namespace lfs::vis::op {
             bool is_registered = false;
         };
 
+        void setActiveModalBuiltin(BuiltinOp op); // Called with mutex_ held.
         [[nodiscard]] std::optional<OperatorContext> makeContext() const;
         [[nodiscard]] bool pollImpl(const RegisteredOperator& reg,
                                     const OperatorProperties* props = nullptr) const;
@@ -98,7 +101,7 @@ namespace lfs::vis::op {
         std::unordered_map<std::string, RegisteredOperator> python_operators_;
         OperatorPtr active_modal_;
         std::string active_modal_id_;
-        std::optional<BuiltinOp> active_modal_builtin_;
+        std::atomic<BuiltinOp> active_modal_builtin_{BuiltinOp::_Count};
         bool active_modal_has_undo_transaction_ = false;
         OperatorProperties modal_props_;
         SceneManager* scene_manager_ = nullptr;

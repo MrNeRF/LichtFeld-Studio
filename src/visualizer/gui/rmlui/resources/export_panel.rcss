@@ -34,7 +34,7 @@
 .ep-section-title {
     display: block;
     font-size: 12dp;
-    font-weight: bold;
+    font-weight: 600;
     padding: 4dp 8dp;
     margin-bottom: 0;
 }
@@ -58,7 +58,6 @@
     width: 8dp;
     height: 8dp;
     border-width: 1dp;
-    border-radius: 5dp;
     margin-right: 8dp;
     flex-shrink: 0;
 }
@@ -66,7 +65,7 @@
 .ep-format-name {
     display: block;
     font-size: 12dp;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .ep-format-copy {
@@ -104,7 +103,6 @@
 
 .ep-model-list {
     border-width: 1dp;
-    border-radius: 2dp;
     max-height: 210dp;
     overflow-y: auto;
     padding: 8dp;
@@ -118,7 +116,7 @@
 }
 
 .ep-model-row.is-group .ep-model-name {
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .ep-model-row .setting-label {
@@ -149,7 +147,7 @@
 .ep-empty-title {
     display: block;
     font-size: 12dp;
-    font-weight: bold;
+    font-weight: 600;
     margin-bottom: 8dp;
 }
 

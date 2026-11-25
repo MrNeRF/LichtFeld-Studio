@@ -23,8 +23,7 @@ namespace lfs::training::kernels {
         float* grad_grid, float* grad_rgb,
         int L, int H, int W, int h, int w,
         const float* shared_offset,
-        cudaStream_t stream = nullptr,
-        bool warp_aggregate = true);
+        cudaStream_t stream = nullptr);
 
     // CHW layout kernels (zero-copy for rasterizer output)
 
@@ -39,8 +38,7 @@ namespace lfs::training::kernels {
         float* grad_grid, float* grad_rgb,
         int L, int H, int W, int h, int w,
         const float* shared_offset,
-        cudaStream_t stream = nullptr,
-        bool warp_aggregate = true);
+        cudaStream_t stream = nullptr);
 
     void launch_bilateral_grid_slice_forward_exposure_chroma(
         const float* grid, const float* rgb, float* output,
@@ -53,8 +51,7 @@ namespace lfs::training::kernels {
         float* grad_grid, float* grad_rgb,
         int L, int H, int W, int h, int w,
         const float* shared_offset,
-        cudaStream_t stream = nullptr,
-        bool warp_aggregate = true);
+        cudaStream_t stream = nullptr);
 
     void launch_bilateral_grid_slice_forward_exposure_chroma_chw(
         const float* grid, const float* rgb, float* output,
@@ -67,8 +64,7 @@ namespace lfs::training::kernels {
         float* grad_grid, float* grad_rgb,
         int L, int H, int W, int h, int w,
         const float* shared_offset,
-        cudaStream_t stream = nullptr,
-        bool warp_aggregate = true);
+        cudaStream_t stream = nullptr);
 
     // Pre-privatisation scatter kernels, compiled for equivalence tests only.
     void launch_bilateral_grid_slice_backward_reference(

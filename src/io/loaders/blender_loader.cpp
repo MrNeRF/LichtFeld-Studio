@@ -40,29 +40,6 @@ namespace lfs::io {
                 relative = relative.lexically_relative(*relative.begin());
             return lfs::core::path_to_utf8(relative);
         }
-
-        FileLookupResult lookup_sidecar(const SidecarDirCache& cache,
-                                        const std::filesystem::path& image_path,
-                                        const std::string& image_name,
-                                        const std::filesystem::path& absolute_dataset_path) {
-            auto original = cache.lookup(image_name);
-            if (!original.ambiguous())
-                return original;
-
-            auto relative = std::filesystem::absolute(image_path).lexically_normal().lexically_relative(absolute_dataset_path);
-            if (relative.empty() || *relative.begin() == "..")
-                return original;
-
-            // Preserve existing matches; use the frame's directories only to resolve ambiguity.
-            if (auto result = cache.lookup(lfs::core::path_to_utf8(relative)); result.found())
-                return result;
-
-            // Sidecars can mirror either the dataset root or the leading image folder.
-            relative = relative.lexically_relative(*relative.begin());
-            if (auto result = cache.lookup(lfs::core::path_to_utf8(relative)); result.found())
-                return result;
-            return original;
-        }
     } // namespace
 
     // Import types from lfs::core for convenience
@@ -249,7 +226,7 @@ namespace lfs::io {
                 LOG_INFO("mask maps present but unused (mask usage disabled)");
             }
 
-            const auto absolute_base_path = std::filesystem::absolute(transforms_file).parent_path().lexically_normal();
+            const auto absolute_base_path = normalize_absolute_dir_path(transforms_file.parent_path());
             std::optional<MaskDirCache> mask_cache;
             DepthDirCache depth_cache(base_path, options.cancel_requested);
             NormalDirCache normal_cache(base_path, options.cancel_requested);
@@ -292,7 +269,7 @@ namespace lfs::io {
                     }
 
                     std::filesystem::path depth_path;
-                    if (auto depth_lookup = lookup_sidecar(depth_cache, info._image_path, info._image_name, absolute_base_path); depth_lookup.found()) {
+                    if (auto depth_lookup = lookup_sidecar_normalized(depth_cache, info._image_path, info._image_name, absolute_base_path); depth_lookup.found()) {
                         depth_path = std::move(depth_lookup.path);
                     } else if (depth_lookup.ambiguous()) {
                         if (options.load_depths) {
@@ -308,7 +285,7 @@ namespace lfs::io {
                     }
 
                     std::filesystem::path normal_path;
-                    if (auto normal_lookup = lookup_sidecar(normal_cache, info._image_path, info._image_name, absolute_base_path); normal_lookup.found()) {
+                    if (auto normal_lookup = lookup_sidecar_normalized(normal_cache, info._image_path, info._image_name, absolute_base_path); normal_lookup.found()) {
                         normal_path = std::move(normal_lookup.path);
                     } else if (normal_lookup.ambiguous()) {
                         if (options.load_normals) {

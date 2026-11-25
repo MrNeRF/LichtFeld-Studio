@@ -56,6 +56,11 @@ namespace fast_lfs::rasterization {
         float flatten_reg_weight = 0.0f;
         float opacity_reg_weight = 0.0f;
         float* rendered_count = nullptr;
+        // Optional [N] row raised to each primitive's largest blend weight alpha * T over the pixels of the view
+        // (blend backward, atomic max).
+        float* blend_peak = nullptr;
+        // The scale, rank and flatten regularizers skip splats that did not contribute to the view.
+        bool reg_rendered_only = false;
         // Optional persistent device scalars (caller zeros). Filled by preprocess_backward
         // via block-reduce + atomicAdd so the trainer can skip loss-only reg kernels.
         float* scale_reg_loss_out = nullptr;

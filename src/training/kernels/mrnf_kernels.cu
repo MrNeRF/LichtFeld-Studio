@@ -132,8 +132,9 @@ namespace lfs::training::mrnf_strategy {
         return (bits & 0x80000000u) ? ~bits : (bits | 0x80000000u);
     }
 
-    __global__ void exchange_importance_keys_kernel(
-        const float* __restrict__ importance,
+    // Eligible rows by ascending value, a NaN still below every ineligible row.
+    __global__ void lowest_eligible_keys_kernel(
+        const float* __restrict__ values,
         const bool* __restrict__ eligible,
         uint32_t* __restrict__ keys,
         uint32_t* __restrict__ rows,
@@ -141,33 +142,7 @@ namespace lfs::training::mrnf_strategy {
         const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
         if (i >= N)
             return;
-        keys[i] = ascending_float_key(eligible[i] ? importance[i] : INFINITY);
-        rows[i] = static_cast<uint32_t>(i);
-    }
-
-    __global__ void exchange_positions_kernel(
-        const uint32_t* __restrict__ sorted_rows,
-        int32_t* __restrict__ ranks,
-        const bool first,
-        const size_t N) {
-        const size_t position = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-        if (position >= N)
-            return;
-        const uint32_t row = sorted_rows[position];
-        const auto rank = static_cast<int32_t>(position);
-        ranks[row] = first ? rank : max(ranks[row], rank);
-    }
-
-    __global__ void exchange_rank_keys_kernel(
-        const int32_t* __restrict__ ranks,
-        const bool* __restrict__ eligible,
-        uint32_t* __restrict__ keys,
-        uint32_t* __restrict__ rows,
-        const size_t N) {
-        const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-        if (i >= N)
-            return;
-        keys[i] = static_cast<uint32_t>(eligible[i] ? ranks[i] : INT_MAX);
+        keys[i] = eligible[i] ? min(ascending_float_key(values[i]), 0xfffffffeu) : 0xffffffffu;
         rows[i] = static_cast<uint32_t>(i);
     }
 
@@ -180,9 +155,8 @@ namespace lfs::training::mrnf_strategy {
             out[i] = static_cast<int64_t>(rows[i]);
     }
 
-    void launch_rank_exchange_rows(
-        const float* primary,
-        const float* secondary,
+    void launch_lowest_eligible_rows(
+        const float* values,
         const bool* eligible,
         const size_t N,
         const size_t count,
@@ -191,50 +165,32 @@ namespace lfs::training::mrnf_strategy {
         if (N == 0 || count == 0)
             return;
         LFS_ASSERT_MSG(N <= static_cast<size_t>(INT_MAX) && count <= N,
-                       "MRNF growth exchange exceeds int32 rank capacity");
+                       "MRNF lowest rows exceed int32 row capacity");
         constexpr int threads = 256;
         const int blocks = static_cast<int>((N + threads - 1) / threads);
         const cudaStream_t s = resolve_stream(stream);
         const lfs::core::CUDAStreamGuard stream_guard(s);
 
-        // Two key and two row buffers serve every sort; 20 bytes a row in all.
         const auto buffer = [N] {
             return lfs::core::Tensor::empty({N}, lfs::core::Device::CUDA, lfs::core::DataType::Int32);
         };
-        auto keys_a = buffer(), keys_b = buffer(), rows_a = buffer(), rows_b = buffer(), ranks = buffer();
+        auto keys_a = buffer(), keys_b = buffer(), rows_a = buffer(), rows_b = buffer();
         const auto u32 = [](lfs::core::Tensor& t) { return reinterpret_cast<uint32_t*>(t.ptr<int32_t>()); };
 
-        // Stable, so equal keys keep row order, as the comparator sorts did.
-        const auto sort = [&](const int end_bit) {
-            cub::DoubleBuffer<uint32_t> keys(u32(keys_a), u32(keys_b));
-            cub::DoubleBuffer<uint32_t> values(u32(rows_a), u32(rows_b));
-            const auto radix_sort = [&](void* workspace, size_t& workspace_bytes) {
-                return cub::DeviceRadixSort::SortPairs(workspace, workspace_bytes, keys, values,
-                                                       static_cast<int>(N), 0, end_bit, s);
-            };
-            cuda_scratch::CubWorkspace workspace("cub::DeviceRadixSort::SortPairs", s, radix_sort);
-            workspace.run(radix_sort);
-            return values.Current();
+        lowest_eligible_keys_kernel<<<blocks, threads, 0, s>>>(values, eligible, u32(keys_a), u32(rows_a), N);
+        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.lowest_eligible_keys");
+        // Stable, so equal keys keep row order.
+        cub::DoubleBuffer<uint32_t> keys(u32(keys_a), u32(keys_b));
+        cub::DoubleBuffer<uint32_t> values_rows(u32(rows_a), u32(rows_b));
+        const auto radix_sort = [&](void* workspace, size_t& workspace_bytes) {
+            return cub::DeviceRadixSort::SortPairs(workspace, workspace_bytes, keys, values_rows,
+                                                   static_cast<int>(N), 0, 32, s);
         };
-
-        const auto rank_by = [&](const float* importance, const bool first) {
-            exchange_importance_keys_kernel<<<blocks, threads, 0, s>>>(
-                importance, eligible, u32(keys_a), u32(rows_a), N);
-            LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.exchange_importance_keys");
-            exchange_positions_kernel<<<blocks, threads, 0, s>>>(sort(32), ranks.ptr<int32_t>(), first, N);
-            LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.exchange_positions");
-        };
-        rank_by(primary, true);
-        if (secondary != nullptr)
-            rank_by(secondary, false);
-
-        exchange_rank_keys_kernel<<<blocks, threads, 0, s>>>(
-            ranks.ptr<int32_t>(), eligible, u32(keys_a), u32(rows_a), N);
-        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.exchange_rank_keys");
-        const uint32_t* ranked = sort(31);
+        cuda_scratch::CubWorkspace workspace("cub::DeviceRadixSort::SortPairs", s, radix_sort);
+        workspace.run(radix_sort);
         widen_rows_kernel<<<static_cast<int>((count + threads - 1) / threads), threads, 0, s>>>(
-            ranked, rows, count);
-        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.exchange_widen_rows");
+            values_rows.Current(), rows, count);
+        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.lowest_eligible_rows");
     }
 
     __global__ void fill_index_mask_kernel(
@@ -337,7 +293,8 @@ namespace lfs::training::mrnf_strategy {
         float scale_decay,
         float train_t,
         size_t N,
-        const float* __restrict__ rendered_count) {
+        const float* __restrict__ rendered_count,
+        const float* __restrict__ reach) {
 
         const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
         if (idx >= N)
@@ -345,7 +302,9 @@ namespace lfs::training::mrnf_strategy {
         if (frozen_mask != nullptr && idx < frozen_mask_size && frozen_mask[idx])
             return;
 
-        const float t_shrink = 1.0f - train_t;
+        // Both decays scale by the row's reach (1 without one); reach 1 gives exactly the plain decay.
+        const float r = reach != nullptr ? fminf(fmaxf(reach[idx], 0.0f), 1.0f) : 1.0f;
+        const float t_shrink = (1.0f - train_t) * r;
 
         const float opacity_delta = opacity_decay * t_shrink;
         // A sigmoid/logit round trip loses finite saturated logits even when
@@ -354,6 +313,8 @@ namespace lfs::training::mrnf_strategy {
             (opacity_delta != 0.0f || isinf(raw_opacities[idx]))) {
             raw_opacities[idx] = d_logit(d_sigmoid(raw_opacities[idx]) - opacity_delta);
         }
+        if (!(r > 0.0f))
+            return; // no reach: the scale stays as it is
 
         const float decay_factor = 1.0f - scale_decay * t_shrink;
         for (int d = 0; d < 3; ++d) {
@@ -372,7 +333,8 @@ namespace lfs::training::mrnf_strategy {
         float train_t,
         size_t N,
         void* stream,
-        const float* rendered_count) {
+        const float* rendered_count,
+        const float* reach) {
 
         if (N == 0)
             return;
@@ -384,42 +346,14 @@ namespace lfs::training::mrnf_strategy {
         if (rendered_count != nullptr) {
             mrnf_decay_kernel<true><<<blocks, threads, 0, s>>>(
                 raw_opacities, log_scales, frozen_mask, frozen_mask_size,
-                opacity_decay, scale_decay, train_t, N, rendered_count);
+                opacity_decay, scale_decay, train_t, N, rendered_count, reach);
             LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.decay_with_rendered_count");
         } else {
             mrnf_decay_kernel<false><<<blocks, threads, 0, s>>>(
                 raw_opacities, log_scales, frozen_mask, frozen_mask_size,
-                opacity_decay, scale_decay, train_t, N, nullptr);
+                opacity_decay, scale_decay, train_t, N, nullptr, reach);
             LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.decay_without_rendered_count");
         }
-    }
-
-    __global__ void fold_densification_error_and_zero_kernel(
-        float* __restrict__ refine_weight_max,
-        float* __restrict__ densification_info,
-        size_t N) {
-
-        const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
-        if (idx >= N)
-            return;
-
-        refine_weight_max[idx] = fmaxf(refine_weight_max[idx], densification_info[N + idx]);
-        densification_info[N + idx] = 0.0f;
-    }
-
-    void launch_fold_densification_error_and_zero(
-        float* refine_weight_max,
-        float* densification_info,
-        size_t N,
-        void* stream) {
-        if (N == 0)
-            return;
-        constexpr int threads = 256;
-        const int blocks = static_cast<int>((N + threads - 1) / threads);
-        cudaStream_t s = resolve_stream(stream);
-        fold_densification_error_and_zero_kernel<<<blocks, threads, 0, s>>>(
-            refine_weight_max, densification_info, N);
-        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.fold_densification_error_and_zero");
     }
 
     __global__ void extract_axis_kernel(
