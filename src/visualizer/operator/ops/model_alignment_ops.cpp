@@ -371,7 +371,10 @@ namespace lfs::vis::op {
             restoreAlignmentCamera(renderer->projectSecondaryViewport(), saved->previous_secondary);
             renderer->setFocusedSplitPanel(saved->previous_focus);
         }
-        publishSavedView();
+        {
+            const std::lock_guard lock(published_session_mutex_);
+            published_session_.reset();
+        }
         publish_align_state_generation();
     }
     void ModelAlignmentOperator::publishView() {

@@ -2691,6 +2691,7 @@ namespace lfs::vis {
             }
         } viewer_borrow_publisher{live_trainer, vksplat_viewport_renderer_.get()};
 
+        // Explicit panel models are rendered without scene-wide meshes or effects.
         if (independent_panel_overrides_) {
             scene_state.meshes.clear();
         } else {

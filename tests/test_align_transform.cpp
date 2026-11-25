@@ -138,10 +138,7 @@ namespace lfs::vis {
         scene.addSplat("moving", lfs::test::licht::make_splat(1));
         scene.setNodeLocked("reference", true); // Only the moving model must be editable.
         manager->selectNodes({"moving", "reference"});
-        op::OperatorProperties props;
-        props.set("reference", std::string("reference"));
-        props.set("moving", std::string("moving"));
-        EXPECT_EQ(op::operators().invoke(op::BuiltinOp::ModelAlignment, &props).status, op::OperatorResult::RUNNING_MODAL);
+        EXPECT_EQ(op::operators().invoke(op::BuiltinOp::ModelAlignment).status, op::OperatorResult::RUNNING_MODAL);
         ASSERT_TRUE(op::operators().isModal(op::BuiltinOp::ModelAlignment));
         ASSERT_NE(op::ModelAlignmentOperator::active(), nullptr);
         EXPECT_EQ(op::ModelAlignmentOperator::active()->session()->nodes[0], scene.getNode("reference")->uuid);
