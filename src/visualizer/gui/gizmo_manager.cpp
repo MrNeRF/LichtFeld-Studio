@@ -1514,7 +1514,7 @@ namespace lfs::vis::gui {
         lfs::core::events::tools::SetToolbarTool::when([this](const auto& e) {
             auto& editor = viewer_->getEditorContext();
             const auto tool = static_cast<ToolType>(e.tool_mode);
-            if (const auto* renderer = services().renderingOrNull(); renderer && renderer->modelAlignmentView())
+            if (op::operators().isModal(op::BuiltinOp::ModelAlignment))
                 return;
 
             auto& registry = UnifiedToolRegistry::instance();
@@ -1745,7 +1745,7 @@ namespace lfs::vis::gui {
         auto* const scale_distance_tool = ctx.viewer->getScaleDistanceTool();
         auto* const selection_tool = ctx.viewer->getSelectionTool();
         auto* const rendering_manager = ctx.viewer->getRenderingManager();
-        ui_hidden = ui_hidden || (rendering_manager && rendering_manager->modelAlignmentView());
+        ui_hidden = ui_hidden || op::operators().isModal(op::BuiltinOp::ModelAlignment);
         const bool has_selected_node = scene_manager && scene_manager->hasSelectedNode();
         const std::string active_tool_id = UnifiedToolRegistry::instance().getActiveTool();
         const std::string gizmo_type = ctx.editor ? ctx.editor->getGizmoType() : std::string{};
@@ -2771,9 +2771,7 @@ namespace lfs::vis::gui {
     }
 
     void GizmoManager::renderCropBoxGizmo(const UIContext& ctx, const ViewportLayout& viewport) {
-        if (const auto* renderer = services().renderingOrNull(); renderer && renderer->modelAlignmentView())
-            return;
-        if (last_tool_state_stamp_.gt_compare)
+        if (last_tool_state_stamp_.ui_hidden || last_tool_state_stamp_.gt_compare)
             return;
 
         if (isVolumeGizmoToolActive() && crop_tool_shape_ == CropToolShape::Box) {
@@ -3336,9 +3334,7 @@ namespace lfs::vis::gui {
     }
 
     void GizmoManager::renderEllipsoidGizmo(const UIContext& ctx, const ViewportLayout& viewport) {
-        if (const auto* renderer = services().renderingOrNull(); renderer && renderer->modelAlignmentView())
-            return;
-        if (last_tool_state_stamp_.gt_compare)
+        if (last_tool_state_stamp_.ui_hidden || last_tool_state_stamp_.gt_compare)
             return;
 
         // The polygon prism is centred like the ellipsoid and shares its crop tool gizmo.

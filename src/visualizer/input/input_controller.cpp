@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "operator/ops/model_alignment_ops.hpp"
 #include "input/input_controller.hpp"
 #include "core/collision.hpp"
 #include "core/error_bus.hpp"
@@ -174,11 +175,14 @@ namespace lfs::vis {
                 ((modal_id == op::to_string(op::BuiltinOp::SelectionStroke) ||
                   modal_id == op::to_string(op::BuiltinOp::CropPolygonDraw)) &&
                  isSelectionModalAction(action)) ||
-                ((modal_id == op::to_string(op::BuiltinOp::AlignPickPoint) ||
+                (((modal_id == op::to_string(op::BuiltinOp::AlignPickPoint) || modal_id == op::to_string(op::BuiltinOp::ModelAlignment)) ||
                   modal_id == op::to_string(op::BuiltinOp::ScaleDistancePickPoint)) &&
                  isAlignModalAction(action)) ||
-                (modal_id == op::to_string(op::BuiltinOp::AlignPickPoint) &&
-                 (action == input::Action::UNDO || action == input::Action::REDO));
+                ((modal_id == op::to_string(op::BuiltinOp::AlignPickPoint) || modal_id == op::to_string(op::BuiltinOp::ModelAlignment)) &&
+                 (action == input::Action::UNDO || action == input::Action::REDO)) ||
+                (modal_id == op::to_string(op::BuiltinOp::ModelAlignment) &&
+                 (action == input::Action::DELETE_NODE || action == input::Action::PIE_MENU ||
+                  action == input::Action::APPLY_CROP_BOX || action == input::Action::TOGGLE_SELECTION_CROP_FILTER));
             if (!accepted) {
                 return false;
             }
@@ -395,7 +399,7 @@ namespace lfs::vis {
                 return false;
             }
 
-            if (const auto* renderer = services().renderingOrNull(); renderer && renderer->modelAlignmentView())
+            if (op::operators().isModal(op::BuiltinOp::ModelAlignment))
                 return true;
             lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(*tool)}.emit();
             (void)applySelectionModeShortcut(action, gui);
@@ -2209,18 +2213,6 @@ namespace lfs::vis {
             return;
         }
 
-        if (const auto* renderer = services().renderingOrNull(); renderer && renderer->modelAlignmentView()) {
-            switch (bound_action) {
-            case input::Action::DELETE_NODE:
-            case input::Action::PIE_MENU:
-            case input::Action::APPLY_CROP_BOX:
-            case input::Action::TOGGLE_SELECTION_CROP_FILTER:
-                return;
-            default:
-                break;
-            }
-        }
-
         // Handle pie menu key release and escape
         if (gui && gui->gizmo().isPieMenuOpen()) {
             if (action == input::ACTION_RELEASE) {
@@ -3704,8 +3696,8 @@ namespace lfs::vis {
             return false;
 
         const auto& scene = sm->getScene();
-        if (auto* renderer = services().renderingOrNull(); renderer && renderer->modelAlignmentView()) {
-            const auto& alignment = *renderer->modelAlignmentView();
+        if (auto* renderer = services().renderingOrNull(); renderer && op::modelAlignmentSession()) {
+            const auto& alignment = *op::modelAlignmentSession();
             const bool right = &target_viewport == &renderer->projectSecondaryViewport();
             const auto* node = scene.getNodeByUuid(alignment.nodes[right ? 1 : 0]);
             if (!node || !frameVisibleNode(target_viewport, scene, *node,
@@ -4364,7 +4356,7 @@ namespace lfs::vis {
         }
 
         if (auto* const rendering = services().renderingOrNull()) {
-            rendering->syncModelAlignmentCamera(viewport_, *active_viewport);
+            if (auto* alignment = op::ModelAlignmentOperator::active()) alignment->syncCamera(*active_viewport);
             rendering->markCameraPoseChanged();
         }
 
@@ -4510,7 +4502,7 @@ namespace lfs::vis {
     input::ToolMode InputController::getCurrentToolMode() const {
         if (vr_viewing_)
             return input::ToolMode::VR;
-        if (const auto* renderer = services().renderingOrNull(); renderer && renderer->modelAlignmentView())
+        if (op::operators().isModal(op::BuiltinOp::ModelAlignment))
             return input::ToolMode::ALIGN;
         if (UnifiedToolRegistry::instance().getActiveTool() == "builtin.cropbox")
             return input::ToolMode::CROP_BOX;

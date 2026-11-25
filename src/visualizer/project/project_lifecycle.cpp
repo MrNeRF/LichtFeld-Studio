@@ -25,7 +25,6 @@
 #include "core/parameter_manager.hpp"
 #include "core/path_utils.hpp"
 #include "core/persisted_settings.hpp"
-#include "core/services.hpp"
 #include "core/user_paths.hpp"
 #include "core/utc_time.hpp"
 #include "diagnostics/vram_profiler.hpp"
@@ -46,7 +45,6 @@
 #include "ipc/view_context.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
-#include "operator/operator_registry.hpp"
 #include "preferences.hpp"
 #include "project/project_switch_error.hpp"
 #include "project/session_state.hpp"
@@ -5148,11 +5146,6 @@ namespace lfs::vis::project {
                 std::memory_order_acquire));
     }
 
-    static bool hasAlignmentPreview() {
-        return services().getAlignPreviewEnabled() &&
-               op::operators().activeModalId() == op::to_string(op::BuiltinOp::AlignPickPoint);
-    }
-
     lfs::Result<void>
     ProjectLifecycle::startAutosave() {
         if (hydration_.load(std::memory_order_acquire) ==
@@ -5199,10 +5192,6 @@ namespace lfs::vis::project {
         if (untitled && isBlankUntitledSession()) {
             last_autosave_at_ =
                 std::chrono::steady_clock::now();
-            return {};
-        }
-
-        if (hasAlignmentPreview()) {
             return {};
         }
 
@@ -6766,14 +6755,6 @@ namespace lfs::vis::project {
     lfs::Result<void>
     ProjectLifecycle::synchronizeDocumentFromViewer(
         const DocumentSyncMode mode) try {
-        // A modal alignment preview is provisional and must never be saved.
-        if (hasAlignmentPreview()) {
-            auto& state = services().alignPointPick();
-            state.requestUiAction(PointPickState::UiAction::TogglePreview);
-            op::operators().dispatchModalEvent({});
-            if (!state.getPickedPoints().empty())
-                state.setStatusMessage(LOC("align.preview_ended_for_save"), 4.0);
-        }
         const auto sync_started = std::chrono::steady_clock::now();
         const auto sync_scene_serial = scene_mutation_serial_.load(
             std::memory_order_acquire);

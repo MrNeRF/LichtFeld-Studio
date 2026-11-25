@@ -2781,12 +2781,13 @@ def test_model_alignment_replaces_active_tool_controls_and_refreshes_on_preview(
     lf.ui.get_align_edge_to_axis = lambda: False
     calls = []
 
-    def controls(action=""):
-        if action:
-            calls.append(action)
-        return False, -1, True, False, False
+    def state(linked=False, mode="separate", swap=True, delete=False, undo=False):
+        return SimpleNamespace(linked=linked, display_mode=mode, can_swap_roles=swap,
+                               can_delete_pair=delete, can_undo=undo)
 
-    lf.ui.model_alignment_controls = controls
+    lf.ui.get_model_alignment_state = lambda: state()
+    lf.ui.set_model_alignment_display = lambda mode: calls.append(mode)
+    lf.ui.cancel_model_alignment = lambda: calls.append("cancel")
     controller = module._ViewportToolbarController()
     snapshot = controller._gizmo.snapshot()
     assert snapshot["show_model_alignment_toolbar"]
@@ -2803,16 +2804,16 @@ def test_model_alignment_replaces_active_tool_controls_and_refreshes_on_preview(
     assert "align-apply" not in picking
     assert not picking["model-alignment-delete"]["enabled"]
     selection_signature = controller._toolbar_signature(None)
-    lf.ui.model_alignment_controls = lambda action="": (False, -1, True, True, True)
+    lf.ui.get_model_alignment_state = lambda: state(delete=True, undo=True)
     assert controller._toolbar_signature(None) != selection_signature
     selected = {record["button_id"]: record for record in controller._gizmo.snapshot()["align_action_buttons"]}
     assert selected["model-alignment-delete"]["enabled"]
-    lf.ui.model_alignment_controls = controls
+    lf.ui.get_model_alignment_state = lambda: state()
     signature = controller._toolbar_signature(None)
 
     lf.ui.can_apply_align = lambda: True
     lf.ui.get_align_preview = lambda: True
-    lf.ui.model_alignment_controls = lambda action="": (True, 0, False, False, True) if not action else controls(action)
+    lf.ui.get_model_alignment_state = lambda: state(True, "overlay_left", False, False, True)
     assert controller._toolbar_signature(None) != signature
     records = controller._gizmo.snapshot()["align_action_buttons"]
     by_value = {record["value"]: record for record in records if record["action"] == "model_alignment_control"}
@@ -2829,13 +2830,13 @@ def test_model_alignment_replaces_active_tool_controls_and_refreshes_on_preview(
     assert by_value["left"]["icon_src"] != by_value["right"]["icon_src"]
     assert by_value["link"]["tooltip_key"] == "align.unlink_cameras"
     assert [record["value"] for record in records if record["separator_before"]] == ["separate", "link", "cancel"]
-    lf.ui.model_alignment_controls = lambda action="": (False, -1, False, False, False) if not action else controls(action)
+    lf.ui.get_model_alignment_state = lambda: state(swap=False)
     separate = controller._gizmo.snapshot()["align_action_buttons"]
     assert [record["value"] for record in separate
             if record["action"] == "model_alignment_control" and record["selected"]] == ["separate"]
     for action in ("right", "separate", "cancel"):
         controller._on_toolbar_action(None, None, ["model_alignment_control", action])
-    assert calls == ["right", "separate", "cancel"]
+    assert calls == ["overlay_right", "separate", "cancel"]
 
 
 def test_align_toolbar_buttons_follow_native_state(toolbar_module):

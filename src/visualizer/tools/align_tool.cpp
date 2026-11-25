@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "operator/ops/model_alignment_ops.hpp"
 #include "tools/align_tool.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/number_format.hpp"
@@ -245,7 +246,7 @@ namespace lfs::vis::tools {
         if (!tool_context_)
             return;
         const auto* renderer = tool_context_->getRenderingManager();
-        const auto* alignment = renderer ? renderer->modelAlignmentView() : nullptr;
+        const auto* alignment = renderer ? op::modelAlignmentSession() : nullptr;
         if (!isEnabled() && !alignment)
             return;
 
@@ -269,12 +270,13 @@ namespace lfs::vis::tools {
         const auto SPHERE_COLOR = toOverlay(t.palette.error);
         const float label_size = std::max(t.fonts.base_size, 14.0f * ui_scale);
 
-        const auto& picked_points = services().alignPointPick().getPickedPoints();
-        const auto selected_point = services().alignPointPick().getSelectedPoint();
+        const auto& state = alignment ? op::ModelAlignmentOperator::active()->pointState() : services().alignPointPick();
+        const auto& picked_points = state.getPickedPoints();
+        const auto selected_point = state.getSelectedPoint();
         auto* const sm = tool_context_->getSceneManager();
         if (alignment) {
-            const auto& point_state = services().alignPointPick();
-            const bool pending_right = point_state.pendingPairOnRight();
+            const auto& point_state = op::ModelAlignmentOperator::active()->pointState();
+            const bool pending_right = op::ModelAlignmentOperator::active()->pendingPairOnRight();
             if (!alignment->preview) {
                 for (const auto panel : {SplitViewPanelId::Left, SplitViewPanelId::Right}) {
                     const auto projection = pointPickOverlayFrame(*tool_context_, panel).panel;
@@ -283,7 +285,7 @@ namespace lfs::vis::tools {
                         *overlay, {info.x, info.y}, {info.x + info.width, info.y + info.height});
                     drawPointMarkers(*overlay, projection, picked_points, selected_point,
                                      SPHERE_COLOR, label_size, panel, pending_right,
-                                     point_state.pairColorSlots());
+                                     op::ModelAlignmentOperator::active()->pairColorSlots());
                 }
                 const auto count = picked_points.size();
                 const auto next = count % 2 && !pending_right ? SplitViewPanelId::Right : SplitViewPanelId::Left;
@@ -294,7 +296,7 @@ namespace lfs::vis::tools {
                                                                         : "align.pair_start_either";
                 drawPointPickHud(*overlay, projection, LOC(hint),
                                  LOCF("align.pair_progress", count / 2),
-                                 services().alignPointPick().getStatusMessage(),
+                                 point_state.getStatusMessage(),
                                  count ? LOCF("align.pair_edit_help",
                                               pointPickShortcut(input::Action::DELETE_SELECTED),
                                               pointPickShortcut(input::Action::UNDO),
@@ -308,7 +310,7 @@ namespace lfs::vis::tools {
                                             .panel;
                 drawPointPickHud(*overlay, projection, LOC("align.pair_preview"),
                                  LOCF("align.pair_progress", picked_points.size() / 2),
-                                 &services().getAlignPreviewFeedback().summary);
+                                 &op::ModelAlignmentOperator::active()->feedback().summary);
             }
             return;
         }
@@ -333,14 +335,10 @@ namespace lfs::vis::tools {
                                       : LOCF(lichtfeld::Strings::Align::HINT_PICKING,
                                              pointPickShortcut(input::Action::DELETE_SELECTED),
                                              pointPickShortcut(input::Action::REMOVE_LAST_POINT), cancel_key);
-        std::string option_help;
-        if (in_review) {
-            option_help = LOC(services().getAlignEdgeToAxisEnabled() ? "align.edge_on_help" : "align.edge_off_help");
-        }
         drawPointPickHud(*overlay, panel_proj, hint,
                          LOCF(lichtfeld::Strings::Align::POINTS_COUNT, lfs::core::format_count(picked_points.size())),
                          services().alignPointPick().getStatusMessage(),
-                         option_help);
+                         in_review ? LOC(services().getAlignEdgeToAxisEnabled() ? "align.edge_on_help" : "align.edge_off_help") : "");
 
         if (frame.over_gui)
             return;
@@ -383,13 +381,11 @@ namespace lfs::vis::tools {
         if (enabled) {
             forceGridOn();
         } else {
-            const auto* renderer = tool_context_ ? tool_context_->getRenderingManager() : nullptr;
-            if (!renderer || !renderer->modelAlignmentView()) {
-                if (op::operators().activeModalId() == op::to_string(op::BuiltinOp::AlignPickPoint))
-                    op::operators().cancelModalOperator();
-                services().alignPointPick().clearPickedPoints();
+            if (op::operators().activeModalId() == op::to_string(op::BuiltinOp::AlignPickPoint)) {
+                op::operators().cancelModalOperator();
             }
             restoreGridIfNeeded();
+            services().alignPointPick().clearPickedPoints();
         }
         if (tool_context_) {
             tool_context_->requestRender();

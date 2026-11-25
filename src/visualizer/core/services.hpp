@@ -56,14 +56,8 @@ namespace lfs::vis {
         [[nodiscard]] const std::vector<glm::vec3>& getPickedPoints() const { return picked_points_; }
         [[nodiscard]] bool canUndoPointEdit() const { return can_undo_point_edit_; }
         void setCanUndoPointEdit(bool available) { can_undo_point_edit_ = available; }
-        [[nodiscard]] bool pendingPairOnRight() const { return pending_pair_on_right_; }
-        void setPendingPairOnRight(bool right) { pending_pair_on_right_ = right; }
-        [[nodiscard]] const std::vector<size_t>& pairColorSlots() const { return pair_color_slots_; }
-        void setPairColorSlots(std::vector<size_t> slots) { pair_color_slots_ = std::move(slots); }
         void clearPickedPoints() {
             can_undo_point_edit_ = false;
-            pair_color_slots_.clear();
-            pending_pair_on_right_ = false;
             const bool changed = !picked_points_.empty() || !status_message_.empty();
             picked_points_.clear();
             selected_point_.reset();
@@ -142,8 +136,6 @@ namespace lfs::vis {
         void (*notify_)();
         bool notify_status_;
         bool can_undo_point_edit_ = false;
-        bool pending_pair_on_right_ = false;
-        std::vector<size_t> pair_color_slots_;
         std::vector<glm::vec3> picked_points_;
         std::optional<int> selected_point_;
         UiAction ui_action_ = UiAction::None;
@@ -241,20 +233,12 @@ namespace lfs::vis {
         [[nodiscard]] const glm::vec3& getAlignCameraPosition() const { return align_camera_position_; }
 
         void setAlignPreviewEnabled(const bool enabled) {
-            if (!enabled)
-                align_preview_feedback_ = {};
             if (align_preview_enabled_ == enabled)
                 return;
             align_preview_enabled_ = enabled;
             align_point_pick_.notifyChanged();
         }
         [[nodiscard]] bool getAlignPreviewEnabled() const { return align_preview_enabled_; }
-        struct AlignPreviewFeedback {
-            std::optional<int> focus;
-            std::string summary;
-        };
-        void setAlignPreviewFeedback(AlignPreviewFeedback feedback) { align_preview_feedback_ = std::move(feedback); }
-        [[nodiscard]] const AlignPreviewFeedback& getAlignPreviewFeedback() const { return align_preview_feedback_; }
 
         void clear() {
             scene_manager_ = nullptr;
@@ -289,7 +273,6 @@ namespace lfs::vis {
         bool align_axis_snap_enabled_ = true;
         bool align_edge_to_axis_enabled_ = false;
         bool align_preview_enabled_ = false;
-        AlignPreviewFeedback align_preview_feedback_;
         glm::vec3 align_camera_position_{};
     };
 

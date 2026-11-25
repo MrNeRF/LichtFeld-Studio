@@ -8,7 +8,6 @@
 #include "core/logger.hpp"
 #include "core/scene.hpp"
 #include "core/services.hpp"
-#include "operation/undo_history.hpp"
 #include "rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "viewport_request_builder.hpp"
@@ -20,10 +19,6 @@ namespace lfs::vis {
     using namespace lfs::core::events;
 
     namespace {
-        void restoreAlignmentCamera(Viewport& viewport, const Viewport& saved) {
-            viewport.camera = saved.camera;
-            viewport.ortho_scale_override = saved.ortho_scale_override;
-        }
 
         [[nodiscard]] constexpr bool hasSceneMutation(const uint32_t flags, const lfs::core::Scene::MutationType type) {
             return (flags & static_cast<uint32_t>(type)) != 0;
@@ -91,7 +86,7 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleToggleSplitView() {
-        if (modelAlignmentView())
+        if (independent_panel_overrides_)
             return;
         if (!isPLYComparisonActive()) {
             const auto* const scene_manager = services().sceneOrNull();
@@ -123,7 +118,7 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleToggleIndependentSplitView(const cmd::ToggleIndependentSplitView& event) {
-        if (modelAlignmentView())
+        if (independent_panel_overrides_)
             return;
         if (!event.viewport) {
             return;
@@ -143,7 +138,7 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleToggleGTComparison() {
-        if (modelAlignmentView())
+        if (independent_panel_overrides_)
             return;
         if (!isGTComparisonActive() && !hasGTComparisonAvailable()) {
             LOG_WARN("GT comparison requires a loaded dataset with source images");
@@ -166,14 +161,20 @@ namespace lfs::vis {
 
     void RenderingManager::restoreSplitViewMode(
         const SplitViewMode mode,
-        Viewport& primary_viewport) {
+        Viewport& primary_viewport,
+        const std::optional<float> position,
+        const std::optional<size_t> offset) {
         std::vector<SplitViewService::ModeChangeResult>
             changes;
         {
             std::lock_guard<std::mutex> lock(
                 settings_mutex_);
-            if (settings_.split_view_mode == mode)
+            if (position) settings_.split_position = std::clamp(*position, 0.0f, 1.0f);
+            if (offset) settings_.split_view_offset = *offset;
+            if (settings_.split_view_mode == mode) {
+                markDirty(DirtyFlag::SPLIT_VIEW, FrameReason::SettingsChange);
                 return;
+            }
             if (settings_.split_view_mode !=
                 SplitViewMode::Disabled) {
                 changes.push_back(
@@ -196,152 +197,6 @@ namespace lfs::vis {
             applySplitModeChange(change);
         if (mode != SplitViewMode::GTComparison)
             invalidateCameraMetricsRequests(true);
-    }
-
-    bool RenderingManager::canBeginModelAlignment(
-        const core::Scene& scene, const core::SceneNode& reference, const core::SceneNode& mobile) {
-        if (reference.type != core::NodeType::SPLAT ||
-            mobile.type != core::NodeType::SPLAT || !reference.model || !mobile.model ||
-            reference.model->size() == 0 || mobile.model->size() == 0 ||
-            !scene.isNodeEffectivelyVisible(reference.id) || !scene.isNodeEffectivelyVisible(mobile.id) ||
-            scene.isNodeEffectivelyLocked(mobile.id))
-            return false;
-        for (auto* parent = &reference; parent; parent = scene.getNodeById(parent->parent_id)) {
-            if (parent->id == mobile.id)
-                return false;
-        }
-
-        return true;
-    }
-
-    bool RenderingManager::beginModelAlignment(
-        Viewport& primary, const core::Scene& scene,
-        const core::SceneNode& reference, const core::SceneNode& mobile) {
-        if (model_alignment_view_ || !canBeginModelAlignment(scene, reference, mobile))
-            return false;
-        const auto settings = getSettings();
-        const auto focus = getFocusedSplitPanel();
-        const auto secondary = projectSecondaryViewport();
-        model_alignment_view_.emplace(ModelAlignmentView{
-            .nodes = {reference.uuid, mobile.uuid},
-            .previous_mode = settings.split_view_mode,
-            .previous_position = settings.split_position,
-            .previous_offset = settings.split_view_offset,
-            .previous_focus = focus,
-            .primary_viewport = &primary,
-            .previous_primary = primary,
-            .previous_secondary = secondary,
-        });
-        op::undoHistory().setModelAlignmentActive(true);
-        restoreSplitViewMode(SplitViewMode::IndependentDual, primary);
-        auto& secondary_viewport = projectSecondaryViewport();
-        primary.ortho_scale_override = primary.ortho_scale_override.value_or(settings.ortho_scale);
-        secondary_viewport.ortho_scale_override = secondary_viewport.ortho_scale_override.value_or(settings.ortho_scale);
-        setFocusedSplitPanel(SplitViewPanelId::Left);
-        if (!splitViewUsesIndependentPanels(settings.split_view_mode))
-            handleSplitPositionChanged(0.5f);
-        publish_align_state_generation();
-        markDirty(DirtyFlag::ALL, FrameReason::SceneChange);
-        return true;
-    }
-
-    void RenderingManager::endModelAlignment(Viewport& primary) {
-        if (!model_alignment_view_)
-            return;
-        auto saved = std::move(*model_alignment_view_);
-        model_alignment_view_.reset();
-        restoreSplitViewMode(saved.previous_mode, primary);
-        {
-            std::lock_guard lock(settings_mutex_);
-            settings_.split_position = saved.previous_position;
-            settings_.split_view_offset = saved.previous_offset;
-        }
-        restoreAlignmentCamera(primary, saved.previous_primary);
-        restoreAlignmentCamera(projectSecondaryViewport(), saved.previous_secondary);
-        setFocusedSplitPanel(saved.previous_focus);
-        op::undoHistory().setModelAlignmentActive(false);
-        publish_align_state_generation();
-        markDirty(DirtyFlag::ALL, FrameReason::SceneChange);
-    }
-
-    void RenderingManager::setModelAlignmentPreview(Viewport& primary, std::optional<glm::mat4> transform) {
-        if (!model_alignment_view_)
-            return;
-        auto& view = *model_alignment_view_;
-        auto& right = projectSecondaryViewport();
-        if (transform && !view.preview) {
-            view.free_views = std::array{primary, right};
-            const float scale = glm::length(glm::vec3((*transform)[0]));
-            const glm::mat3 rotation = glm::mat3(*transform) / scale;
-            right.camera.t = glm::vec3(*transform * glm::vec4(right.camera.t, 1.0f));
-            right.camera.pivot = glm::vec3(*transform * glm::vec4(right.camera.pivot, 1.0f));
-            right.camera.R = rotation * right.camera.R;
-            if (right.ortho_scale_override)
-                *right.ortho_scale_override /= scale;
-            view.composite = SplitViewPanelId::Right;
-        } else if (!transform && view.preview) {
-            if (view.free_views) {
-                restoreAlignmentCamera(primary, (*view.free_views)[0]);
-                restoreAlignmentCamera(right, (*view.free_views)[1]);
-            }
-            view.free_views.reset();
-            view.composite.reset();
-            view.linked = false;
-        }
-        view.preview = std::move(transform);
-        publish_align_state_generation();
-        markDirty(DirtyFlag::ALL, FrameReason::SceneChange);
-    }
-
-    bool RenderingManager::canSwapModelAlignmentRoles(const core::Scene& scene) const {
-        if (!model_alignment_view_ || model_alignment_view_->preview)
-            return false;
-        const auto& nodes = model_alignment_view_->nodes;
-        const auto* reference = scene.getNodeByUuid(nodes[0]);
-        const auto* mobile = scene.getNodeByUuid(nodes[1]);
-        return reference && mobile && canBeginModelAlignment(scene, *mobile, *reference);
-    }
-
-    void RenderingManager::swapModelAlignmentRoles(Viewport& primary, const core::Scene& scene) {
-        if (!canSwapModelAlignmentRoles(scene))
-            return;
-        std::swap(model_alignment_view_->nodes[0], model_alignment_view_->nodes[1]);
-        auto& right = projectSecondaryViewport();
-        std::swap(primary.camera, right.camera);
-        std::swap(primary.ortho_scale_override, right.ortho_scale_override);
-        publish_align_state_generation();
-        markDirty(DirtyFlag::ALL, FrameReason::SceneChange);
-    }
-
-    void RenderingManager::setModelAlignmentComposite(std::optional<SplitViewPanelId> panel) {
-        if (!model_alignment_view_ || !model_alignment_view_->preview || model_alignment_view_->composite == panel)
-            return;
-        model_alignment_view_->composite = panel;
-        publish_align_state_generation();
-        markDirty(DirtyFlag::ALL, FrameReason::SceneChange);
-    }
-
-    void RenderingManager::toggleModelAlignmentCameraLink(Viewport& primary) {
-        if (!model_alignment_view_ || !model_alignment_view_->preview)
-            return;
-        auto& view = *model_alignment_view_;
-        auto& right = projectSecondaryViewport();
-        view.linked = !view.linked;
-        if (view.linked)
-            syncModelAlignmentCamera(primary, getFocusedSplitPanel() == SplitViewPanelId::Right ? right : primary);
-        publish_align_state_generation();
-        markDirty(DirtyFlag::ALL, FrameReason::SceneChange);
-    }
-
-    void RenderingManager::syncModelAlignmentCamera(Viewport& primary, const Viewport& source) {
-        if (!model_alignment_view_ || !model_alignment_view_->linked)
-            return;
-        auto& right = projectSecondaryViewport();
-        auto& target = &source == &right ? primary : right;
-        target.camera.t = source.camera.t;
-        target.camera.pivot = source.camera.pivot;
-        target.camera.R = source.camera.R;
-        target.ortho_scale_override = source.ortho_scale_override;
     }
 
     void RenderingManager::handleGoToCamView(const int cam_id) {

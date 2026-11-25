@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "operator/ops/model_alignment_ops.hpp"
 #include "gui/gui_manager.hpp"
 #include "control/command_api.hpp"
 #include "core/camera.hpp"
@@ -6968,7 +6969,8 @@ namespace lfs::vis::gui {
         RmlViewportOverlay::SplitDividerOverlayState split_divider_state;
         if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr;
             rendering && rendering->isSplitViewActive()) {
-            const bool model_alignment = rendering->modelAlignmentView() != nullptr;
+            const auto* alignment = op::modelAlignmentSession();
+            const bool model_alignment = alignment != nullptr;
             const bool comparison_divider = !rendering->isIndependentSplitViewActive();
             if (comparison_divider || model_alignment) {
                 const auto divider_x = rendering->getSplitDividerScreenX(viewport_layout_.pos, viewport_layout_.size);
@@ -6986,8 +6988,17 @@ namespace lfs::vis::gui {
                     split_divider_state.y = content_bounds.y;
                     split_divider_state.width = divider_width;
                     split_divider_state.height = content_bounds.height;
-                    const auto info = rendering->getSplitViewInfo();
-                    if (rendering->modelAlignmentView() ||
+                    auto info = rendering->getSplitViewInfo();
+                    if (alignment) {
+                        const auto& scene = viewer_->getSceneManager()->getScene();
+                        const auto* reference = scene.getNodeByUuid(alignment->nodes[0]);
+                        const auto* mobile = scene.getNodeByUuid(alignment->nodes[1]);
+                        info.left_name = alignment->composite == SplitViewPanelId::Left ? LOC("align.composite_name")
+                            : LOCF("align.reference_name", reference ? reference->name : "");
+                        info.right_name = alignment->composite == SplitViewPanelId::Right ? LOC("align.composite_name")
+                            : LOCF("align.mobile_name", mobile ? mobile->name : "");
+                    }
+                    if (alignment ||
                         splitViewUsesPLYComparison(rendering->getSettings().split_view_mode)) {
                         const float inset = 10.0f * current_ui_scale_;
                         split_divider_state.left_name = info.left_name;
@@ -8051,7 +8062,7 @@ namespace lfs::vis::gui {
 
         auto* align_tool = ctx.viewer->getAlignTool();
         const auto* renderer = ctx.viewer->getRenderingManager();
-        const bool model_alignment = renderer && renderer->modelAlignmentView();
+        const bool model_alignment = renderer && op::modelAlignmentSession();
         if (align_tool && (align_tool->isEnabled() || model_alignment) && !ui_hidden_) {
             align_tool->renderUI(ctx, nullptr);
         }

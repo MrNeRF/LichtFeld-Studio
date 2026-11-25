@@ -419,38 +419,19 @@ namespace lfs::vis {
         // Project restore may only enter/leave split modes through the service
         // transition path; it must never assign RenderSettings::split_view_mode.
         void restoreSplitViewMode(SplitViewMode mode,
-                                  Viewport& primary_viewport);
-        // Transient viewer-thread state. Project capture uses the saved view instead.
-        struct ModelAlignmentView {
-            std::array<core::Uuid, 2> nodes;
-            SplitViewMode previous_mode;
-            float previous_position;
-            size_t previous_offset;
-            SplitViewPanelId previous_focus;
-            // The viewer owns this viewport for the lifetime of the transient session.
-            Viewport* primary_viewport;
-            Viewport previous_primary;
-            Viewport previous_secondary;
-            std::optional<glm::mat4> preview;
-            std::optional<SplitViewPanelId> composite;
-            std::optional<std::array<Viewport, 2>> free_views;
-            bool linked = false;
+                                  Viewport& primary_viewport,
+                                  std::optional<float> position = std::nullopt,
+                                  std::optional<size_t> offset = std::nullopt);
+        struct IndependentPanelOverride {
+            bool exact_surface_picking = false;
+            std::vector<core::Uuid> visible_nodes;
+            std::vector<std::pair<core::Uuid, glm::mat4>> transforms;
         };
-
-        [[nodiscard]] static bool canBeginModelAlignment(const core::Scene& scene,
-                                                         const core::SceneNode& reference, const core::SceneNode& mobile);
-        bool beginModelAlignment(Viewport& primary, const core::Scene& scene,
-                                 const core::SceneNode& reference, const core::SceneNode& mobile);
-        void endModelAlignment(Viewport& primary);
-        [[nodiscard]] const ModelAlignmentView* modelAlignmentView() const {
-            return model_alignment_view_ ? &*model_alignment_view_ : nullptr;
+        void setIndependentPanelOverrides(std::optional<std::array<IndependentPanelOverride, 2>> panels) {
+            independent_panel_overrides_ = std::move(panels);
+            markDirty(DirtyFlag::ALL, FrameReason::SceneChange);
         }
-        void setModelAlignmentPreview(Viewport& primary, std::optional<glm::mat4> transform);
-        void setModelAlignmentComposite(std::optional<SplitViewPanelId> panel);
-        [[nodiscard]] bool canSwapModelAlignmentRoles(const core::Scene& scene) const;
-        void swapModelAlignmentRoles(Viewport& primary, const core::Scene& scene);
-        void toggleModelAlignmentCameraLink(Viewport& primary);
-        void syncModelAlignmentCamera(Viewport& primary, const Viewport& source);
+        const auto& independentPanelOverrides() const { return independent_panel_overrides_; }
         [[nodiscard]] float getSplitPosition() const;
         [[nodiscard]] std::optional<float> getSplitDividerScreenX(const glm::vec2& viewport_pos,
                                                                   const glm::vec2& viewport_size) const;
@@ -778,7 +759,7 @@ namespace lfs::vis {
             markDirty(DirtyFlag::VIEWPORT, FrameReason::SettingsChange);
         }
         [[nodiscard]] bool exactSurfacePicking() const {
-            return model_alignment_view_ ? !model_alignment_view_->preview : exact_surface_picking_;
+            return independent_panel_overrides_ ? (*independent_panel_overrides_)[0].exact_surface_picking : exact_surface_picking_;
         }
         void configureSurfacePicking(FrameContext& frame) const;
 
@@ -1215,7 +1196,7 @@ namespace lfs::vis {
 
         CameraInteractionService camera_interaction_service_;
         SplitViewService split_view_service_;
-        std::optional<ModelAlignmentView> model_alignment_view_;
+        std::optional<std::array<IndependentPanelOverride, 2>> independent_panel_overrides_;
         ViewportFrameLifecycleService frame_lifecycle_service_;
 
         // Settings

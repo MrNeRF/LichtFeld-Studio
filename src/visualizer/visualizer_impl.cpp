@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "operator/ops/model_alignment_ops.hpp"
 #include "visualizer_impl.hpp"
 #include "core/animatable_property.hpp"
 #include "core/crash_handler.hpp"
@@ -1086,7 +1087,7 @@ namespace lfs::vis {
 
             if (rendering_manager_) {
                 if (isOnViewerThread())
-                    rendering_manager_->syncModelAlignmentCamera(viewport_, viewport_);
+                    if (auto* alignment = op::ModelAlignmentOperator::active()) alignment->syncCamera(viewport_);
                 rendering_manager_->markCameraPoseChanged();
             }
         });
@@ -1112,7 +1113,7 @@ namespace lfs::vis {
             vp.camera.setPivot(target);
 
             if (isOnViewerThread())
-                rendering_manager_->syncModelAlignmentCamera(viewport_, vp);
+                if (auto* alignment = op::ModelAlignmentOperator::active()) alignment->syncCamera(vp);
             rendering_manager_->markCameraPoseChanged();
         });
         callback_cleanup_.add([] { vis::set_set_view_for_panel_callback(nullptr); });
@@ -2441,7 +2442,7 @@ namespace lfs::vis {
         }
 
         if (tool_context_ && !vr_active_) {
-            const bool model_alignment = rendering_manager_ && rendering_manager_->modelAlignmentView();
+            const bool model_alignment = rendering_manager_ && op::modelAlignmentSession();
             if (!model_alignment && selection_tool_ && selection_tool_->isEnabled())
                 selection_tool_->update(*tool_context_);
             if (align_tool_ && (align_tool_->isEnabled() || model_alignment))
@@ -3695,7 +3696,7 @@ namespace lfs::vis {
             }))
             return {};
         if (scene_manager_ && scene_manager_->canClearScene()) {
-            if (rendering_manager_ && rendering_manager_->modelAlignmentView())
+            if (rendering_manager_ && op::modelAlignmentSession())
                 op::operators().cancelModalOperator();
             data_loader_->cancelPendingImports();
             if (gui_manager_)
@@ -4389,7 +4390,7 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::deactivateProjectTools() {
-        if (rendering_manager_ && rendering_manager_->modelAlignmentView())
+        if (rendering_manager_ && op::modelAlignmentSession())
             op::operators().cancelModalOperator();
         lfs::core::events::tools::SetToolbarTool{
             .tool_mode = static_cast<int>(ToolType::None)}
@@ -4854,7 +4855,7 @@ namespace lfs::vis {
 
     void VisualizerImpl::projectMarkSessionChapterCommitted(
         const std::string_view chapter) {
-        if (chapter == "VIEW" && rendering_manager_ && rendering_manager_->modelAlignmentView())
+        if (chapter == "VIEW" && rendering_manager_ && op::modelAlignmentSession())
             return;
         if (project_lifecycle_ &&
             !applying_project_session_restore_.load(

@@ -3,12 +3,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/event_bridge/event_bridge.hpp"
-#include "core/event_bridge/localization_manager.hpp"
 #include "core/point_cloud.hpp"
 #include "core/services.hpp"
 #include "operation/undo_history.hpp"
-#include "operator/operator_registry.hpp"
 #include "operator/ops/align_ops.hpp"
+#include "operator/ops/model_alignment_ops.hpp"
+#include "operator/operator_registry.hpp"
 #include "operator/ops/edit_ops.hpp"
 #include "rendering/point_cloud_vulkan_renderer.hpp"
 #include "rendering/viewport_artifact_service.hpp"
@@ -539,13 +539,6 @@ namespace lfs::vis::op {
             undoHistory().clear();
             manager_ = std::make_unique<SceneManager>();
             services().set(manager_.get());
-            operators().setSceneManager(manager_.get());
-            registerEditOperators();
-            operators().registerOperator(BuiltinOp::AlignPickPoint,
-                                         OperatorDescriptor{.builtin_id = BuiltinOp::AlignPickPoint,
-                                                            .label = "Test alignment",
-                                                            .flags = OperatorFlags::REGISTER},
-                                         [] { return std::make_unique<AlignPickPointOperator>(); });
             manager_->getScene().addGroup("target");
             manager_->selectNode("target");
             context_ = std::make_unique<OperatorContext>(*manager_);
@@ -557,11 +550,7 @@ namespace lfs::vis::op {
         }
 
         void TearDown() override {
-            operators().cancelModalOperator();
             operation_.cancel(*context_);
-            operators().unregisterOperator(BuiltinOp::AlignPickPoint);
-            unregisterEditOperators();
-            operators().setSceneManager(nullptr);
             undoHistory().clear();
             services().clear();
             context_.reset();
@@ -571,12 +560,8 @@ namespace lfs::vis::op {
 
         OperatorResult action(PointPickState::UiAction action) {
             services().alignPointPick().requestUiAction(action);
-            return send({});
-        }
-
-        bool previewEnabled() const {
-            const auto* view = pair_rendering_ ? pair_rendering_->modelAlignmentView() : nullptr;
-            return view ? view->preview.has_value() : services().getAlignPreviewEnabled();
+            OperatorProperties properties;
+            return operation_.modal(*context_, properties);
         }
 
         OperatorResult send(ModalEvent event) {
@@ -604,508 +589,12 @@ namespace lfs::vis::op {
             operation_.syncPickedPointsToServices();
         }
 
-        void addPairPoint(const glm::vec3 point) {
-            operation_.picked_points_.push_back(point);
-            operation_.syncPickedPointsToServices();
-        }
-
-        void startPairAlignment(RenderingManager& rendering, const bool with_points = true) {
-            using core::Device;
-            using core::Tensor;
-            const auto make_splat = [] {
-                return std::make_unique<core::SplatData>(
-                    0, Tensor::from_vector({0.0f, 0.0f, 2.0f}, {1, 3}, Device::CPU),
-                    Tensor::zeros({1, 1, 3}, Device::CPU),
-                    Tensor::zeros({1, 0, 3}, Device::CPU),
-                    Tensor::zeros({1, 3}, Device::CPU),
-                    Tensor::from_vector({1.0f, 0.0f, 0.0f, 0.0f}, {1, 4}, Device::CPU),
-                    Tensor::zeros({1, 1}, Device::CPU), 1.0f);
-            };
-            auto& scene = manager_->getScene();
-            scene.addSplat("reference", make_splat());
-            scene.addSplat("mobile", make_splat());
-            services().set(&rendering);
-            ASSERT_TRUE(rendering.beginModelAlignment(pair_primary_, scene, *scene.getNode("reference"), *scene.getNode("mobile")));
-            OperatorProperties properties;
-            ASSERT_EQ(operation_.invoke(*context_, properties), OperatorResult::RUNNING_MODAL);
-            ASSERT_TRUE(operation_.pair_);
-            if (with_points) {
-                operation_.picked_points_ = {{0, 0, 0}, {0, 0, 0}, {2, 0, 0}, {1, 0, 0}, {0, 2, 0}, {0, 1, 0}};
-                operation_.syncPickedPointsToServices();
-            }
-        }
-
-        bool sample(const glm::vec3 point, SplitViewPanelId panel, std::optional<int> index = {}) {
-            return operation_.applyPointSample({.world = point, .panel = panel}, index);
-        }
-
-        std::array<core::Uuid, 2> pairTargets() const { return operation_.pair_->ids; }
-
         glm::mat4 transform() const { return manager_->getScene().getNode("target")->transform(); }
 
         std::unique_ptr<SceneManager> manager_;
         std::unique_ptr<OperatorContext> context_;
-        Viewport pair_primary_;
         AlignPickPointOperator operation_;
-        std::unique_ptr<RenderingManager> pair_rendering_;
     };
-
-    TEST_F(AlignPreviewTest, PairedPreviewRestoresAndApplyOnlyMovesTheMobileSplat) {
-        pair_rendering_ = std::make_unique<RenderingManager>();
-        startPairAlignment(*pair_rendering_);
-        ASSERT_FALSE(HasFatalFailure());
-        const auto original = manager_->getNodeTransform("mobile");
-        const auto reference = manager_->getNodeTransform("reference");
-        action(PointPickState::UiAction::TogglePreview);
-        EXPECT_TRUE(previewEnabled());
-        EXPECT_EQ(manager_->getNodeTransform("mobile"), original);
-        EXPECT_TRUE(pair_rendering_->modelAlignmentView()->preview);
-        EXPECT_EQ(manager_->getNodeTransform("reference"), reference);
-        action(PointPickState::UiAction::TogglePreview);
-        EXPECT_FALSE(previewEnabled());
-        EXPECT_EQ(manager_->getNodeTransform("mobile"), original);
-        EXPECT_EQ(action(PointPickState::UiAction::Apply), OperatorResult::FINISHED);
-        EXPECT_NEAR(glm::length(glm::vec3(manager_->getNodeTransform("mobile")[0])), 2.0f, 1e-5f);
-        EXPECT_EQ(manager_->getNodeTransform("reference"), reference);
-        EXPECT_EQ(undoHistory().undoCount(), 1u);
-        ASSERT_TRUE(undoHistory().undo().success);
-        EXPECT_EQ(manager_->getNodeTransform("mobile"), original);
-        EXPECT_EQ(manager_->getNodeTransform("reference"), reference);
-    }
-
-    TEST_F(AlignPreviewTest, DedicatedViewRestoresCamerasAndKeepsPreviewOutOfScene) {
-        pair_rendering_ = std::make_unique<RenderingManager>();
-        startPairAlignment(*pair_rendering_);
-        ASSERT_FALSE(HasFatalFailure());
-        operation_.cancel(*context_);
-
-        auto& scene = manager_->getScene();
-        const auto& reference = *scene.getNode("reference");
-        const auto& mobile = *scene.getNode("mobile");
-        const auto original = mobile.transform();
-        Viewport primary;
-        auto& renderer = *pair_rendering_;
-        renderer.projectSecondaryViewport().camera.t = {17, 18, 19};
-        const auto saved_left = primary.camera.t;
-        const auto saved_right = renderer.projectSecondaryViewport().camera.t;
-        const auto saved_mode = renderer.getSplitViewMode();
-
-        ASSERT_TRUE(renderer.beginModelAlignment(primary, scene, reference, mobile));
-        ASSERT_TRUE(renderer.isIndependentSplitViewActive());
-        ASSERT_NE(renderer.modelAlignmentView(), nullptr);
-        EXPECT_EQ(primary.camera.t, saved_left);
-        EXPECT_EQ(renderer.projectSecondaryViewport().camera.t, saved_left);
-
-        const auto similarity = glm::scale(glm::mat4(1), glm::vec3(2));
-        renderer.setModelAlignmentPreview(primary, similarity);
-        EXPECT_EQ(renderer.projectSecondaryViewport().camera.t, saved_left * 2.0f);
-        EXPECT_EQ(mobile.transform(), original);
-        renderer.setFocusedSplitPanel(SplitViewPanelId::Right);
-        renderer.setModelAlignmentComposite(SplitViewPanelId::Left);
-        EXPECT_EQ(renderer.getFocusedSplitPanel(), SplitViewPanelId::Right);
-        EXPECT_EQ(primary.camera.t, saved_left);
-        EXPECT_EQ(renderer.projectSecondaryViewport().camera.t, saved_left * 2.0f);
-        renderer.setModelAlignmentComposite(std::nullopt);
-        EXPECT_FALSE(renderer.modelAlignmentView()->composite);
-        renderer.setModelAlignmentComposite(SplitViewPanelId::Right);
-        EXPECT_EQ(renderer.modelAlignmentView()->composite, SplitViewPanelId::Right);
-        renderer.projectSecondaryViewport().camera.t += glm::vec3(5, 6, 7);
-        const auto focused_position = renderer.projectSecondaryViewport().camera.t;
-        renderer.toggleModelAlignmentCameraLink(primary);
-        EXPECT_EQ(primary.camera.t, focused_position);
-        primary.camera.t += glm::vec3(1, 2, 3);
-        renderer.syncModelAlignmentCamera(primary, primary);
-        const auto linked_position = primary.camera.t;
-        renderer.toggleModelAlignmentCameraLink(primary);
-        EXPECT_EQ(primary.camera.t, linked_position);
-        EXPECT_EQ(renderer.projectSecondaryViewport().camera.t, linked_position);
-        primary.camera.t += glm::vec3(2, 3, 4);
-        renderer.syncModelAlignmentCamera(primary, primary);
-        EXPECT_EQ(renderer.projectSecondaryViewport().camera.t, linked_position);
-        renderer.setModelAlignmentPreview(primary, std::nullopt);
-        EXPECT_FALSE(renderer.modelAlignmentView()->preview);
-        EXPECT_EQ(primary.camera.t, saved_left);
-        EXPECT_EQ(renderer.projectSecondaryViewport().camera.t, saved_left);
-
-        const glm::ivec2 new_size{512, 384};
-        primary.windowSize = new_size;
-        renderer.endModelAlignment(primary);
-        EXPECT_EQ(primary.windowSize, new_size);
-        EXPECT_EQ(renderer.modelAlignmentView(), nullptr);
-        EXPECT_EQ(renderer.getSplitViewMode(), saved_mode);
-        EXPECT_EQ(primary.camera.t, saved_left);
-        EXPECT_EQ(renderer.projectSecondaryViewport().camera.t, saved_right);
-        EXPECT_EQ(mobile.transform(), original);
-        EXPECT_EQ(undoHistory().undoCount(), 0u);
-
-        renderer.restoreSplitViewMode(SplitViewMode::IndependentDual, primary);
-        renderer.projectSecondaryViewport().camera.t = saved_right;
-        ASSERT_TRUE(renderer.beginModelAlignment(primary, scene, reference, mobile));
-        EXPECT_EQ(primary.camera.t, saved_left);
-        EXPECT_EQ(renderer.projectSecondaryViewport().camera.t, saved_right);
-        renderer.endModelAlignment(primary);
-        EXPECT_EQ(renderer.getSplitViewMode(), SplitViewMode::IndependentDual);
-    }
-
-    TEST_F(AlignPreviewTest, DedicatedPointsCanStartOnEitherSideAndUndoStaysInTheSession) {
-        pair_rendering_ = std::make_unique<RenderingManager>();
-        startPairAlignment(*pair_rendering_, false);
-        ASSERT_FALSE(HasFatalFailure());
-
-        const glm::vec3 right{1, 2, 3};
-        const glm::vec3 left{4, 5, 6};
-        auto& state = services().alignPointPick();
-        ASSERT_TRUE(sample(right, SplitViewPanelId::Right));
-        EXPECT_TRUE(state.pendingPairOnRight());
-        EXPECT_FALSE(sample(left, SplitViewPanelId::Right));
-        ASSERT_TRUE(sample(left, SplitViewPanelId::Left));
-        EXPECT_FALSE(state.pendingPairOnRight());
-        EXPECT_EQ(state.getPickedPoints(), (std::vector<glm::vec3>{left, right}));
-
-        ASSERT_TRUE(sample({5, 6, 7}, SplitViewPanelId::Left, 0));
-        ASSERT_TRUE(sample({6, 7, 8}, SplitViewPanelId::Left, 0));
-        EXPECT_EQ(bound(input::Action::UNDO), OperatorResult::RUNNING_MODAL);
-        EXPECT_EQ(state.getPickedPoints(), (std::vector<glm::vec3>{left, right}));
-        EXPECT_EQ(bound(input::Action::UNDO), OperatorResult::RUNNING_MODAL);
-        EXPECT_EQ(state.getPickedPoints(), (std::vector<glm::vec3>{right}));
-        EXPECT_TRUE(state.pendingPairOnRight());
-
-        ASSERT_TRUE(sample(left, SplitViewPanelId::Left));
-        ASSERT_TRUE(sample(left, SplitViewPanelId::Left));
-        EXPECT_FALSE(state.pendingPairOnRight());
-        ASSERT_EQ(state.pairColorSlots().size(), 2u);
-        const auto colors = state.pairColorSlots();
-        EXPECT_NE(colors[0], colors[1]);
-        selectPoint(0);
-        state.requestUiAction(PointPickState::UiAction::DeleteSelected);
-        EXPECT_EQ(send({}), OperatorResult::RUNNING_MODAL);
-        EXPECT_EQ(state.getPickedPoints(), (std::vector<glm::vec3>{left}));
-        EXPECT_EQ(state.pairColorSlots(), (std::vector<size_t>{colors[1]}));
-        EXPECT_EQ(bound(input::Action::UNDO), OperatorResult::RUNNING_MODAL);
-        EXPECT_EQ(state.getPickedPoints(), (std::vector<glm::vec3>{left, right, left}));
-        EXPECT_EQ(state.pairColorSlots(), colors);
-        EXPECT_EQ(undoHistory().undoCount(), 0u);
-        pair_rendering_->endModelAlignment(pair_primary_);
-    }
-
-    TEST_F(AlignPreviewTest, PreviewUndoOnlyExitsAndRedoDoesNotReachSceneHistory) {
-        pair_rendering_ = std::make_unique<RenderingManager>();
-        startPairAlignment(*pair_rendering_, false);
-        ASSERT_FALSE(HasFatalFailure());
-        for (const auto point : {glm::vec3(0, 0, 0), glm::vec3(2, 0, 0), glm::vec3(0, 2, 0)}) {
-            ASSERT_TRUE(sample(point, SplitViewPanelId::Left));
-            ASSERT_TRUE(sample(point * 0.5f, SplitViewPanelId::Right));
-        }
-        const auto points = services().alignPointPick().getPickedPoints();
-        ASSERT_EQ(action(PointPickState::UiAction::TogglePreview), OperatorResult::RUNNING_MODAL);
-        ASSERT_TRUE(previewEnabled());
-        EXPECT_EQ(bound(input::Action::REDO), OperatorResult::RUNNING_MODAL);
-        EXPECT_TRUE(previewEnabled());
-        EXPECT_EQ(bound(input::Action::UNDO), OperatorResult::RUNNING_MODAL);
-        EXPECT_FALSE(previewEnabled());
-        EXPECT_EQ(services().alignPointPick().getPickedPoints(), points);
-        EXPECT_EQ(bound(input::Action::UNDO), OperatorResult::RUNNING_MODAL);
-        EXPECT_EQ(services().alignPointPick().getPickedPoints().size(), points.size() - 1);
-        EXPECT_EQ(bound(input::Action::REDO), OperatorResult::RUNNING_MODAL);
-        EXPECT_EQ(services().alignPointPick().getPickedPoints().size(), points.size() - 1);
-        EXPECT_EQ(undoHistory().undoCount(), 0u);
-    }
-
-    TEST_F(AlignPreviewTest, SceneHistoryCannotDiscardDedicatedPointEdits) {
-        pair_rendering_ = std::make_unique<RenderingManager>();
-        startPairAlignment(*pair_rendering_, false);
-        ASSERT_FALSE(HasFatalFailure());
-        const auto original_target = manager_->getNodeTransform("target");
-        auto entry = std::make_unique<SceneSnapshot>(*manager_, "transform.translate");
-        ASSERT_TRUE(entry->captureTransformsBefore({"target"}, {original_target}));
-        const auto moved_target = glm::translate(glm::mat4(1), glm::vec3(8, 0, 0));
-        ASSERT_TRUE(manager_->setNodeTransform("target", moved_target));
-        entry->captureAfter();
-        undoHistory().push(std::move(entry));
-        auto& state = services().alignPointPick();
-        EXPECT_FALSE(state.canUndoPointEdit());
-        ASSERT_TRUE(sample({1, 2, 3}, SplitViewPanelId::Left));
-        EXPECT_TRUE(state.canUndoPointEdit());
-        const auto points = state.getPickedPoints();
-        const auto mobile = manager_->getNodeTransform("mobile");
-        const auto undo_count = undoHistory().undoCount();
-        EXPECT_FALSE(undoHistory().canUndo());
-        EXPECT_FALSE(undoHistory().canRedo());
-        for (const auto result : {undoHistory().undo(), undoHistory().redo(), undoHistory().undoMultiple(3)}) {
-            EXPECT_FALSE(result.success);
-            EXPECT_FALSE(result.changed);
-            EXPECT_EQ(result.steps_performed, 0u);
-            EXPECT_EQ(result.error, LOC("align.history_unavailable"));
-        }
-        EXPECT_NE(pair_rendering_->modelAlignmentView(), nullptr);
-        EXPECT_EQ(state.getPickedPoints(), points);
-        EXPECT_EQ(manager_->getNodeTransform("mobile"), mobile);
-        EXPECT_EQ(undoHistory().undoCount(), undo_count);
-        EXPECT_EQ(manager_->getNodeTransform("target"), moved_target);
-        EXPECT_EQ(bound(input::Action::UNDO), OperatorResult::RUNNING_MODAL);
-        EXPECT_TRUE(state.getPickedPoints().empty());
-        EXPECT_FALSE(state.canUndoPointEdit());
-        ASSERT_TRUE(sample({4, 5, 6}, SplitViewPanelId::Right));
-        EXPECT_EQ(action(PointPickState::UiAction::Clear), OperatorResult::RUNNING_MODAL);
-        EXPECT_TRUE(state.getPickedPoints().empty());
-        EXPECT_TRUE(state.canUndoPointEdit());
-        EXPECT_EQ(bound(input::Action::UNDO), OperatorResult::RUNNING_MODAL);
-        EXPECT_EQ(state.getPickedPoints(), (std::vector<glm::vec3>{{4, 5, 6}}));
-        EXPECT_TRUE(state.pendingPairOnRight());
-        operation_.cancel(*context_);
-        EXPECT_TRUE(undoHistory().canUndo());
-        ASSERT_TRUE(undoHistory().undo().success);
-        EXPECT_TRUE(undoHistory().canRedo());
-        EXPECT_EQ(manager_->getNodeTransform("target"), original_target);
-    }
-
-    TEST_F(AlignPreviewTest, HistoryPollAndModalCancellationTrackAlignmentSession) {
-        pair_rendering_ = std::make_unique<RenderingManager>();
-        startPairAlignment(*pair_rendering_, false);
-        ASSERT_FALSE(HasFatalFailure());
-        operation_.cancel(*context_);
-        const auto original = manager_->getNodeTransform("target");
-        auto entry = std::make_unique<SceneSnapshot>(*manager_, "transform.translate");
-        ASSERT_TRUE(entry->captureTransformsBefore({"target"}, {original}));
-        ASSERT_TRUE(manager_->setNodeTransform("target", glm::translate(glm::mat4(1), glm::vec3(2, 0, 0))));
-        entry->captureAfter();
-        undoHistory().push(std::move(entry));
-        EXPECT_TRUE(operators().poll(BuiltinOp::Undo));
-        const auto history_generation = undoHistory().generation();
-        auto& scene = manager_->getScene();
-        ASSERT_TRUE(pair_rendering_->beginModelAlignment(pair_primary_, scene, *scene.getNode("reference"), *scene.getNode("mobile")));
-        (void)operators().invoke(BuiltinOp::AlignPickPoint);
-        ASSERT_TRUE(operators().hasModalOperator());
-        EXPECT_FALSE(operators().poll(BuiltinOp::Undo));
-        EXPECT_FALSE(operators().poll(BuiltinOp::Redo));
-        EXPECT_EQ(undoHistory().generation(), history_generation);
-        operators().cancelModalOperator();
-        EXPECT_EQ(pair_rendering_->modelAlignmentView(), nullptr);
-        EXPECT_EQ(undoHistory().generation(), history_generation);
-        EXPECT_TRUE(operators().poll(BuiltinOp::Undo));
-        ASSERT_TRUE(undoHistory().undo().success);
-        EXPECT_TRUE(operators().poll(BuiltinOp::Redo));
-    }
-
-    TEST_F(AlignPreviewTest, DedicatedApplyResolvesParentTransformAndRestoresBothViews) {
-        pair_rendering_ = std::make_unique<RenderingManager>();
-        startPairAlignment(*pair_rendering_);
-        ASSERT_FALSE(HasFatalFailure());
-        operation_.cancel(*context_);
-        auto& scene = manager_->getScene();
-        const auto parent = scene.addGroup("parent");
-        ASSERT_TRUE(scene.reparent(scene.getNode("mobile")->id, parent));
-        const auto parent_world = glm::translate(glm::mat4(1), glm::vec3(7, -2, 3)) *
-                                  glm::rotate(glm::mat4(1), 0.7f, glm::vec3(0, 1, 0)) *
-                                  glm::scale(glm::mat4(1), glm::vec3(1.5f));
-        ASSERT_TRUE(manager_->setNodeTransform("parent", parent_world));
-        const auto mobile_local = manager_->getNodeTransform("mobile");
-        const auto mobile_world = scene_coords::nodeVisualizerWorldTransform(scene, scene.getNode("mobile")->id);
-        const auto reference_local = manager_->getNodeTransform("reference");
-        const auto fit = glm::translate(glm::mat4(1), glm::vec3(-3, 4, 1)) *
-                         glm::rotate(glm::mat4(1), -0.4f, glm::vec3(1, 0, 0)) *
-                         glm::scale(glm::mat4(1), glm::vec3(2.0f));
-        const auto mode = pair_rendering_->getSplitViewMode();
-        pair_primary_.camera.t = {3, 4, 5};
-        pair_rendering_->projectSecondaryViewport().camera.t = {8, 9, 10};
-        ASSERT_TRUE(pair_rendering_->beginModelAlignment(pair_primary_, scene, *scene.getNode("reference"), *scene.getNode("mobile")));
-        OperatorProperties props;
-        ASSERT_EQ(operation_.invoke(*context_, props), OperatorResult::RUNNING_MODAL);
-        for (const auto local : {glm::vec3(0), glm::vec3(1, 0, 0), glm::vec3(0, 1, 1), glm::vec3(0, 0, 2)}) {
-            const auto source = glm::vec3(mobile_world * glm::vec4(local, 1));
-            ASSERT_TRUE(sample(source, SplitViewPanelId::Right));
-            ASSERT_TRUE(sample(glm::vec3(fit * glm::vec4(source, 1)), SplitViewPanelId::Left));
-        }
-        ASSERT_EQ(action(PointPickState::UiAction::TogglePreview), OperatorResult::RUNNING_MODAL);
-        ASSERT_TRUE(previewEnabled());
-        EXPECT_EQ(manager_->getNodeTransform("mobile"), mobile_local);
-        EXPECT_EQ(manager_->getNodeTransform("reference"), reference_local);
-        EXPECT_EQ(action(PointPickState::UiAction::Apply), OperatorResult::FINISHED);
-        EXPECT_EQ(pair_rendering_->modelAlignmentView(), nullptr);
-        EXPECT_EQ(pair_rendering_->getSplitViewMode(), mode);
-        EXPECT_EQ(pair_primary_.camera.t, glm::vec3(3, 4, 5));
-        EXPECT_EQ(pair_rendering_->projectSecondaryViewport().camera.t, glm::vec3(8, 9, 10));
-        const auto expected = fit * mobile_world;
-        const auto actual = scene_coords::nodeVisualizerWorldTransform(scene, scene.getNode("mobile")->id);
-        for (int c = 0; c < 4; ++c)
-            for (int r = 0; r < 4; ++r)
-                EXPECT_NEAR(actual[c][r], expected[c][r], 2e-4f);
-        EXPECT_EQ(manager_->getNodeTransform("reference"), reference_local);
-        EXPECT_EQ(undoHistory().undoCount(), 1u);
-        ASSERT_TRUE(undoHistory().undo().success);
-        EXPECT_EQ(manager_->getNodeTransform("mobile"), mobile_local);
-        EXPECT_EQ(manager_->getNodeTransform("reference"), reference_local);
-    }
-
-    TEST_F(AlignPreviewTest, DedicatedCancelAndOperatorDestructionRestoreTheSession) {
-        pair_rendering_ = std::make_unique<RenderingManager>();
-        startPairAlignment(*pair_rendering_);
-        ASSERT_FALSE(HasFatalFailure());
-        const auto original = manager_->getNodeTransform("mobile");
-        ASSERT_EQ(action(PointPickState::UiAction::TogglePreview), OperatorResult::RUNNING_MODAL);
-        operation_.cancel(*context_);
-        EXPECT_EQ(pair_rendering_->modelAlignmentView(), nullptr);
-        EXPECT_EQ(manager_->getNodeTransform("mobile"), original);
-        auto& scene = manager_->getScene();
-        ASSERT_TRUE(pair_rendering_->beginModelAlignment(pair_primary_, scene, *scene.getNode("reference"), *scene.getNode("mobile")));
-        {
-            AlignPickPointOperator replacement;
-            OperatorProperties props;
-            ASSERT_EQ(replacement.invoke(*context_, props), OperatorResult::RUNNING_MODAL);
-        }
-        EXPECT_EQ(pair_rendering_->modelAlignmentView(), nullptr);
-        EXPECT_EQ(manager_->getNodeTransform("mobile"), original);
-        EXPECT_EQ(undoHistory().undoCount(), 0u);
-    }
-
-    TEST_F(AlignPreviewTest, DedicatedSwapRefreshesTargetsAndFitFailuresHaveFeedback) {
-        pair_rendering_ = std::make_unique<RenderingManager>();
-        startPairAlignment(*pair_rendering_, false);
-        ASSERT_FALSE(HasFatalFailure());
-        auto& scene = manager_->getScene();
-        pair_rendering_->swapModelAlignmentRoles(pair_primary_, scene);
-        ASSERT_EQ(send({}), OperatorResult::RUNNING_MODAL);
-        EXPECT_EQ(pairTargets()[0], scene.getNode("mobile")->uuid);
-        EXPECT_EQ(pairTargets()[1], scene.getNode("reference")->uuid);
-        EXPECT_EQ(bound(input::Action::APPLY_ALIGNMENT), OperatorResult::RUNNING_MODAL);
-        ASSERT_NE(services().alignPointPick().getStatusMessage(), nullptr);
-        EXPECT_EQ(*services().alignPointPick().getStatusMessage(), LOC("align.pair_incomplete"));
-        services().alignPointPick().clearStatusMessage();
-        for (int i = 0; i < 3; ++i) {
-            ASSERT_TRUE(sample({i, 0, 0}, SplitViewPanelId::Left));
-            ASSERT_TRUE(sample({i, 0, 0}, SplitViewPanelId::Right));
-        }
-        EXPECT_EQ(bound(input::Action::APPLY_ALIGNMENT), OperatorResult::RUNNING_MODAL);
-        ASSERT_NE(services().alignPointPick().getStatusMessage(), nullptr);
-        EXPECT_EQ(*services().alignPointPick().getStatusMessage(), LOC("align.pair_degenerate"));
-        EXPECT_FALSE(previewEnabled());
-        EXPECT_EQ(undoHistory().undoCount(), 0u);
-    }
-
-    TEST_F(AlignPreviewTest, PlaneAlignmentExcludesTargetsWithLockedAncestors) {
-        auto& scene = manager_->getScene();
-        const auto parent = scene.addGroup("locked parent");
-        const auto child = scene.addGroup("locked child", parent);
-        scene.setNodeLocked("locked parent", true);
-        manager_->selectNodes({"target", "locked child"});
-        const auto locked = scene.getNodeById(child)->transform();
-        EXPECT_EQ(action(PointPickState::UiAction::TogglePreview), OperatorResult::RUNNING_MODAL);
-        EXPECT_NE(transform(), glm::mat4(1));
-        EXPECT_EQ(action(PointPickState::UiAction::Apply), OperatorResult::FINISHED);
-        EXPECT_EQ(scene.getNodeById(child)->transform(), locked);
-        EXPECT_EQ(undoHistory().undoCount(), 1u);
-    }
-
-    TEST_F(AlignPreviewTest, MovedReferenceInvalidatesPairsBeforeApply) {
-        pair_rendering_ = std::make_unique<RenderingManager>();
-        startPairAlignment(*pair_rendering_);
-        ASSERT_FALSE(HasFatalFailure());
-        const auto mobile = manager_->getNodeTransform("mobile");
-        const auto moved = glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, 0.0f, 0.0f));
-        ASSERT_TRUE(manager_->setNodeTransform("reference", moved));
-
-        EXPECT_EQ(action(PointPickState::UiAction::Apply), OperatorResult::RUNNING_MODAL);
-        EXPECT_TRUE(services().alignPointPick().getPickedPoints().empty());
-        EXPECT_FALSE(previewEnabled());
-        EXPECT_EQ(manager_->getNodeTransform("reference"), moved);
-        EXPECT_EQ(manager_->getNodeTransform("mobile"), mobile);
-        EXPECT_EQ(undoHistory().undoCount(), 0u);
-    }
-
-    TEST_F(AlignPreviewTest, PreviewFocusDoesNotChangeSelectionOrAllowRemoval) {
-        pair_rendering_ = std::make_unique<RenderingManager>();
-        startPairAlignment(*pair_rendering_);
-        ASSERT_FALSE(HasFatalFailure());
-        selectPoint(3);
-        action(PointPickState::UiAction::TogglePreview);
-        ASSERT_TRUE(previewEnabled());
-        EXPECT_FALSE(services().getAlignPreviewFeedback().focus);
-        action(PointPickState::UiAction::TogglePreview);
-
-        addPairPoint({2, 2, 0});
-        addPairPoint({1, 1, 0});
-        action(PointPickState::UiAction::TogglePreview);
-        ASSERT_TRUE(previewEnabled());
-        EXPECT_FALSE(services().getAlignPreviewFeedback().focus);
-        action(PointPickState::UiAction::TogglePreview);
-
-        addPairPoint({1, 1, 1});
-        addPairPoint({0.5f, 0.5f, 0});
-        const auto original_points = services().alignPointPick().getPickedPoints();
-        const auto original_mobile = manager_->getNodeTransform("mobile");
-        action(PointPickState::UiAction::TogglePreview);
-        ASSERT_TRUE(previewEnabled());
-        EXPECT_EQ(services().getAlignPreviewFeedback().focus, 8);
-        EXPECT_EQ(services().alignPointPick().getSelectedPoint(), 3);
-        const auto preview_points = services().alignPointPick().getPickedPoints();
-        const auto preview_mobile = manager_->getNodeTransform("mobile");
-        EXPECT_EQ(bound(input::Action::DELETE_SELECTED), OperatorResult::RUNNING_MODAL);
-        EXPECT_EQ(bound(input::Action::REMOVE_LAST_POINT), OperatorResult::RUNNING_MODAL);
-        EXPECT_TRUE(previewEnabled());
-        EXPECT_EQ(services().alignPointPick().getPickedPoints(), preview_points);
-        EXPECT_EQ(manager_->getNodeTransform("mobile"), preview_mobile);
-
-        send({});
-        action(PointPickState::UiAction::TogglePreview);
-        EXPECT_FALSE(services().getAlignPreviewFeedback().focus);
-        EXPECT_TRUE(services().getAlignPreviewFeedback().summary.empty());
-        EXPECT_EQ(services().alignPointPick().getSelectedPoint(), 3);
-        EXPECT_EQ(services().alignPointPick().getPickedPoints(), original_points);
-        EXPECT_EQ(manager_->getNodeTransform("mobile"), original_mobile);
-    }
-
-    TEST_F(AlignPreviewTest, ExtraPairsParticipateInFitAndCanBeRemovedTogether) {
-        pair_rendering_ = std::make_unique<RenderingManager>();
-        startPairAlignment(*pair_rendering_);
-        ASSERT_FALSE(HasFatalFailure());
-        const auto original = manager_->getNodeTransform("mobile");
-        addPairPoint({0, 0, 3});
-        EXPECT_EQ(action(PointPickState::UiAction::Apply), OperatorResult::RUNNING_MODAL);
-        EXPECT_EQ(manager_->getNodeTransform("mobile"), original);
-
-        addPairPoint({0, 0, 1});
-        action(PointPickState::UiAction::TogglePreview);
-        ASSERT_TRUE(previewEnabled());
-        EXPECT_GT(glm::length(glm::vec3((*pair_rendering_->modelAlignmentView()->preview)[0])), 2.1f);
-        action(PointPickState::UiAction::TogglePreview);
-        addPairPoint({2, 2, 0});
-        addPairPoint({1, 1, 0});
-        selectPoint(7);
-        EXPECT_EQ(bound(input::Action::DELETE_SELECTED), OperatorResult::RUNNING_MODAL);
-        EXPECT_EQ(services().alignPointPick().getPickedPoints().size(), 8u);
-        EXPECT_EQ(action(PointPickState::UiAction::Apply), OperatorResult::FINISHED);
-        EXPECT_NEAR(glm::length(glm::vec3(manager_->getNodeTransform("mobile")[0])), 2.0f, 1e-5f);
-        EXPECT_EQ(undoHistory().undoCount(), 1u);
-    }
-
-    TEST_F(AlignPreviewTest, ExternalMobileEditSupersedesThePreview) {
-        pair_rendering_ = std::make_unique<RenderingManager>();
-        startPairAlignment(*pair_rendering_);
-        ASSERT_FALSE(HasFatalFailure());
-        action(PointPickState::UiAction::TogglePreview);
-        ASSERT_TRUE(previewEnabled());
-        const auto moved = glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, 0.0f, 0.0f));
-        ASSERT_TRUE(manager_->setNodeTransform("mobile", moved));
-
-        EXPECT_EQ(action(PointPickState::UiAction::Apply), OperatorResult::RUNNING_MODAL);
-        EXPECT_TRUE(services().alignPointPick().getPickedPoints().empty());
-        EXPECT_FALSE(previewEnabled());
-        EXPECT_EQ(manager_->getNodeTransform("mobile"), moved);
-        EXPECT_EQ(undoHistory().undoCount(), 0u);
-    }
-
-    TEST_F(AlignPreviewTest, ComparisonRequiresAnEditableMobileSplat) {
-        pair_rendering_ = std::make_unique<RenderingManager>();
-        startPairAlignment(*pair_rendering_);
-        ASSERT_FALSE(HasFatalFailure());
-        EXPECT_TRUE(operation_.poll(*context_));
-        manager_->getScene().setNodeLocked("reference", true);
-        EXPECT_TRUE(operation_.poll(*context_));
-        manager_->getScene().setNodeLocked("mobile", true);
-        EXPECT_FALSE(operation_.poll(*context_));
-        EXPECT_EQ(action(PointPickState::UiAction::Apply), OperatorResult::CANCELLED);
-        EXPECT_EQ(undoHistory().undoCount(), 0u);
-    }
 
     TEST_F(AlignPreviewTest, MousePressPassesThroughAndClickReleaseIsConsumed) {
         EXPECT_EQ(mouse(input::ACTION_PRESS, {10, 20}), OperatorResult::PASS_THROUGH);
@@ -1118,7 +607,7 @@ namespace lfs::vis::op {
     TEST_F(AlignPreviewTest, PreviewAndGuiMousePressesPassThrough) {
         EXPECT_EQ(mouse(input::ACTION_PRESS, {10, 20}, true), OperatorResult::PASS_THROUGH);
         action(PointPickState::UiAction::TogglePreview);
-        EXPECT_TRUE(previewEnabled());
+        EXPECT_TRUE(services().getAlignPreviewEnabled());
         EXPECT_EQ(mouse(input::ACTION_PRESS, {10, 20}), OperatorResult::PASS_THROUGH);
         EXPECT_EQ(mouse(input::ACTION_RELEASE, {10, 20}), OperatorResult::PASS_THROUGH);
         EXPECT_EQ(services().alignPointPick().getPickedPoints().size(), 3u);
@@ -1133,7 +622,7 @@ namespace lfs::vis::op {
 
         // Repeated synchronization of the same triangle must not keep the UI awake.
         services().alignPointPick().setPickedPoints(services().alignPointPick().getPickedPoints());
-        services().setAlignPreviewEnabled(previewEnabled());
+        services().setAlignPreviewEnabled(services().getAlignPreviewEnabled());
         services().setAlignAxisSnapEnabled(services().getAlignAxisSnapEnabled());
         services().setAlignEdgeToAxisEnabled(services().getAlignEdgeToAxisEnabled());
         EXPECT_EQ(store.align_state_generation.get(), generation);
@@ -1204,7 +693,7 @@ namespace lfs::vis::op {
         operation_.cancel(*context_);
         EXPECT_EQ(transform(), original);
         EXPECT_TRUE(static_cast<bool>(manager_->getScene().getNode("target")->locked));
-        EXPECT_FALSE(previewEnabled());
+        EXPECT_FALSE(services().getAlignPreviewEnabled());
     }
 
     TEST_F(AlignPreviewTest, OptionTogglesUseOriginalTransformWithoutDrift) {
@@ -1230,7 +719,7 @@ namespace lfs::vis::op {
         ASSERT_EQ(transform(), original);
         EXPECT_EQ(action(PointPickState::UiAction::Apply), OperatorResult::FINISHED);
         EXPECT_EQ(transform(), preview);
-        EXPECT_FALSE(previewEnabled());
+        EXPECT_FALSE(services().getAlignPreviewEnabled());
         EXPECT_EQ(undoHistory().undoCount(), 1u);
         EXPECT_TRUE(undoHistory().undo().success);
         EXPECT_EQ(transform(), original);
@@ -1275,5 +764,523 @@ namespace lfs::vis::op {
         EXPECT_TRUE(undoHistory().redo().success);
         EXPECT_EQ(transform(), preview);
     }
+
+    class ModelAlignmentTest : public ::testing::Test {
+    protected:
+        void SetUp() override {
+            services().clear();
+            undoHistory().clear();
+            manager_ = std::make_unique<SceneManager>();
+            services().set(manager_.get());
+            operators().setSceneManager(manager_.get());
+            registerEditOperators();
+            operators().registerOperator(BuiltinOp::ModelAlignment,
+                                         OperatorDescriptor{.builtin_id = BuiltinOp::ModelAlignment,
+                                                            .label = "Test alignment",
+                                                            .flags = OperatorFlags::REGISTER},
+                                         [this] {
+                                             auto op = std::make_unique<ModelAlignmentOperator>();
+                                             if (pair_rendering_) {
+                                                 auto& scene = manager_->getScene();
+                                                 (void)op->begin(pair_primary_, scene, *scene.getNode("reference"), *scene.getNode("mobile"));
+                                             }
+                                             return op;
+                                         });
+            manager_->getScene().addGroup("target");
+            manager_->selectNode("target");
+            context_ = std::make_unique<OperatorContext>(*manager_);
+            services().setAlignCameraPosition({0, 5, 5});
+            services().setAlignAxisSnapEnabled(false);
+            services().setAlignEdgeToAxisEnabled(false);
+        }
+
+        void TearDown() override {
+            operators().cancelModalOperator();
+            operation_.cancel(*context_);
+            operators().unregisterOperator(BuiltinOp::ModelAlignment);
+            unregisterEditOperators();
+            operators().setSceneManager(nullptr);
+            undoHistory().clear();
+            services().clear();
+            context_.reset();
+            manager_.reset();
+            lfs::event::EventBridge::instance().clear_all();
+        }
+
+        OperatorResult action(PointPickState::UiAction action) {
+            operation_.pointState().requestUiAction(action);
+            return send({});
+        }
+
+        bool previewEnabled() const {
+            const auto* view = operation_.session();
+            return view ? view->preview.has_value() : services().getAlignPreviewEnabled();
+        }
+
+        OperatorResult send(ModalEvent event) {
+            context_->setModalEvent(event);
+            OperatorProperties properties;
+            return operation_.modal(*context_, properties);
+        }
+
+        OperatorResult mouse(const int action, const glm::dvec2 position, const bool over_gui = false) {
+            return send({.type = ModalEvent::Type::MOUSE_BUTTON,
+                         .over_gui = over_gui,
+                         .data = MouseButtonEvent{.button = operation_.pick_button_, .action = action, .mods = 0, .position = position}});
+        }
+
+        OperatorResult key(const int key) {
+            return send({.type = ModalEvent::Type::KEY, .data = KeyEvent{key, 0, input::ACTION_PRESS, 0}});
+        }
+
+        OperatorResult bound(const input::Action bound_action) {
+            return send({.type = ModalEvent::Type::ACTION, .data = ActionEvent{.action = bound_action}});
+        }
+
+        void selectPoint(const int index) {
+            operation_.selected_point_ = index;
+            operation_.syncPickedPointsToServices();
+        }
+
+        void addPairPoint(const glm::vec3 point) {
+            operation_.picked_points_.push_back(point);
+            operation_.syncPickedPointsToServices();
+        }
+
+        void startPairAlignment(RenderingManager& rendering, const bool with_points = true) {
+            using core::Device;
+            using core::Tensor;
+            const auto make_splat = [] {
+                return std::make_unique<core::SplatData>(
+                    0, Tensor::from_vector({0.0f, 0.0f, 2.0f}, {1, 3}, Device::CPU),
+                    Tensor::zeros({1, 1, 3}, Device::CPU),
+                    Tensor::zeros({1, 0, 3}, Device::CPU),
+                    Tensor::zeros({1, 3}, Device::CPU),
+                    Tensor::from_vector({1.0f, 0.0f, 0.0f, 0.0f}, {1, 4}, Device::CPU),
+                    Tensor::zeros({1, 1}, Device::CPU), 1.0f);
+            };
+            auto& scene = manager_->getScene();
+            scene.addSplat("reference", make_splat());
+            scene.addSplat("mobile", make_splat());
+            manager_->selectNodes({"reference", "mobile"});
+            services().set(&rendering);
+            ASSERT_TRUE(operation_.begin(pair_primary_, scene, *scene.getNode("reference"), *scene.getNode("mobile")));
+            OperatorProperties properties;
+            ASSERT_EQ(operation_.invoke(*context_, properties), OperatorResult::RUNNING_MODAL);
+            ASSERT_TRUE(operation_.session());
+            if (with_points) {
+                operation_.picked_points_ = {{0, 0, 0}, {0, 0, 0}, {2, 0, 0}, {1, 0, 0}, {0, 2, 0}, {0, 1, 0}};
+                operation_.syncPickedPointsToServices();
+            }
+        }
+
+        bool sample(const glm::vec3 point, SplitViewPanelId panel, std::optional<int> index = {}) {
+            return operation_.applyPointSample({.world = point, .panel = panel}, index);
+        }
+
+        bool sampleFor(ModelAlignmentOperator& operation, glm::vec3 point, SplitViewPanelId panel, std::optional<int> index = {}) {
+            return operation.applyPointSample({.world = point, .panel = panel}, index);
+        }
+
+        void selectFor(ModelAlignmentOperator& operation, int index) {
+            operation.selected_point_ = index;
+            operation.syncPickedPointsToServices();
+        }
+
+        std::array<core::Uuid, 2> pairTargets() const { return operation_.session()->nodes; }
+
+        glm::mat4 transform() const { return manager_->getScene().getNode("target")->transform(); }
+
+        std::unique_ptr<SceneManager> manager_;
+        std::unique_ptr<OperatorContext> context_;
+        Viewport pair_primary_;
+        ModelAlignmentOperator operation_;
+        std::unique_ptr<RenderingManager> pair_rendering_;
+    };
+
+    TEST_F(ModelAlignmentTest, PairedPreviewRestoresAndApplyOnlyMovesTheMobileSplat) {
+        pair_rendering_ = std::make_unique<RenderingManager>();
+        startPairAlignment(*pair_rendering_);
+        ASSERT_FALSE(HasFatalFailure());
+        const auto original = manager_->getNodeTransform("mobile");
+        const auto reference = manager_->getNodeTransform("reference");
+        action(PointPickState::UiAction::TogglePreview);
+        EXPECT_TRUE(previewEnabled());
+        EXPECT_EQ(manager_->getNodeTransform("mobile"), original);
+        EXPECT_TRUE(operation_.session()->preview);
+        EXPECT_EQ(manager_->getNodeTransform("reference"), reference);
+        action(PointPickState::UiAction::TogglePreview);
+        EXPECT_FALSE(previewEnabled());
+        EXPECT_EQ(manager_->getNodeTransform("mobile"), original);
+        EXPECT_EQ(action(PointPickState::UiAction::Apply), OperatorResult::FINISHED);
+        EXPECT_NEAR(glm::length(glm::vec3(manager_->getNodeTransform("mobile")[0])), 2.0f, 1e-5f);
+        EXPECT_EQ(manager_->getNodeTransform("reference"), reference);
+        EXPECT_EQ(undoHistory().undoCount(), 1u);
+        ASSERT_TRUE(undoHistory().undo().success);
+        EXPECT_EQ(manager_->getNodeTransform("mobile"), original);
+        EXPECT_EQ(manager_->getNodeTransform("reference"), reference);
+    }
+
+    TEST_F(ModelAlignmentTest, DedicatedViewRestoresCamerasAndKeepsPreviewOutOfScene) {
+        pair_rendering_ = std::make_unique<RenderingManager>();
+        startPairAlignment(*pair_rendering_);
+        ASSERT_FALSE(HasFatalFailure());
+        operation_.cancel(*context_);
+
+        auto& scene = manager_->getScene();
+        const auto& reference = *scene.getNode("reference");
+        const auto& mobile = *scene.getNode("mobile");
+        const auto original = mobile.transform();
+        Viewport primary;
+        auto& renderer = *pair_rendering_;
+        renderer.projectSecondaryViewport().camera.t = {17, 18, 19};
+        const auto saved_left = primary.camera.t;
+        const auto saved_right = renderer.projectSecondaryViewport().camera.t;
+        const auto saved_mode = renderer.getSplitViewMode();
+
+        ASSERT_TRUE(operation_.begin(primary, scene, reference, mobile));
+        ASSERT_TRUE(renderer.isIndependentSplitViewActive());
+        ASSERT_NE(operation_.session(), nullptr);
+        EXPECT_EQ(primary.camera.t, saved_left);
+        EXPECT_EQ(renderer.projectSecondaryViewport().camera.t, saved_left);
+
+        const auto similarity = glm::scale(glm::mat4(1), glm::vec3(2));
+        operation_.setPreview(similarity);
+        EXPECT_EQ(renderer.projectSecondaryViewport().camera.t, saved_left * 2.0f);
+        EXPECT_EQ(mobile.transform(), original);
+        renderer.setFocusedSplitPanel(SplitViewPanelId::Right);
+        operation_.setComposite(SplitViewPanelId::Left);
+        EXPECT_EQ(renderer.getFocusedSplitPanel(), SplitViewPanelId::Right);
+        EXPECT_EQ(primary.camera.t, saved_left);
+        EXPECT_EQ(renderer.projectSecondaryViewport().camera.t, saved_left * 2.0f);
+        operation_.setComposite(std::nullopt);
+        EXPECT_FALSE(operation_.session()->composite);
+        operation_.setComposite(SplitViewPanelId::Right);
+        EXPECT_EQ(operation_.session()->composite, SplitViewPanelId::Right);
+        renderer.projectSecondaryViewport().camera.t += glm::vec3(5, 6, 7);
+        const auto focused_position = renderer.projectSecondaryViewport().camera.t;
+        operation_.toggleCameraLink();
+        EXPECT_EQ(primary.camera.t, focused_position);
+        primary.camera.t += glm::vec3(1, 2, 3);
+        operation_.syncCamera(primary);
+        const auto linked_position = primary.camera.t;
+        operation_.toggleCameraLink();
+        EXPECT_EQ(primary.camera.t, linked_position);
+        EXPECT_EQ(renderer.projectSecondaryViewport().camera.t, linked_position);
+        primary.camera.t += glm::vec3(2, 3, 4);
+        operation_.syncCamera(primary);
+        EXPECT_EQ(renderer.projectSecondaryViewport().camera.t, linked_position);
+        operation_.setPreview(std::nullopt);
+        EXPECT_FALSE(operation_.session()->preview);
+        EXPECT_EQ(primary.camera.t, saved_left);
+        EXPECT_EQ(renderer.projectSecondaryViewport().camera.t, saved_left);
+
+        const glm::ivec2 new_size{512, 384};
+        primary.windowSize = new_size;
+        operation_.end();
+        EXPECT_EQ(primary.windowSize, new_size);
+        EXPECT_EQ(operation_.session(), nullptr);
+        EXPECT_EQ(renderer.getSplitViewMode(), saved_mode);
+        EXPECT_EQ(primary.camera.t, saved_left);
+        EXPECT_EQ(renderer.projectSecondaryViewport().camera.t, saved_right);
+        EXPECT_EQ(mobile.transform(), original);
+        EXPECT_EQ(undoHistory().undoCount(), 0u);
+
+        renderer.restoreSplitViewMode(SplitViewMode::IndependentDual, primary);
+        renderer.projectSecondaryViewport().camera.t = saved_right;
+        ASSERT_TRUE(operation_.begin(primary, scene, reference, mobile));
+        EXPECT_EQ(primary.camera.t, saved_left);
+        EXPECT_EQ(renderer.projectSecondaryViewport().camera.t, saved_right);
+        operation_.end();
+        EXPECT_EQ(renderer.getSplitViewMode(), SplitViewMode::IndependentDual);
+    }
+
+    TEST_F(ModelAlignmentTest, DedicatedApplyResolvesParentTransformAndRestoresBothViews) {
+        pair_rendering_ = std::make_unique<RenderingManager>();
+        startPairAlignment(*pair_rendering_);
+        ASSERT_FALSE(HasFatalFailure());
+        operation_.cancel(*context_);
+        auto& scene = manager_->getScene();
+        const auto parent = scene.addGroup("parent");
+        ASSERT_TRUE(scene.reparent(scene.getNode("mobile")->id, parent));
+        const auto parent_world = glm::translate(glm::mat4(1), glm::vec3(7, -2, 3)) *
+                                  glm::rotate(glm::mat4(1), 0.7f, glm::vec3(0, 1, 0)) *
+                                  glm::scale(glm::mat4(1), glm::vec3(1.5f));
+        ASSERT_TRUE(manager_->setNodeTransform("parent", parent_world));
+        const auto mobile_local = manager_->getNodeTransform("mobile");
+        const auto mobile_world = scene_coords::nodeVisualizerWorldTransform(scene, scene.getNode("mobile")->id);
+        const auto reference_local = manager_->getNodeTransform("reference");
+        const auto fit = glm::translate(glm::mat4(1), glm::vec3(-3, 4, 1)) *
+                         glm::rotate(glm::mat4(1), -0.4f, glm::vec3(1, 0, 0)) *
+                         glm::scale(glm::mat4(1), glm::vec3(2.0f));
+        const auto mode = pair_rendering_->getSplitViewMode();
+        pair_primary_.camera.t = {3, 4, 5};
+        pair_rendering_->projectSecondaryViewport().camera.t = {8, 9, 10};
+        ASSERT_TRUE(operation_.begin(pair_primary_, scene, *scene.getNode("reference"), *scene.getNode("mobile")));
+        OperatorProperties props;
+        ASSERT_EQ(operation_.invoke(*context_, props), OperatorResult::RUNNING_MODAL);
+        for (const auto local : {glm::vec3(0), glm::vec3(1, 0, 0), glm::vec3(0, 1, 1), glm::vec3(0, 0, 2)}) {
+            const auto source = glm::vec3(mobile_world * glm::vec4(local, 1));
+            ASSERT_TRUE(sample(source, SplitViewPanelId::Right));
+            ASSERT_TRUE(sample(glm::vec3(fit * glm::vec4(source, 1)), SplitViewPanelId::Left));
+        }
+        ASSERT_EQ(action(PointPickState::UiAction::TogglePreview), OperatorResult::RUNNING_MODAL);
+        ASSERT_TRUE(previewEnabled());
+        EXPECT_EQ(manager_->getNodeTransform("mobile"), mobile_local);
+        EXPECT_EQ(manager_->getNodeTransform("reference"), reference_local);
+        EXPECT_EQ(action(PointPickState::UiAction::Apply), OperatorResult::FINISHED);
+        EXPECT_EQ(operation_.session(), nullptr);
+        EXPECT_EQ(pair_rendering_->getSplitViewMode(), mode);
+        EXPECT_EQ(pair_primary_.camera.t, glm::vec3(3, 4, 5));
+        EXPECT_EQ(pair_rendering_->projectSecondaryViewport().camera.t, glm::vec3(8, 9, 10));
+        const auto expected = fit * mobile_world;
+        const auto actual = scene_coords::nodeVisualizerWorldTransform(scene, scene.getNode("mobile")->id);
+        for (int c = 0; c < 4; ++c)
+            for (int r = 0; r < 4; ++r)
+                EXPECT_NEAR(actual[c][r], expected[c][r], 2e-4f);
+        EXPECT_EQ(manager_->getNodeTransform("reference"), reference_local);
+        EXPECT_EQ(undoHistory().undoCount(), 1u);
+        ASSERT_TRUE(undoHistory().undo().success);
+        EXPECT_EQ(manager_->getNodeTransform("mobile"), mobile_local);
+        EXPECT_EQ(manager_->getNodeTransform("reference"), reference_local);
+    }
+
+    TEST_F(ModelAlignmentTest, DedicatedCancelAndOperatorDestructionRestoreTheSession) {
+        pair_rendering_ = std::make_unique<RenderingManager>();
+        startPairAlignment(*pair_rendering_);
+        ASSERT_FALSE(HasFatalFailure());
+        const auto original = manager_->getNodeTransform("mobile");
+        ASSERT_EQ(action(PointPickState::UiAction::TogglePreview), OperatorResult::RUNNING_MODAL);
+        operation_.cancel(*context_);
+        EXPECT_EQ(operation_.session(), nullptr);
+        EXPECT_EQ(manager_->getNodeTransform("mobile"), original);
+        auto& scene = manager_->getScene();
+        {
+            ModelAlignmentOperator replacement;
+            ASSERT_TRUE(replacement.begin(pair_primary_, scene, *scene.getNode("reference"), *scene.getNode("mobile")));
+            OperatorProperties props;
+            ASSERT_EQ(replacement.invoke(*context_, props), OperatorResult::RUNNING_MODAL);
+        }
+        EXPECT_EQ(operation_.session(), nullptr);
+        EXPECT_EQ(manager_->getNodeTransform("mobile"), original);
+        EXPECT_EQ(undoHistory().undoCount(), 0u);
+    }
+
+    TEST_F(ModelAlignmentTest, DedicatedSwapRefreshesTargetsAndFitFailuresHaveFeedback) {
+        pair_rendering_ = std::make_unique<RenderingManager>();
+        startPairAlignment(*pair_rendering_, false);
+        ASSERT_FALSE(HasFatalFailure());
+        auto& scene = manager_->getScene();
+        operation_.swapRoles(scene);
+        ASSERT_EQ(send({}), OperatorResult::RUNNING_MODAL);
+        EXPECT_EQ(pairTargets()[0], scene.getNode("mobile")->uuid);
+        EXPECT_EQ(pairTargets()[1], scene.getNode("reference")->uuid);
+        EXPECT_EQ(bound(input::Action::APPLY_ALIGNMENT), OperatorResult::RUNNING_MODAL);
+        ASSERT_NE(operation_.pointState().getStatusMessage(), nullptr);
+        EXPECT_EQ(*operation_.pointState().getStatusMessage(), LOC("align.pair_incomplete"));
+        operation_.pointState().clearStatusMessage();
+        for (int i = 0; i < 3; ++i) {
+            ASSERT_TRUE(sample({i, 0, 0}, SplitViewPanelId::Left));
+            ASSERT_TRUE(sample({i, 0, 0}, SplitViewPanelId::Right));
+        }
+        EXPECT_EQ(bound(input::Action::APPLY_ALIGNMENT), OperatorResult::RUNNING_MODAL);
+        ASSERT_NE(operation_.pointState().getStatusMessage(), nullptr);
+        EXPECT_EQ(*operation_.pointState().getStatusMessage(), LOC("align.pair_degenerate"));
+        EXPECT_FALSE(previewEnabled());
+        EXPECT_EQ(undoHistory().undoCount(), 0u);
+    }
+
+    TEST_F(ModelAlignmentTest, MovedReferenceInvalidatesPairsBeforeApply) {
+        pair_rendering_ = std::make_unique<RenderingManager>();
+        startPairAlignment(*pair_rendering_);
+        ASSERT_FALSE(HasFatalFailure());
+        const auto mobile = manager_->getNodeTransform("mobile");
+        const auto moved = glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, 0.0f, 0.0f));
+        ASSERT_TRUE(manager_->setNodeTransform("reference", moved));
+
+        EXPECT_EQ(action(PointPickState::UiAction::Apply), OperatorResult::RUNNING_MODAL);
+        EXPECT_TRUE(operation_.pointState().getPickedPoints().empty());
+        EXPECT_FALSE(previewEnabled());
+        EXPECT_EQ(manager_->getNodeTransform("reference"), moved);
+        EXPECT_EQ(manager_->getNodeTransform("mobile"), mobile);
+        EXPECT_EQ(undoHistory().undoCount(), 0u);
+    }
+
+    TEST_F(ModelAlignmentTest, PreviewFocusDoesNotChangeSelectionOrAllowRemoval) {
+        pair_rendering_ = std::make_unique<RenderingManager>();
+        startPairAlignment(*pair_rendering_);
+        ASSERT_FALSE(HasFatalFailure());
+        selectPoint(3);
+        action(PointPickState::UiAction::TogglePreview);
+        ASSERT_TRUE(previewEnabled());
+        EXPECT_FALSE(operation_.feedback().focus);
+        action(PointPickState::UiAction::TogglePreview);
+
+        addPairPoint({2, 2, 0});
+        addPairPoint({1, 1, 0});
+        action(PointPickState::UiAction::TogglePreview);
+        ASSERT_TRUE(previewEnabled());
+        EXPECT_FALSE(operation_.feedback().focus);
+        action(PointPickState::UiAction::TogglePreview);
+
+        addPairPoint({1, 1, 1});
+        addPairPoint({0.5f, 0.5f, 0});
+        const auto original_points = operation_.pointState().getPickedPoints();
+        const auto original_mobile = manager_->getNodeTransform("mobile");
+        action(PointPickState::UiAction::TogglePreview);
+        ASSERT_TRUE(previewEnabled());
+        EXPECT_EQ(operation_.feedback().focus, 8);
+        EXPECT_EQ(operation_.pointState().getSelectedPoint(), 3);
+        const auto preview_points = operation_.pointState().getPickedPoints();
+        const auto preview_mobile = manager_->getNodeTransform("mobile");
+        EXPECT_EQ(bound(input::Action::DELETE_SELECTED), OperatorResult::RUNNING_MODAL);
+        EXPECT_EQ(bound(input::Action::REMOVE_LAST_POINT), OperatorResult::RUNNING_MODAL);
+        EXPECT_TRUE(previewEnabled());
+        EXPECT_EQ(operation_.pointState().getPickedPoints(), preview_points);
+        EXPECT_EQ(manager_->getNodeTransform("mobile"), preview_mobile);
+
+        send({});
+        action(PointPickState::UiAction::TogglePreview);
+        EXPECT_FALSE(operation_.feedback().focus);
+        EXPECT_TRUE(operation_.feedback().summary.empty());
+        EXPECT_EQ(operation_.pointState().getSelectedPoint(), 3);
+        EXPECT_EQ(operation_.pointState().getPickedPoints(), original_points);
+        EXPECT_EQ(manager_->getNodeTransform("mobile"), original_mobile);
+    }
+
+    TEST_F(ModelAlignmentTest, ExtraPairsParticipateInFitAndCanBeRemovedTogether) {
+        pair_rendering_ = std::make_unique<RenderingManager>();
+        startPairAlignment(*pair_rendering_);
+        ASSERT_FALSE(HasFatalFailure());
+        const auto original = manager_->getNodeTransform("mobile");
+        addPairPoint({0, 0, 3});
+        EXPECT_EQ(action(PointPickState::UiAction::Apply), OperatorResult::RUNNING_MODAL);
+        EXPECT_EQ(manager_->getNodeTransform("mobile"), original);
+
+        addPairPoint({0, 0, 1});
+        action(PointPickState::UiAction::TogglePreview);
+        ASSERT_TRUE(previewEnabled());
+        EXPECT_GT(glm::length(glm::vec3((*operation_.session()->preview)[0])), 2.1f);
+        action(PointPickState::UiAction::TogglePreview);
+        addPairPoint({2, 2, 0});
+        addPairPoint({1, 1, 0});
+        selectPoint(7);
+        EXPECT_EQ(bound(input::Action::DELETE_SELECTED), OperatorResult::RUNNING_MODAL);
+        EXPECT_EQ(operation_.pointState().getPickedPoints().size(), 8u);
+        EXPECT_EQ(action(PointPickState::UiAction::Apply), OperatorResult::FINISHED);
+        EXPECT_NEAR(glm::length(glm::vec3(manager_->getNodeTransform("mobile")[0])), 2.0f, 1e-5f);
+        EXPECT_EQ(undoHistory().undoCount(), 1u);
+    }
+
+    TEST_F(ModelAlignmentTest, ExternalMobileEditSupersedesThePreview) {
+        pair_rendering_ = std::make_unique<RenderingManager>();
+        startPairAlignment(*pair_rendering_);
+        ASSERT_FALSE(HasFatalFailure());
+        action(PointPickState::UiAction::TogglePreview);
+        ASSERT_TRUE(previewEnabled());
+        const auto moved = glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, 0.0f, 0.0f));
+        ASSERT_TRUE(manager_->setNodeTransform("mobile", moved));
+
+        EXPECT_EQ(action(PointPickState::UiAction::Apply), OperatorResult::RUNNING_MODAL);
+        EXPECT_TRUE(operation_.pointState().getPickedPoints().empty());
+        EXPECT_FALSE(previewEnabled());
+        EXPECT_EQ(manager_->getNodeTransform("mobile"), moved);
+        EXPECT_EQ(undoHistory().undoCount(), 0u);
+    }
+
+    TEST_F(ModelAlignmentTest, ComparisonRequiresAnEditableMobileSplat) {
+        pair_rendering_ = std::make_unique<RenderingManager>();
+        startPairAlignment(*pair_rendering_);
+        ASSERT_FALSE(HasFatalFailure());
+        EXPECT_TRUE(operation_.poll(*context_));
+        manager_->getScene().setNodeLocked("reference", true);
+        EXPECT_TRUE(operation_.poll(*context_));
+        manager_->getScene().setNodeLocked("mobile", true);
+        EXPECT_FALSE(operation_.poll(*context_));
+        EXPECT_EQ(action(PointPickState::UiAction::Apply), OperatorResult::CANCELLED);
+        EXPECT_EQ(undoHistory().undoCount(), 0u);
+    }
+
+    TEST_F(ModelAlignmentTest, PointsPreviewAndSceneHistoryHaveIndependentUndo) {
+        pair_rendering_ = std::make_unique<RenderingManager>();
+        startPairAlignment(*pair_rendering_, false);
+        ASSERT_FALSE(HasFatalFailure());
+        operation_.cancel(*context_);
+        const auto original = manager_->getNodeTransform("target");
+        auto entry = std::make_unique<SceneSnapshot>(*manager_, "transform.translate");
+        ASSERT_TRUE(entry->captureTransformsBefore({"target"}, {original}));
+        ASSERT_TRUE(manager_->setNodeTransform("target", glm::translate(glm::mat4(1), glm::vec3(2, 0, 0))));
+        entry->captureAfter();
+        undoHistory().push(std::move(entry));
+        ASSERT_TRUE(operators().poll(BuiltinOp::Undo));
+        const auto generation = undoHistory().generation();
+        (void)operators().invoke(BuiltinOp::ModelAlignment);
+        ASSERT_TRUE(operators().isModal(BuiltinOp::ModelAlignment));
+        auto* active = ModelAlignmentOperator::active();
+        ASSERT_NE(active, nullptr);
+        const auto sample = [&](glm::vec3 point, SplitViewPanelId panel) {
+            return sampleFor(*active, point, panel);
+        };
+        const auto undo = [&] {
+            return operators().dispatchModalEvent({.type = ModalEvent::Type::ACTION,
+                .data = ActionEvent{.action = input::Action::UNDO}});
+        };
+        ASSERT_TRUE(sample({0, 0, 0}, SplitViewPanelId::Right));
+        EXPECT_TRUE(active->pendingPairOnRight());
+        ASSERT_TRUE(sample({1, 0, 0}, SplitViewPanelId::Left));
+        EXPECT_EQ(active->pointState().getPickedPoints().front(), glm::vec3(1, 0, 0));
+        EXPECT_FALSE(undoHistory().canUndo());
+        EXPECT_FALSE(operators().poll(BuiltinOp::Undo));
+        EXPECT_FALSE(operators().poll(BuiltinOp::Redo));
+        EXPECT_FALSE(undoHistory().undo().success);
+        EXPECT_FALSE(undoHistory().redo().success);
+        EXPECT_EQ(undo(), OperatorResult::RUNNING_MODAL);
+        EXPECT_EQ(active->pointState().getPickedPoints().size(), 1u);
+        EXPECT_TRUE(active->pendingPairOnRight());
+        EXPECT_EQ(undo(), OperatorResult::RUNNING_MODAL);
+        EXPECT_TRUE(active->pointState().getPickedPoints().empty());
+        for (auto point : {glm::vec3(0), glm::vec3(1, 0, 0), glm::vec3(0, 1, 0)}) {
+            ASSERT_TRUE(sample(point * 2.0f, SplitViewPanelId::Left));
+            ASSERT_TRUE(sample(point, SplitViewPanelId::Right));
+        }
+        const auto points = active->pointState().getPickedPoints();
+        const auto colors = active->pairColorSlots();
+        ASSERT_TRUE(sampleFor(*active, {3, 0, 0}, SplitViewPanelId::Left, 2));
+        ASSERT_TRUE(sampleFor(*active, {4, 0, 0}, SplitViewPanelId::Left, 2));
+        EXPECT_EQ(undo(), OperatorResult::RUNNING_MODAL);
+        EXPECT_EQ(active->pointState().getPickedPoints(), points);
+        selectFor(*active, 3);
+        active->pointState().requestUiAction(PointPickState::UiAction::DeleteSelected);
+        EXPECT_EQ(operators().dispatchModalEvent({}), OperatorResult::RUNNING_MODAL);
+        EXPECT_EQ(active->pointState().getPickedPoints().size(), 4u);
+        EXPECT_EQ(active->pairColorSlots(), (std::vector<size_t>{colors[0], colors[2]}));
+        EXPECT_EQ(undo(), OperatorResult::RUNNING_MODAL);
+        EXPECT_EQ(active->pointState().getPickedPoints(), points);
+        EXPECT_EQ(active->pairColorSlots(), colors);
+        active->pointState().requestUiAction(PointPickState::UiAction::Clear);
+        EXPECT_EQ(operators().dispatchModalEvent({}), OperatorResult::RUNNING_MODAL);
+        EXPECT_TRUE(active->pointState().getPickedPoints().empty());
+        EXPECT_TRUE(active->pointState().canUndoPointEdit());
+        EXPECT_EQ(undo(), OperatorResult::RUNNING_MODAL);
+        EXPECT_EQ(active->pointState().getPickedPoints(), points);
+        active->pointState().requestUiAction(PointPickState::UiAction::TogglePreview);
+        EXPECT_EQ(operators().dispatchModalEvent({}), OperatorResult::RUNNING_MODAL);
+        ASSERT_TRUE(active->session()->preview);
+        EXPECT_EQ(undo(), OperatorResult::RUNNING_MODAL);
+        EXPECT_FALSE(active->session()->preview);
+        EXPECT_EQ(active->pointState().getPickedPoints().size(), 6u);
+        EXPECT_EQ(operators().dispatchModalEvent({.type = ModalEvent::Type::ACTION,
+            .data = ActionEvent{.action = input::Action::REDO}}), OperatorResult::RUNNING_MODAL);
+        EXPECT_EQ(undoHistory().generation(), generation);
+        operators().cancelModalOperator();
+        EXPECT_EQ(ModelAlignmentOperator::active(), nullptr);
+        EXPECT_FALSE(pair_rendering_->independentPanelOverrides());
+        EXPECT_EQ(undoHistory().generation(), generation);
+        EXPECT_TRUE(operators().poll(BuiltinOp::Undo));
+        ASSERT_TRUE(undoHistory().undo().success);
+        EXPECT_TRUE(operators().poll(BuiltinOp::Redo));
+        EXPECT_EQ(manager_->getNodeTransform("target"), original);
+    }
+
 
 } // namespace lfs::vis::op

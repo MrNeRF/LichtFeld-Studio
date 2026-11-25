@@ -46,7 +46,7 @@ namespace lfs::vis::op {
             return core::NULL_NODE;
         }
         const auto* const target = scene.getNodeById(target_id);
-        if (!target || scene.isNodeEffectivelyLocked(target_id)) {
+        if (!target || static_cast<bool>(target->locked)) {
             return core::NULL_NODE;
         }
         return target_id;
@@ -118,10 +118,10 @@ namespace lfs::vis::op {
     }
 
     OperatorResult PointPickOperator::modal(OperatorContext& ctx, OperatorProperties& /*props*/) {
+        resolvePendingPoint();
         if (const auto result = prepareModal(ctx)) {
             return *result;
         }
-        resolvePendingPoint();
 
         OperatorResult ui_result = OperatorResult::RUNNING_MODAL;
         if (state_.hasUiAction()) {
@@ -191,7 +191,7 @@ namespace lfs::vis::op {
                 if (event->over_gui) {
                     return OperatorResult::PASS_THROUGH;
                 }
-                if (sequentialPoints() && !is_pick_button && mb->button == static_cast<int>(input::AppMouseButton::RIGHT)) {
+                if (supportsPointEditing() && !is_pick_button && mb->button == static_cast<int>(input::AppMouseButton::RIGHT)) {
                     if (const auto hit = hitTestPoint(mb->position.x, mb->position.y)) {
                         selected_point_ = hit;
                         state_.setSelectedPoint(hit);
@@ -217,7 +217,7 @@ namespace lfs::vis::op {
                         }
                     }
                 }
-                if (sequentialPoints() && is_pick_button && press_point_index_)
+                if (supportsPointEditing() && is_pick_button && press_point_index_)
                     return OperatorResult::RUNNING_MODAL;
                 // Let camera navigation own press so orbit/pan can begin.
                 return OperatorResult::PASS_THROUGH;
@@ -292,14 +292,14 @@ namespace lfs::vis::op {
                 return OperatorResult::CANCELLED;
 
             case lfs::vis::input::Action::REMOVE_LAST_POINT:
-                if (sequentialPoints() && pointEditingBlocked())
+                if (supportsPointEditing() && pointEditingBlocked())
                     return OperatorResult::RUNNING_MODAL;
                 beforePointEdit(ctx);
                 removeLastPoint();
                 return OperatorResult::RUNNING_MODAL;
 
             case lfs::vis::input::Action::DELETE_SELECTED:
-                if (sequentialPoints() && pointEditingBlocked())
+                if (supportsPointEditing() && pointEditingBlocked())
                     return OperatorResult::RUNNING_MODAL;
                 beforePointEdit(ctx);
                 removeSelectedPoint();
@@ -330,7 +330,7 @@ namespace lfs::vis::op {
             clearAllPoints(true);
             break;
         case PointPickState::UiAction::DeleteSelected:
-            if (sequentialPoints() && !pointEditingBlocked())
+            if (supportsPointEditing() && !pointEditingBlocked())
                 removeSelectedPoint();
             break;
         default:
@@ -361,28 +361,14 @@ namespace lfs::vis::op {
 
     void PointPickOperator::syncPickedPointsToServices() {
         state_.setCanUndoPointEdit(!edits_.empty());
-        state_.setPendingPairOnRight(pending_pair_on_right_);
-        state_.setPairColorSlots(pair_color_slots_);
         state_.setPickedPoints(picked_points_);
         state_.setSelectedPoint(selected_point_);
         markOverlayDirty();
     }
 
-    void PointPickOperator::addPairColorSlot() {
-        size_t slot = 0;
-        while (std::find(pair_color_slots_.begin(), pair_color_slots_.end(), slot) != pair_color_slots_.end())
-            ++slot;
-        pair_color_slots_.push_back(slot);
-    }
-
-    void PointPickOperator::removePairColorSlot(const size_t pair) {
-        if (pair < pair_color_slots_.size())
-            pair_color_slots_.erase(pair_color_slots_.begin() + pair);
-    }
-
     void PointPickOperator::rememberPointEdit() {
-        if (sequentialPoints())
-            edits_.push_back({picked_points_, selected_point_, pick_panel_, pendingPairOnRight(), pair_color_slots_});
+        if (supportsPointEditing())
+            edits_.push_back({picked_points_, selected_point_, pick_panel_, capturePointEditState()});
     }
 
     void PointPickOperator::undoPointEdit() {
@@ -398,8 +384,7 @@ namespace lfs::vis::op {
         picked_points_ = std::move(edit.points);
         selected_point_ = edit.selected;
         pick_panel_ = edit.panel;
-        pending_pair_on_right_ = edit.pending_right;
-        pair_color_slots_ = std::move(edit.pair_color_slots);
+        restorePointEditState(edit.tool_state);
         syncPickedPointsToServices();
     }
 
@@ -409,8 +394,7 @@ namespace lfs::vis::op {
         pending_pick_.reset();
         press_active_ = false;
         picked_points_.clear();
-        pending_pair_on_right_ = false;
-        pair_color_slots_.clear();
+        pointsCleared();
         selected_point_.reset();
         pick_panel_.reset();
         press_point_index_.reset();
@@ -430,9 +414,7 @@ namespace lfs::vis::op {
         }
         rememberPointEdit();
         const int last = static_cast<int>(picked_points_.size()) - 1;
-        pending_pair_on_right_ = false;
-        if (sequentialPoints() && last % 2 == 0)
-            removePairColorSlot(last / 2);
+        (void)pointRemovalRange(static_cast<size_t>(last), false);
         if (selected_point_ && *selected_point_ >= last) {
             selected_point_.reset();
         }
@@ -459,12 +441,7 @@ namespace lfs::vis::op {
             return;
         }
         rememberPointEdit();
-        const int first = sequentialPoints() ? idx - idx % 2 : idx;
-        if (sequentialPoints())
-            removePairColorSlot(first / 2);
-        if (static_cast<size_t>(first) + 1 == picked_points_.size())
-            pending_pair_on_right_ = false;
-        const auto last = std::min(picked_points_.size(), static_cast<size_t>(first) + (sequentialPoints() ? 2u : 1u));
+        const auto [first, last] = pointRemovalRange(static_cast<size_t>(idx), true);
         picked_points_.erase(picked_points_.begin() + first, picked_points_.begin() + last);
         selected_point_.reset();
         if (picked_points_.empty()) {
@@ -500,6 +477,11 @@ namespace lfs::vis::op {
         return applyPointSample(sample, pick.point_index);
     }
 
+    void PointPickOperator::appendPickedPoint(const PointSample& sample) {
+        picked_points_.push_back(sample.world);
+        selected_point_ = static_cast<int>(picked_points_.size()) - 1;
+    }
+
     bool PointPickOperator::applyPointSample(const PointSample& sample, std::optional<int> index) {
         if (!Viewport::isValidWorldPosition(sample.world) || !acceptsPointSample(sample, index))
             return false;
@@ -515,17 +497,7 @@ namespace lfs::vis::op {
             if (picked_points_.size() >= max_points_)
                 return false;
             rememberPointEdit();
-            const bool completes_right_first = sequentialPoints() && pendingPairOnRight();
-            if (sequentialPoints() && picked_points_.size() % 2 == 0)
-                addPairColorSlot();
-            picked_points_.push_back(sample.world);
-            selected_point_ = static_cast<int>(picked_points_.size()) - 1;
-            if (completes_right_first) {
-                std::iter_swap(picked_points_.end() - 2, picked_points_.end() - 1);
-                --*selected_point_;
-            }
-            if (sequentialPoints())
-                pending_pair_on_right_ = picked_points_.size() % 2 != 0 && sample.panel == SplitViewPanelId::Right;
+            appendPickedPoint(sample);
         }
         if (!pick_panel_)
             pick_panel_ = sample.panel;
@@ -575,7 +547,7 @@ namespace lfs::vis::op {
 
         const auto panel = panel_info->panel;
         for (size_t i = 0; i < picked_points_.size(); ++i) {
-            if (sequentialPoints() &&
+            if (supportsPointEditing() &&
                 !acceptsPointSample({.panel = panel}, static_cast<int>(i)))
                 continue;
             const auto projected = lfs::rendering::projectWorldPoint(

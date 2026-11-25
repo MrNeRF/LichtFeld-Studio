@@ -531,7 +531,7 @@ namespace lfs::vis::op {
         }
 
         // The dedicated session owns provisional point edits, not scene history.
-        if (model_alignment_active_.load(std::memory_order_acquire))
+        if (operators().isModal(BuiltinOp::ModelAlignment))
             return HistoryResult{.error = LOC("align.history_unavailable")};
 
         // Discard the temporary alignment before replaying committed transforms.
@@ -1021,18 +1021,12 @@ namespace lfs::vis::op {
         return result;
     }
 
-    void UndoHistory::setModelAlignmentActive(const bool active) {
-        // Session teardown can run while the operator registry is locked.
-        // Publish availability without re-entering the registry or observers.
-        model_alignment_active_.store(active, std::memory_order_release);
-    }
-
     bool UndoHistory::canUndo() const {
-        return !model_alignment_active_.load(std::memory_order_acquire) && can_undo_.load(std::memory_order_acquire);
+        return !operators().isModal(BuiltinOp::ModelAlignment) && can_undo_.load(std::memory_order_acquire);
     }
 
     bool UndoHistory::canRedo() const {
-        return !model_alignment_active_.load(std::memory_order_acquire) && can_redo_.load(std::memory_order_acquire);
+        return !operators().isModal(BuiltinOp::ModelAlignment) && can_redo_.load(std::memory_order_acquire);
     }
 
     std::string UndoHistory::undoName() const {

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#include "operator/ops/model_alignment_ops.hpp"
 #include "project/session_state.hpp"
 #include "core/native_fs.hpp"
 
@@ -2699,7 +2700,7 @@ namespace lfs::vis::project {
         }
 
         auto settings = rendering_manager->getSettings();
-        const auto* alignment = rendering_manager->modelAlignmentView();
+        const auto* alignment = op::modelAlignmentSession();
         if (alignment) {
             settings.split_view_mode = alignment->previous_mode;
             settings.split_position = alignment->previous_position;

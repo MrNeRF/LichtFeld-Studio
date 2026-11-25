@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "operator/ops/model_alignment_ops.hpp"
 #include "gui/rmlui/elements/scene_graph_element.hpp"
 #include "core/error.hpp"
 #include "core/native_fs.hpp"
@@ -3182,7 +3183,7 @@ namespace lfs::vis::gui {
         if (selected_ids_.size() == 2 && selected_ids_.contains(node_id)) {
             const auto other = std::ranges::find_if(selected_ids_, [node_id](const auto id) { return id != node_id; });
             const auto* mobile = scene->getNodeById(*other);
-            if (mobile && RenderingManager::canBeginModelAlignment(*scene, *node, *mobile))
+            if (mobile && op::ModelAlignmentOperator::canBegin(*scene, *node, *mobile))
                 items.push_back(makeAction(tr("align.models"), prefixedAction("align_models")));
         }
         const bool selected_cameras_in_group = selectionContainsOnlyCamerasInGroup(node_id);
@@ -3479,7 +3480,7 @@ namespace lfs::vis::gui {
         if (kind == "align_models") {
             auto* gui = services().guiOrNull();
             auto* renderer = services().renderingOrNull();
-            if (!gui || !gui->getViewer() || !renderer || renderer->modelAlignmentView() ||
+            if (!gui || !gui->getViewer() || !renderer || op::modelAlignmentSession() ||
                 selected_ids_.size() != 2 || !selected_ids_.contains(context_menu_node_id_))
                 return;
             const auto other = std::ranges::find_if(selected_ids_, [&](const auto id) {
@@ -3487,15 +3488,13 @@ namespace lfs::vis::gui {
             });
             const auto* reference = scene->getNodeById(context_menu_node_id_);
             const auto* mobile = scene->getNodeById(*other);
-            if (!reference || !mobile || !RenderingManager::canBeginModelAlignment(*scene, *reference, *mobile))
+            if (!reference || !mobile || !op::ModelAlignmentOperator::canBegin(*scene, *reference, *mobile))
                 return;
-            auto& viewer = *gui->getViewer();
+            op::OperatorProperties props;
+            props.set("reference", reference->name);
+            props.set("moving", mobile->name);
             op::operators().cancelModalOperator();
-            if (!renderer->beginModelAlignment(viewer.getViewport(), *scene, *reference, *mobile))
-                return;
-            op::operators().invoke(op::BuiltinOp::AlignPickPoint);
-            if (!op::operators().hasModalOperator())
-                renderer->endModelAlignment(viewer.getViewport());
+            op::operators().invoke(op::BuiltinOp::ModelAlignment, &props);
             return;
         }
         if (kind == "select_hierarchy") {

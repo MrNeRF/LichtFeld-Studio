@@ -2691,7 +2691,7 @@ namespace lfs::vis {
             }
         } viewer_borrow_publisher{live_trainer, vksplat_viewport_renderer_.get()};
 
-        if (modelAlignmentView()) {
+        if (independent_panel_overrides_) {
             scene_state.meshes.clear();
         } else {
             scene_state.reveal = sequencer_reveal_;
@@ -3967,8 +3967,8 @@ namespace lfs::vis {
                                               const VksplatViewportRenderer::OutputSlot output) {
                     const auto index = splitViewPanelIndex(panel);
                     const glm::ivec2 size{std::max((*layouts)[index].width, 1), render_size.y};
-                    const auto* alignment = modelAlignmentView();
-                    if (!alignment || !scene_manager)
+                    const auto* overrides = independent_panel_overrides_ ? &(*independent_panel_overrides_)[index] : nullptr;
+                    if (!overrides || !scene_manager)
                         return render_panel_image(viewport, size, panel, std::nullopt, nullptr, nullptr, output);
 
                     const auto& scene = scene_manager->getScene();
@@ -3978,13 +3978,11 @@ namespace lfs::vis {
                     for (const auto& slot : scene.getVisibleSplatNodeSlots()) {
                         if (!slot.node || slot.slot_index >= transforms.size())
                             continue;
-                        const bool reference = slot.node->uuid == alignment->nodes[0];
-                        const bool mobile = slot.node->uuid == alignment->nodes[1];
-                        visible[slot.slot_index] = alignment->composite == panel
-                                                       ? reference || mobile
-                                                       : (panel == SplitViewPanelId::Left ? reference : mobile);
-                        if (mobile && alignment->preview)
-                            transforms[slot.slot_index] = *alignment->preview * transforms[slot.slot_index];
+                        visible[slot.slot_index] = std::find(overrides->visible_nodes.begin(), overrides->visible_nodes.end(),
+                                                              slot.node->uuid) != overrides->visible_nodes.end();
+                        for (const auto& [uuid, transform] : overrides->transforms) {
+                            if (slot.node->uuid == uuid) transforms[slot.slot_index] = transform * transforms[slot.slot_index];
+                        }
                     }
                     return render_panel_image(viewport, size, panel, visible, nullptr, &transforms, output, &request);
                 };
@@ -4008,20 +4006,7 @@ namespace lfs::vis {
                         .detail_label = "Primary | Secondary",
                         .left_name = "Primary View",
                         .right_name = "Secondary View"};
-                    if (const auto* alignment = modelAlignmentView(); alignment && scene_manager) {
-                        const auto& scene = scene_manager->getScene();
-                        const auto* reference = scene.getNodeByUuid(alignment->nodes[0]);
-                        const auto* mobile = scene.getNodeByUuid(alignment->nodes[1]);
-                        auto& info = *rendered_split_info;
-                        info.mode_label = LOC("align.models");
-                        info.left_name = LOCF("align.reference_name", reference ? reference->name : "");
-                        info.right_name = LOCF("align.mobile_name", mobile ? mobile->name : "");
-                        if (alignment->composite == SplitViewPanelId::Left)
-                            info.left_name = LOC("align.composite_name");
-                        else if (alignment->composite == SplitViewPanelId::Right)
-                            info.right_name = LOC("align.composite_name");
-                        info.detail_label = std::format("{} | {}", info.left_name, info.right_name);
-                    }
+
                 } else {
                     render_error = left ? right.error() : left.error();
                 }

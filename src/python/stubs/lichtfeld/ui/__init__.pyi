@@ -2339,9 +2339,6 @@ def go_to_camera_view(cam_uid: int) -> None:
 def open_camera_preview(cam_uid: int) -> None:
     """Open the image preview panel for a camera UID"""
 
-def toggle_model_comparison() -> None:
-    """Toggle model comparison with a shared camera and a divider"""
-
 def toggle_gt_comparison() -> None:
     """Toggle ground-truth comparison split view"""
 
@@ -2402,10 +2399,42 @@ def apply_align() -> bool:
 def clear_align_points() -> None:
     """Request the running align modal to clear all picked points"""
 
-def model_alignment_controls(action: str = '') -> tuple[bool, int, bool, bool, bool]:
-    """
-    Query or change the transient model alignment view. Returns (linked, composite panel, can swap roles, can delete pair, can undo point edit).
-    """
+class ModelAlignmentState:
+    @property
+    def linked(self) -> bool: ...
+
+    @property
+    def display_mode(self) -> str: ...
+
+    @property
+    def can_swap_roles(self) -> bool: ...
+
+    @property
+    def can_delete_pair(self) -> bool: ...
+
+    @property
+    def can_undo(self) -> bool: ...
+
+def get_model_alignment_state() -> ModelAlignmentState:
+    """Current model alignment controls with named fields"""
+
+def swap_model_alignment_roles() -> None:
+    """Swap reference and moving model before picking points"""
+
+def set_model_alignment_display(mode: str) -> None:
+    """Choose separate models or an overlay in the left or right panel"""
+
+def set_model_alignment_camera_link(linked: bool) -> None:
+    """Link or unlink navigation in the alignment preview"""
+
+def cancel_model_alignment() -> None:
+    """Cancel model alignment and restore the previous views"""
+
+def undo_model_alignment() -> None:
+    """Undo the last point edit or exit alignment preview"""
+
+def delete_model_alignment_pair() -> None:
+    """Delete the selected matching point pair"""
 
 def get_align_preview() -> bool:
     """Whether the alignment result is being previewed"""

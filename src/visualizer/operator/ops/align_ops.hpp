@@ -5,10 +5,8 @@
 #pragma once
 
 #include "point_pick_operator.hpp"
-#include <array>
 #include <glm/glm.hpp>
 #include <optional>
-#include <span>
 #include <vector>
 
 namespace lfs::vis::op {
@@ -16,9 +14,6 @@ namespace lfs::vis::op {
     class LFS_VIS_API AlignPickPointOperator : public PointPickOperator {
     public:
         AlignPickPointOperator();
-        ~AlignPickPointOperator() override;
-        OperatorResult invoke(OperatorContext& ctx, OperatorProperties& props) override;
-        void cancel(OperatorContext& ctx) override;
 
         static LFS_LOCAL_SYMBOL const OperatorDescriptor DESCRIPTOR;
 
@@ -27,19 +22,6 @@ namespace lfs::vis::op {
 
     private:
         friend class AlignPreviewTest;
-        struct Pair {
-            std::array<core::Uuid, 2> ids;
-            std::array<glm::mat4, 2> world;
-        };
-        std::optional<Pair> pair_;
-        bool model_alignment_ = false;
-        void endModelAlignment();
-        void publishPairPreviewFeedback(const glm::mat4& transform);
-        void reportPairFitFailure() const;
-        bool sequentialPoints() const override { return pair_.has_value(); }
-        void showPointMenu(glm::dvec2 position, int point) override;
-        bool acceptsPointSample(const PointSample& sample, std::optional<int> index) const override;
-        [[nodiscard]] std::optional<glm::mat4> computePairPreviewTransform() const;
 
         struct PreviewTarget {
             core::NodeId id;
@@ -65,10 +47,6 @@ namespace lfs::vis::op {
 
     void registerAlignOperators();
     void unregisterAlignOperators();
-
-    [[nodiscard]] constexpr bool hasEnoughAlignmentPairs(const size_t point_count) {
-        return point_count >= 6 && point_count % 2 == 0;
-    }
 
     // Shared by apply path and overlay preview. Returns true if normal was snapped.
     inline constexpr float kAlignAxisSnapDegrees = 3.0f;
@@ -100,10 +78,6 @@ namespace lfs::vis::op {
     // Visualizer-world transform mapping the picked plane normal (camera-facing, optionally
     // snapped) onto +Y with the triangle centroid moved to y = 0, or nullopt if degenerate.
     [[nodiscard]] LFS_VIS_API std::optional<glm::mat4> computeAlignTransform(const AlignTransformInputs& in);
-
-    // Least-squares source-to-reference fit with optional positive uniform scale.
-    [[nodiscard]] LFS_VIS_API std::optional<glm::dmat4> computePairAlignment(
-        std::span<const glm::dvec3> source, std::span<const glm::dvec3> reference, bool adjust_scale);
 
     [[nodiscard]] LFS_VIS_API std::optional<glm::mat4> resolveAlignSnapTargetWorld(const SceneManager& scene);
 

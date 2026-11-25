@@ -183,6 +183,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         operator/operator_registry.cpp
         operator/ops/point_pick_operator.cpp
         operator/ops/align_ops.cpp
+        operator/ops/model_alignment_ops.cpp
         operator/ops/scale_distance_ops.cpp
         operator/ops/crop_polygon_ops.cpp
         operator/ops/edit_ops.cpp

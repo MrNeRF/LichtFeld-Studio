@@ -24,11 +24,11 @@ class EditMenu:
         has_clipboard = _has_gaussian_clipboard()
         action = lf.keymap.Action
         model_alignment = lf.ui.get_split_view_mode() == "model_alignment"
-        can_undo = lf.ui.model_alignment_controls()[4] if model_alignment else lf.undo.can_undo()
+        can_undo = lf.ui.get_model_alignment_state().can_undo if model_alignment else lf.undo.can_undo()
         return [
             menu_action(
                 "Undo",
-                (lambda: lf.ui.model_alignment_controls("undo")) if model_alignment else lf.undo.undo,
+                lf.ui.undo_model_alignment if model_alignment else lf.undo.undo,
                 shortcut=keymap_shortcut(lf.keymap.Action.UNDO),
                 enabled=can_undo,
             ),

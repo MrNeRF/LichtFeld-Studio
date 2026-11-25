@@ -827,7 +827,10 @@ class _GizmoToolbarController:
         ]
         split_mode = lf.ui.get_split_view_mode()
         if split_mode == "model_alignment":
-            linked, composite, can_swap, can_delete, _can_undo = lf.ui.model_alignment_controls()
+            alignment = lf.ui.get_model_alignment_state()
+            linked = alignment.linked
+            can_swap = alignment.can_swap_roles
+            can_delete = alignment.can_delete_pair
             preview = lf.ui.get_align_preview()
             cancel = ("cancel", "align.cancel_session", "Cancel", "scene/x", "", False, True)
             if preview:
@@ -842,11 +845,11 @@ class _GizmoToolbarController:
                 link_tooltip = "align.unlink_cameras" if linked else "align.link_cameras_help"
                 controls = (
                     ("separate", "align.separate", "Separate", "layout-columns", "",
-                     composite == -1, True),
+                     alignment.display_mode == "separate", True),
                     ("left", "align.composite_left", "Overlay left", "alignment-overlay-left", "",
-                     composite == 0, True),
+                     alignment.display_mode == "overlay_left", True),
                     ("right", "align.composite_right", "Overlay right", "alignment-overlay-right", "",
-                     composite == 1, True),
+                     alignment.display_mode == "overlay_right", True),
                     ("link", link_tooltip, "Link cameras", "link", "",
                      linked, True),
                     cancel,
@@ -1227,7 +1230,16 @@ class _GizmoToolbarController:
             return
 
         if action == "model_alignment_control":
-            lf.ui.model_alignment_controls(value)
+            if value == "swap":
+                lf.ui.swap_model_alignment_roles()
+            elif value == "delete":
+                lf.ui.delete_model_alignment_pair()
+            elif value == "cancel":
+                lf.ui.cancel_model_alignment()
+            elif value == "link":
+                lf.ui.set_model_alignment_camera_link(not lf.ui.get_model_alignment_state().linked)
+            else:
+                lf.ui.set_model_alignment_display({"separate": "separate", "left": "overlay_left", "right": "overlay_right"}[value])
             return
 
         if action == "align_toggle_preview":
@@ -2193,7 +2205,11 @@ class _ViewportToolbarController:
         )
         split_mode = call("", getattr(lf.ui, "get_split_view_mode", None))
         if active_tool == "builtin.align" or split_mode == "model_alignment":
-            align_split_mode = (split_mode, lf.ui.model_alignment_controls()) if split_mode == "model_alignment" else split_mode
+            align_split_mode = split_mode
+            if split_mode == "model_alignment":
+                alignment = lf.ui.get_model_alignment_state()
+                align_split_mode = (split_mode, alignment.linked, alignment.display_mode,
+                                    alignment.can_swap_roles, alignment.can_delete_pair, alignment.can_undo)
             align_can_apply = bool(call(False, getattr(lf.ui, "can_apply_align", None)))
             align_axis_snap = bool(call(True, getattr(lf.ui, "get_align_axis_snap", None)))
             align_edge_to_axis = lf.ui.get_align_edge_to_axis()
