@@ -63,8 +63,12 @@ TEST_F(MaskRgbCache, ImmediateLoaderUndistortsDecodedPixelsOnTheDestinationGrid)
                               false, lfs::io::DEFAULT_PRINT_STATUS_FREQ);
 
     // The loader runs its kernels on the stream the caller passes; the result must be complete wherever it is read.
+#if LFS_HAS_CUDA
     cudaStream_t side_stream = nullptr;
     ASSERT_EQ(cudaStreamCreateWithFlags(&side_stream, cudaStreamNonBlocking), cudaSuccess);
+#else
+    void* side_stream = nullptr; // Metal and Vulkan loaders take no stream
+#endif
     const auto check = [&](const std::filesystem::path& path, const Tensor& decoded) {
         SCOPED_TRACE(path.extension().string());
         // Two faces share all calibration and size fields except their rotation.
@@ -72,7 +76,7 @@ TEST_F(MaskRgbCache, ImmediateLoaderUndistortsDecodedPixelsOnTheDestinationGrid)
             for (const auto& [resize, cap] : {std::pair{1, 0}, std::pair{2, 0}, std::pair{2, 13}}) {
                 const auto grid = prepare_undistort_params(*mapping, w, h, resize, cap);
                 const auto expected = undistort_image(decoded, grid, nullptr).clamp(0.f, 1.f);
-                for (const auto [u8, stream] : {std::pair{false, cudaStream_t{}}, std::pair{true, cudaStream_t{}},
+                for (const auto [u8, stream] : {std::pair{false, decltype(side_stream){}}, std::pair{true, decltype(side_stream){}},
                                                 std::pair{false, side_stream}, std::pair{true, side_stream}}) {
                     SCOPED_TRACE(::testing::Message() << "view=" << is_view(*mapping) << " resize=" << resize
                                                       << " max_width=" << cap << " uint8=" << u8
@@ -112,7 +116,9 @@ TEST_F(MaskRgbCache, ImmediateLoaderUndistortsDecodedPixelsOnTheDestinationGrid)
     const auto decoded = cache.load_cached_image(jpeg, {}).to(Device::GPU);
     check(jpeg, decoded);
     cache.reset_cache();
+#if LFS_HAS_CUDA
     ASSERT_EQ(cudaStreamDestroy(side_stream), cudaSuccess);
+#endif
 }
 
 // An undistorted image decodes at its file's own depth; the result stays bit for bit the one of a 16-bit decode.

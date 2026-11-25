@@ -1,26 +1,42 @@
+// SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
-[SpecializationConstant] const uint operation = 0;
+// Calibration correction: a smooth per-photo displacement field, its resampling and its fit.
+// Byte images, masks and weights use the *_u8 pointers; an absent input is a null pointer.
 struct Tile {
     int width, height, x, y, w, h, side;
     float sx, sy;
     int wrap;
 };
-struct Params {
-    uint64_t field, photo, render, output, mask, out_mask, structure, out_structure, edge, out_edge;
-    uint64_t alpha, background, stable_background, stable, grad, partials;
-    Tile tile;
-    int photo_byte, mask_byte, background_image, chunks, margin, first, channels;
+struct Parameters {
+    Ptr<float2, Access.ReadWrite> field;
+    Ptr<float, Access.Read> photo;
+    Ptr<uint8_t, Access.Read> photo_u8;
+    Ptr<float, Access.Read> render;
+    Ptr<float, Access.ReadWrite> output;
+    Ptr<float, Access.Read> mask;
+    Ptr<uint8_t, Access.Read> mask_u8;
+    Ptr<float, Access.ReadWrite> out_mask;
+    Ptr<uint8_t, Access.ReadWrite> out_mask_u8;
+    Ptr<float, Access.Read> structure;
+    Ptr<float, Access.ReadWrite> out_structure;
+    Ptr<float, Access.Read> edge;
+    Ptr<float, Access.ReadWrite> out_edge;
+    Ptr<float, Access.Read> alpha, background, stable_background;
+    Ptr<float, Access.ReadWrite> stable, grad, partials;
+    int width, height, x, y, w, h, side; // the Tile, flattened for the tensor binding ABI
+    float sx, sy;
+    int wrap;
+    int slot, background_image, chunks, margin, first, channels;
     float values, step;
 };
-struct Push {
-    uint64_t parameters;
-};
-[[vk::push_constant]] Push push;
-float readAt(uint64_t address, int index) { return ((Ptr<float, Access.Read>)address)[index]; }
-void writeAt(uint64_t address, int index, float value) { ((Ptr<float, Access.ReadWrite>)address)[index] = value; }
-uint byteAt(uint64_t address, int index) { return uint(((Ptr<uint8_t, Access.Read>)address)[index]); }
+[[vk::push_constant]] ConstantBuffer<Parameters> p;
+Tile tile() { return {p.width, p.height, p.x, p.y, p.w, p.h, p.side, p.sx, p.sy, p.wrap}; }
+bool present(Ptr<float, Access.Read> x) { return (uint64_t)x != 0; }
+bool present(Ptr<float, Access.ReadWrite> x) { return (uint64_t)x != 0; }
+bool present(Ptr<uint8_t, Access.Read> x) { return (uint64_t)x != 0; }
 static const int threads = 128, chunk = 512, partial_size = 21;
 static const float epsilon = .03f;
+int fieldBase() { return p.slot * p.side * p.side; }
 struct Location {
     int cell;
     float u, v, x, y;
@@ -28,22 +44,22 @@ struct Location {
         return (k & 1 ? u : 1 - u) * (k & 2 ? v : 1 - v);
     }
 };
-Location locate(const Tile t, int x, int y, uint64_t row) {
+Location locate(const Tile t, int x, int y) {
     const int side = t.side, cells = side - 1;
     // An exact cell boundary must agree with the integer partition used by the reduction.
     const float gx = ((x + .5f) * cells) / float(t.width);
     const float gy = ((y + .5f) * cells) / float(t.height);
     const int i = min(int(gx), cells - 1), j = min(int(gy), cells - 1);
-    Location p = {i + j * side, gx - i, gy - j, float(x), float(y)};
+    Location l = {i + j * side, gx - i, gy - j, float(x), float(y)};
     float dx = 0, dy = 0;
     for (int k = 0; k < 4; ++k) {
-        float2 d = ((Ptr<float2, Access.Read>)row)[p.cell + (k & 1) + (k >> 1) * side];
-        dx = fma(p.weight(k), d.x, dx);
-        dy = fma(p.weight(k), d.y, dy);
+        float2 d = p.field[fieldBase() + l.cell + (k & 1) + (k >> 1) * side];
+        dx = fma(l.weight(k), d.x, dx);
+        dy = fma(l.weight(k), d.y, dy);
     }
-    p.x = fma(dx, t.sx, p.x);
-    p.y = fma(dy, t.sy, p.y);
-    return p;
+    l.x = fma(dx, t.sx, l.x);
+    l.y = fma(dy, t.sy, l.y);
+    return l;
 }
 // A panorama continues across its left and right edge; rows, and the columns of other images, end there.
 int column(Tile t, int x) {
@@ -62,11 +78,11 @@ struct Source {
     int x, y;
     float u, v;
 };
-bool source(Location p, Tile t, out Source s) {
+bool source(Location l, Tile t, out Source s) {
     s = (Source)0;
-    if (!(p.y >= 0 && p.y <= t.height - 1))
+    if (!(l.y >= 0 && l.y <= t.height - 1))
         return false;
-    float x = p.x;
+    float x = l.x;
     if (t.wrap) {
         if (!isfinite(x))
             return false;
@@ -76,9 +92,9 @@ bool source(Location p, Tile t, out Source s) {
     } else if (!(x >= 0 && x <= t.width - 1)) {
         return false;
     }
-    s = {int(x), int(p.y), 0, 0};
+    s = {int(x), int(l.y), 0, 0};
     s.u = x - s.x;
-    s.v = p.y - s.y;
+    s.v = l.y - s.y;
     return true;
 }
 float cubic(float a, float b, float c, float d, float f) {
@@ -90,22 +106,23 @@ float linear(Ptr<float, Access.Read> src, Tile t, Source s) {
     const float bottom = (1 - s.u) * src[y1 * t.width + s.x] + s.u * src[y1 * t.width + x1];
     return (1 - s.v) * top + s.v * bottom;
 }
-float tap(Params p, int c, int i, float background) {
-    int j = c * p.tile.width * p.tile.height + i;
-    float value = p.photo_byte ? float(byteAt(p.photo, j)) : readAt(p.photo, j);
-    if (!p.alpha)
+float tap(int c, int i, float background) {
+    const bool bytes = present(p.photo_u8);
+    int j = c * p.width * p.height + i;
+    float value = bytes ? float(uint(p.photo_u8[j])) : p.photo[j];
+    if (!present(p.alpha))
         return value;
-    float alpha = saturate(readAt(p.alpha, i));
-    return value * (p.photo_byte ? 1.f / 255.f : 1.f) * alpha + background * (1 - alpha);
+    float alpha = saturate(p.alpha[i]);
+    return value * (bytes ? 1.f / 255.f : 1.f) * alpha + background * (1 - alpha);
 }
-float sample_cubic(Params p, Source s, Tile t, int channel, float background) {
+float sample_cubic(Source s, Tile t, int channel, float background) {
     if (s.u == 0 && s.v == 0)
-        return tap(p, channel, s.y * t.width + s.x, background);
+        return tap(channel, s.y * t.width + s.x, background);
     float taps[4][4], lines[4];
     for (int j = 0; j < 4; ++j) {
         const int row = line(t, s.y + j - 1) * t.width;
         for (int k = 0; k < 4; ++k)
-            taps[j][k] = tap(p, channel, row + column(t, s.x + k - 1), background);
+            taps[j][k] = tap(channel, row + column(t, s.x + k - 1), background);
         lines[j] = cubic(taps[j][0], taps[j][1], taps[j][2], taps[j][3], s.u);
     }
     const float value = cubic(lines[0], lines[1], lines[2], lines[3], s.v);
@@ -113,50 +130,58 @@ float sample_cubic(Params p, Source s, Tile t, int channel, float background) {
     const float high = max(max(taps[1][1], taps[1][2]), max(taps[2][1], taps[2][2]));
     return min(max(value, low), high);
 }
-void samplePhoto(Params p, Tile t, int a) {
-    int n = t.w * t.h;
+
+[shader("compute")]
+[numthreads(128, 1, 1)]
+void resample(uint3 id : SV_DispatchThreadID) {
+    const Tile t = tile();
+    const int a = int(id.x), n = t.w * t.h;
     if (a >= n)
         return;
-    Location loc = locate(t, a % t.w + t.x, a / t.w + t.y, p.field);
+    Location loc = locate(t, a % t.w + t.x, a / t.w + t.y);
     Source s;
     bool valid = source(loc, t, s);
     int pixels = t.width * t.height, dest = (a / t.w + t.y) * t.width + a % t.w + t.x;
+    const bool alpha = present(p.alpha);
     for (int c = 0; c < 3; c++) {
-        float v = readAt(p.render, c * n + a);
+        float v = p.render[c * n + a];
         if (valid) {
-            float bg = p.alpha ? readAt(p.background, p.background_image ? c * pixels + dest : c) : 0;
-            v = sample_cubic(p, s, t, c, bg);
-            if (!p.alpha && p.photo_byte)
+            float bg = alpha ? p.background[p.background_image ? c * pixels + dest : c] : 0;
+            v = sample_cubic(s, t, c, bg);
+            if (!alpha && present(p.photo_u8))
                 v *= 1.f / 255.f;
         }
-        writeAt(p.output, c * n + a, v);
-        if (p.stable)
-            writeAt(p.stable, c * pixels + dest, valid ? sample_cubic(p, s, t, c, readAt(p.stable_background, c)) : v);
+        p.output[c * n + a] = v;
+        if (present(p.stable))
+            p.stable[c * pixels + dest] = valid ? sample_cubic(s, t, c, p.stable_background[c]) : v;
     }
-    if (p.mask) {
+    const bool mask_bytes = present(p.mask_u8);
+    if (mask_bytes || present(p.mask)) {
         int q = valid ? int(loc.y + .5f) * t.width + column(t, int(s.x + s.u + .5f)) : 0;
-        if (p.mask_byte)
-            ((Ptr<uint8_t, Access.ReadWrite>)p.out_mask)[a] = uint8_t(valid ? byteAt(p.mask, q) : 0);
+        if (mask_bytes)
+            p.out_mask_u8[a] = uint8_t(valid ? uint(p.mask_u8[q]) : 0);
         else
-            writeAt(p.out_mask, a, valid ? readAt(p.mask, q) : 0);
+            p.out_mask[a] = valid ? p.mask[q] : 0;
     }
-    if (p.structure)
-        writeAt(p.out_structure, a, valid ? linear((Ptr<float, Access.Read>)p.structure, t, s) : 0);
-    if (p.edge)
-        writeAt(p.out_edge, a, valid ? linear((Ptr<float, Access.Read>)p.edge, t, s) : 0);
+    if (present(p.structure))
+        p.out_structure[a] = valid ? linear(p.structure, t, s) : 0;
+    if (present(p.edge))
+        p.out_edge[a] = valid ? linear(p.edge, t, s) : 0;
 }
-void followPrior(Params params, Tile t, int a) {
-    int n = t.w * t.h, channels = params.channels;
-    let src = (Ptr<float, Access.Read>)params.photo;
-    let output = (Ptr<float, Access.ReadWrite>)params.output;
-    uint64_t row = params.field;
+
+[shader("compute")]
+[numthreads(128, 1, 1)]
+void follow(uint3 id : SV_DispatchThreadID) {
+    const Tile t = tile();
+    const int a = int(id.x), n = t.w * t.h, channels = p.channels;
+    let src = p.photo;
     if (a >= n)
         return;
     Source s;
-    const bool inside = source(locate(t, a % t.w, a / t.w, row), t, s);
+    const bool inside = source(locate(t, a % t.w, a / t.w), t, s);
     if (inside && s.u == 0 && s.v == 0) {
         for (int c = 0; c < channels; ++c)
-            output[c * n + a] = src[c * n + s.y * t.w + s.x];
+            p.output[c * n + a] = src[c * n + s.y * t.w + s.x];
         return;
     }
     float sum[3] = {0, 0, 0}, total = 0;
@@ -184,19 +209,23 @@ void followPrior(Params params, Tile t, int a) {
     }
     const float norm = channels == 3 && length > 0 ? rsqrt(length) : 1.f;
     for (int c = 0; c < channels; ++c)
-        output[c * n + a] = sum[c] * norm;
+        p.output[c * n + a] = sum[c] * norm;
 }
 
 groupshared float laneSums[128][20];
 groupshared uint nonzero[128];
-void accumulate(Params params, Tile t, int group, int lane) {
-    uint64_t row = params.field, weight = params.mask;
-    bool float_weight = !params.mask_byte;
-    int chunks = params.chunks, margin = params.margin;
-    float values = params.values;
-    let image = (Ptr<float, Access.Read>)params.photo;
-    let rendered = (Ptr<float, Access.Read>)params.render;
-    let grad = (Ptr<float, Access.Read>)params.grad;
+[shader("compute")]
+[numthreads(128, 1, 1)]
+void accumulate(uint3 groupId : SV_GroupID, uint laneId : SV_GroupIndex) {
+    const Tile t = tile();
+    const int group = int(groupId.x), lane = int(laneId);
+    const bool byte_weight = present(p.mask_u8), float_weight = present(p.mask);
+    const bool has_grad = present(p.grad);
+    int chunks = p.chunks, margin = p.margin;
+    float values = p.values;
+    let image = p.photo;
+    let rendered = p.render;
+    let grad = p.grad;
     const int cells = t.side - 1;
     const int cell = group / chunks, col = cell % cells, r = cell / cells;
     const int x0 = (2 * col * t.width + cells - 1) / (2 * cells), x1 = (2 * (col + 1) * t.width + cells - 1) / (2 * cells);
@@ -219,15 +248,15 @@ void accumulate(Params params, Tile t, int group, int lane) {
         if (xx < 0 || yy < 0 || xx >= t.w || yy >= t.h)
             continue;
         const int a = yy * t.w + xx;
-        Location p = locate(t, x, y, row);
+        Location l = locate(t, x, y);
         Source s;
-        if (!source(p, t, s))
+        if (!source(l, t, s))
             continue;
         if ((!seam && (xx == 0 || xx == t.w - 1)) || yy == 0 || yy == t.h - 1)
             continue;
         float w = 1;
-        if (weight) {
-            w = float_weight ? readAt(weight, a) : float(byteAt(weight, a) > 0);
+        if (byte_weight || float_weight) {
+            w = float_weight ? p.mask[a] : float(uint(p.mask_u8[a]) > 0);
             if (!(w > 0))
                 continue;
         }
@@ -239,7 +268,7 @@ void accumulate(Params params, Tile t, int group, int lane) {
             const float dy = .5f * t.sy * (image[i + t.w] - image[i - t.w]);
             const float residual = image[i] - rendered[i];
             ss += residual * residual;
-            const float g = params.grad != 0 ? -epsilon * values * grad[i] : residual;
+            const float g = has_grad ? -epsilon * values * grad[i] : residual;
             q[0] += dx * g;
             q[1] += dy * g;
             q[2] += dx * dx;
@@ -254,7 +283,7 @@ void accumulate(Params params, Tile t, int group, int lane) {
         const float curvature = counted ? rho * w : 0.f;
         for (int f = 2; f < 5; ++f)
             q[f] *= curvature;
-        if (!grad)
+        if (!has_grad)
             for (int f = 0; f < 2; ++f)
                 q[f] *= rho * w;
         if (!(isfinite(q[0]) && isfinite(q[1]) && isfinite(q[2]) && isfinite(q[3]) && isfinite(q[4])))
@@ -263,11 +292,11 @@ void accumulate(Params params, Tile t, int group, int lane) {
         // The group owns this cell's four partials. Form the distance from
         // that cell in integers so a reciprocal rounded at its left/top edge
         // cannot put a boundary pixel's weight on the opposite control point.
-        p.u = float((2 * x + 1) * cells - 2 * t.width * col) / float(2 * t.width);
-        p.v = float((2 * y + 1) * cells - 2 * t.height * r) / float(2 * t.height);
+        l.u = float((2 * x + 1) * cells - 2 * t.width * col) / float(2 * t.width);
+        l.v = float((2 * y + 1) * cells - 2 * t.height * r) / float(2 * t.height);
         for (int k = 0; k < 4; ++k)
             for (int f = 0; f < 5; ++f)
-                sums[k][f] += p.weight(k) * q[f];
+                sums[k][f] += l.weight(k) * q[f];
     }
 
     for (int k = 0; k < 4; k++)
@@ -284,25 +313,29 @@ void accumulate(Params params, Tile t, int group, int lane) {
         }
         GroupMemoryBarrierWithGroupSync();
     }
-    let partials = (Ptr<float, Access.ReadWrite>)params.partials;
+    let partials = p.partials;
     int base = group * partial_size;
     if (lane < 20) {
         float sum = 0;
         for (int w = 0; w < 4; w++)
             sum += laneSums[w * 32][lane];
-        partials[base + lane] = params.first ? sum : partials[base + lane] + sum;
+        partials[base + lane] = p.first ? sum : partials[base + lane] + sum;
     }
     if (lane == 20) {
         bool anyDiff = (nonzero[0] | nonzero[32] | nonzero[64] | nonzero[96]) != 0;
-        partials[base + 20] = float(anyDiff || (!params.first && partials[base + 20] != 0));
+        partials[base + 20] = float(anyDiff || (!p.first && partials[base + 20] != 0));
     }
 }
 groupshared float2 old[81];
 groupshared float trace[81];
-void updateRow(Params params, Tile t, int i) {
-    const int side = t.side, cells = side - 1, points = side * side, x = i % side, y = i / side, chunks = params.chunks;
-    let row = (Ptr<float2, Access.ReadWrite>)params.field;
-    let partials = (Ptr<float, Access.Read>)params.partials;
+[shader("compute")]
+[numthreads(128, 1, 1)]
+void update(uint laneId : SV_GroupIndex) {
+    const Tile t = tile();
+    const int i = int(laneId);
+    const int side = t.side, cells = side - 1, points = side * side, x = i % side, y = i / side, chunks = p.chunks;
+    const int row = fieldBase();
+    let partials = p.partials;
     float q[5] = {0, 0, 0, 0, 0};
     bool differs = false;
     for (int k = 0; i < points && k < 4; ++k) {
@@ -323,7 +356,7 @@ void updateRow(Params params, Tile t, int i) {
         }
     }
     if (i < points)
-        old[i] = row[i];
+        old[i] = p.field[row + i];
     if (i < points)
         trace[i] = q[2] + q[4];
     nonzero[i] = uint(differs);
@@ -364,32 +397,24 @@ void updateRow(Params params, Tile t, int i) {
     const float dx = (c * gx - b * gy) / det, dy = (a * gy - b * gx) / det;
     const float moveLength = length(float2(dx * t.sx, dy * t.sy));
     if (isfinite(moveLength)) {
-        const float scale = params.step * (moveLength > 1.5f ? 1.5f / moveLength : 1.f);
+        const float scale = p.step * (moveLength > 1.5f ? 1.5f / moveLength : 1.f);
         float2 moved = float2(old[i].x - scale * dx, old[i].y - scale * dy);
         const float reach = length(moved * float2(t.sx, t.sy)), limit = .05f * min(t.width, t.height);
         if (limit > 0 && reach > limit)
             moved = float2(moved.x * (limit / reach), moved.y * (limit / reach));
-        row[i] = moved;
+        p.field[row + i] = moved;
     }
 }
 
+[shader("compute")]
 [numthreads(128, 1, 1)]
-void main(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {
-    Params p = ((Ptr<Params, Access.Read>)push.parameters)[0];
-    Tile t = p.tile;
-    int a = int(group.x * 128 + lane);
-    if (operation == 0)
-        samplePhoto(p, t, a);
-    if (operation == 1)
-        accumulate(p, t, int(group.x), int(lane));
-    if (operation == 2)
-        updateRow(p, t, int(lane));
-    if (operation == 3 && a < t.w * t.h) {
-        Source s;
-        if (!source(locate(t, a % t.w + t.x, a / t.w + t.y, p.field), t, s))
-            for (int c = 0; c < 3; c++)
-                writeAt(p.grad, c * t.w * t.h + a, 0);
-    }
-    if (operation == 4)
-        followPrior(p, t, a);
+void clear_outside(uint3 id : SV_DispatchThreadID) {
+    const Tile t = tile();
+    const int a = int(id.x);
+    if (a >= t.w * t.h)
+        return;
+    Source s;
+    if (!source(locate(t, a % t.w + t.x, a / t.w + t.y), t, s))
+        for (int c = 0; c < 3; c++)
+            p.grad[c * t.w * t.h + a] = 0;
 }

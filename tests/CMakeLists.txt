@@ -1226,6 +1226,7 @@ if(NOT LFS_HAS_CUDA)
             test_training_command_masks.cpp
             test_mesh_mask_kernels.cpp
             test_training_ops_parity.cpp
+            test_calibration_correction.cpp
             test_flip.cpp
             test_masked_ssim_metrics.cpp
             test_mask_rgb_cache.cpp

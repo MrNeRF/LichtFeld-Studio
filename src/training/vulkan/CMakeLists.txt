@@ -21,7 +21,6 @@ add_library(lfs_training_vulkan OBJECT
     ../ops/pair_sort_vulkan.cpp
     ../ops/training_image_vulkan.cpp
     ../ops/refine_vulkan.cpp
-    ../ops/calibration_vulkan.cpp
     ../ops/pose_vulkan.cpp
     ../ops/mrnf_vulkan.cpp
     ../ops/morton_vulkan.cpp
@@ -562,23 +561,6 @@ add_custom_command(
     DEPENDS "${_pose_source}" lfs_tensor_spirv_finalize
     COMMENT "slangc training/pose.spv"
     VERBATIM)
-set(_calibration_source "${CMAKE_CURRENT_SOURCE_DIR}/shaders/calibration.slang")
-set(_calibration_raw "${LFS_TRAINING_SPV_DIR}/calibration.raw.spv")
-set(_calibration_spv "${LFS_TRAINING_SPV_DIR}/calibration.spv")
-set(_calibration_manifest "${LFS_TRAINING_SPV_DIR}/calibration.json")
-add_custom_command(
-    OUTPUT "${_calibration_spv}" "${_calibration_manifest}"
-    BYPRODUCTS "${_calibration_raw}"
-    COMMAND ${LFS_TENSOR_SLANGC} "${_calibration_source}"
-            -entry main -stage compute -O -fp-mode precise
-            -line-directive-mode none -target spirv -profile glsl_460
-            -emit-spirv-directly
-            -I "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
-            -o "${_calibration_raw}"
-    COMMAND lfs_tensor_spirv_finalize "${_calibration_raw}" "${_calibration_spv}" "${_calibration_manifest}"
-    DEPENDS "${_calibration_source}" lfs_tensor_spirv_finalize
-    COMMENT "slangc training/calibration.spv"
-    VERBATIM)
 set(_mrnf_source "${CMAKE_CURRENT_SOURCE_DIR}/shaders/mrnf.slang")
 set(_mrnf_raw "${LFS_TRAINING_SPV_DIR}/mrnf.raw.spv")
 set(_mrnf_spv "${LFS_TRAINING_SPV_DIR}/mrnf.spv")
@@ -617,7 +599,6 @@ add_custom_command(
             refine "${_refine_spv}"
             blur_ssim "${_blur_ssim_spv}"
             pose "${_pose_spv}"
-            calibration "${_calibration_spv}"
             mrnf "${_mrnf_spv}"
             morton "${_morton_spv}" joint_morton "${_joint_morton_spv}"
             mcmc "${_mcmc_spv}"
@@ -632,11 +613,11 @@ add_custom_command(
     DEPENDS "${_blob_spv}" "${_structure_spv}" "${_flip_spv}" "${LFS_TRAINING_SPV_DIR}/fast_backward.spv" "${LFS_TRAINING_SPV_DIR}/fast_backward_atomic.spv" "${_gsplat_forward_spv}" "${LFS_TRAINING_SPV_DIR}/gsplat_backward.spv" "${LFS_TRAINING_SPV_DIR}/gsplat_backward_atomic.spv"
             "${LFS_TRAINING_SPV_DIR}/photometric_fused.spv" "${LFS_TRAINING_SPV_DIR}/photometric_fused_gradient.spv"
             "${_fast_forward_spv}" "${_fast_forward_quadrant_spv}" "${_photometric_spv}" "${_pair_sort_spv}" "${_pair_sort_match_spv}" "${_pair_sort_ballot_spv}" lfs_tensor_spirv_finalize
-            "${_sh_ops_spv}" "${_extra_loss_spv}" "${_adam_spv}" "${_training_image_spv}" "${_refine_spv}" "${_blur_ssim_spv}" "${_pose_spv}" "${_calibration_spv}" "${_mrnf_spv}" "${_morton_spv}" "${_joint_morton_spv}" "${_mcmc_spv}" "${_lpips_spv}" "${_lpips_coop_spv}" "${_lpips_halo_spv}" "${_masks_spv}" "${_mesh_mask_spv}" ${_bilateral_spv} "${_controller_spv}" "${_ppisp_spv}" "${_geometry_spv}" "${_geometry_fp32_spv}"
+            "${_sh_ops_spv}" "${_extra_loss_spv}" "${_adam_spv}" "${_training_image_spv}" "${_refine_spv}" "${_blur_ssim_spv}" "${_pose_spv}" "${_mrnf_spv}" "${_morton_spv}" "${_joint_morton_spv}" "${_mcmc_spv}" "${_lpips_spv}" "${_lpips_coop_spv}" "${_lpips_halo_spv}" "${_masks_spv}" "${_mesh_mask_spv}" ${_bilateral_spv} "${_controller_spv}" "${_ppisp_spv}" "${_geometry_spv}" "${_geometry_fp32_spv}"
             "${CMAKE_CURRENT_SOURCE_DIR}/training_shader_table.hpp"
     COMMENT "embed training shaders"
     VERBATIM)
-add_custom_target(lfs_training_vulkan_shaders DEPENDS "${_pair_sort_spv}" "${_pair_sort_match_spv}" "${_pair_sort_ballot_spv}" "${_geometry_spv}" "${_geometry_fp32_spv}" "${_sh_ops_spv}" "${_extra_loss_spv}" "${_adam_spv}" "${_morton_spv}" "${_joint_morton_spv}" "${_mcmc_spv}" "${_lpips_spv}" "${_lpips_coop_spv}" "${_lpips_halo_spv}" "${_masks_spv}" "${_mesh_mask_spv}" ${_bilateral_spv} "${_controller_spv}" "${_ppisp_spv}" "${_photometric_spv}" "${_fast_forward_spv}" "${_gsplat_forward_spv}" "${_training_image_spv}" "${_refine_spv}" "${_blur_ssim_spv}" "${_pose_spv}" "${_calibration_spv}" "${_mrnf_spv}" "${_training_shader_table}")
+add_custom_target(lfs_training_vulkan_shaders DEPENDS "${_pair_sort_spv}" "${_pair_sort_match_spv}" "${_pair_sort_ballot_spv}" "${_geometry_spv}" "${_geometry_fp32_spv}" "${_sh_ops_spv}" "${_extra_loss_spv}" "${_adam_spv}" "${_morton_spv}" "${_joint_morton_spv}" "${_mcmc_spv}" "${_lpips_spv}" "${_lpips_coop_spv}" "${_lpips_halo_spv}" "${_masks_spv}" "${_mesh_mask_spv}" ${_bilateral_spv} "${_controller_spv}" "${_ppisp_spv}" "${_photometric_spv}" "${_fast_forward_spv}" "${_gsplat_forward_spv}" "${_training_image_spv}" "${_refine_spv}" "${_blur_ssim_spv}" "${_pose_spv}" "${_mrnf_spv}" "${_training_shader_table}")
 add_dependencies(lfs_training_vulkan lfs_training_vulkan_shaders)
 target_sources(lfs_training_vulkan PRIVATE "${_training_shader_table}")
 target_include_directories(lfs_training_vulkan
