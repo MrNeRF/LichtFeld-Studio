@@ -408,7 +408,7 @@ namespace {
                     if (gpmf_metadata)
                         media["gpmf_metadata"] = std::move(*gpmf_metadata);
                     auto response = json{{"schema_version", 1}, {"success", true}, {"media", std::move(media)}};
-                    std::cout << (gpmf_metadata_requested ? json_detail::dump(response) : response.dump()) << '\n';
+                    std::cout << json_detail::dump(response) << '\n';
                 } catch (const std::bad_alloc&) {
                     if (!gpmf_metadata_requested)
                         throw;

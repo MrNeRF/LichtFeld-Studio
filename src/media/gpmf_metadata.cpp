@@ -209,7 +209,20 @@ namespace lfs::media {
             auto bytes = parent.data;
             while (auto field = next(bytes)) {
                 if (field->key == "ACCL" || field->key == "GYRO" || field->key == "GPS5" || field->key == "GPS9") {
-                    output.push_back(samples(*field, context, remaining));
+                    auto stream_budget = remaining;
+                    try {
+                        output.push_back(samples(*field, context, stream_budget));
+                    } catch (const Failure& failure) {
+                        if (failure.code != ErrorCode::Unsupported)
+                            throw;
+                        stream_budget = remaining;
+                        retain(sizeof(GpmfStream) + field->key.size() + failure.detail.size(), stream_budget, field->key);
+                        GpmfStream unsupported;
+                        unsupported.key = field->key;
+                        unsupported.unsupported_reason = failure.detail;
+                        output.push_back(std::move(unsupported));
+                    }
+                    remaining = stream_budget;
                     continue;
                 }
                 if (field->key == "STNM")

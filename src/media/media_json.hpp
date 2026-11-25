@@ -377,6 +377,10 @@ namespace lfs::media::json_detail {
         for (const auto& packet : packets) {
             json streams = json::array();
             for (const auto& stream : packet.streams) {
+                if (stream.unsupported_reason) {
+                    streams.push_back({{"key", stream.key}, {"status", "unsupported"}, {"reason", *stream.unsupported_reason}});
+                    continue;
+                }
                 json values = json::array();
                 for (std::size_t i = 0; i < stream.values.size(); i += stream.components) {
                     json row = json::array();

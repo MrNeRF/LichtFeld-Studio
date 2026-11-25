@@ -619,7 +619,18 @@ namespace {
                 "GPS9 retains all nine scaled fields in recorded order");
         auto unsupported_layout = record("TYPE", 'c', 9, 1, {'L', 'l', 'l', 'l', 'l', 'l', 'l', 'S', 'S'});
         append(unsupported_layout, record("GPS9", '?', 32, 1, gps9_values));
-        expect_error(nest("DEVC", nest("STRM", unsupported_layout)), ErrorCode::Unsupported);
+        auto mixed = nest("STRM", unsupported_layout);
+        append(mixed, nest("STRM", gyro));
+        broken.packets[0].bytes = nest("DEVC", mixed);
+        const auto partial = interpretGpmfMetadata(broken);
+        require(partial && partial->front().streams.size() == 2 &&
+                    partial->front().streams[0].unsupported_reason &&
+                    partial->front().streams[1].values.size() == 6,
+                "unsupported GPS9 layout preserves supported gyroscope data in the same packet");
+        const auto serialized = json_detail::gpmfMetadata(*partial)["packets"][0]["streams"];
+        require(serialized[0]["key"] == "GPS9" && serialized[0]["status"] == "unsupported" &&
+                    serialized[1]["samples"].size() == 2,
+                "GPMF JSON distinguishes an unsupported stream from decoded samples");
 
         Bytes coexist = nest("STRM", gps9_stream);
         append(coexist, nest("STRM", record("GPS5", 'l', 20, 1, Bytes(20))));
@@ -685,8 +696,6 @@ namespace {
         require(future && future->front().streams.front().values.front() == -100, "unknown field types preserve traversal to known samples");
         for (std::size_t length = 0; length < observed.packets[0].bytes.size(); ++length)
             expect_error(Bytes(observed.packets[0].bytes.begin(), observed.packets[0].bytes.begin() + length), ErrorCode::DataLoss);
-        expect_error(nest("DEVC", nest("STRM", record("GYRO", '?', 6, 2, numbers))), ErrorCode::Unsupported);
-        expect_error(nest("DEVC", nest("STRM", record("GYRO", 's', 4, 1, {0, 1, 0, 2}))), ErrorCode::Unsupported);
         expect_error(nest("DEVC", nest("STRM", record("GYRO", 's', 3, 1, {0, 1, 0}))), ErrorCode::DataLoss);
         Bytes invalid_counter = record("TSMP", 'L', 4, 2, integer(2, 8));
         append(invalid_counter, gyro);

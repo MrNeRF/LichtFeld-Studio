@@ -22,6 +22,8 @@ namespace lfs::media {
         std::string gps_utc;
         std::uint32_t components = 0;
         std::vector<double> values;
+        // Unsupported streams retain their key and diagnostic, with no decoded samples.
+        std::optional<std::string> unsupported_reason;
     };
     struct GpmfPacket {
         std::optional<Timestamp> pts;
