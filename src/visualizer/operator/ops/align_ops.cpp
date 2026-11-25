@@ -3,10 +3,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "align_ops.hpp"
-#include "model_alignment_ops.hpp"
 #include "core/services.hpp"
 #include "gui/gui_manager.hpp"
 #include "gui/string_keys.hpp"
+#include "model_alignment_ops.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "operator/operator_registry.hpp"

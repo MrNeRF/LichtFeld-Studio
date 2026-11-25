@@ -2,7 +2,6 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "operator/ops/model_alignment_ops.hpp"
 #include "input/input_controller.hpp"
 #include "core/collision.hpp"
 #include "core/error_bus.hpp"
@@ -33,6 +32,7 @@
 #include "operator/operator_context.hpp"
 #include "operator/operator_id.hpp"
 #include "operator/operator_registry.hpp"
+#include "operator/ops/model_alignment_ops.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
@@ -4355,7 +4355,8 @@ namespace lfs::vis {
         }
 
         if (auto* const rendering = services().renderingOrNull()) {
-            if (auto* alignment = op::ModelAlignmentOperator::active()) alignment->syncCamera(*active_viewport);
+            if (auto* alignment = op::ModelAlignmentOperator::active())
+                alignment->syncCamera(*active_viewport);
             rendering->markCameraPoseChanged();
         }
 

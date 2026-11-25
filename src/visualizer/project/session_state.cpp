@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-#include "operator/ops/model_alignment_ops.hpp"
 #include "project/session_state.hpp"
 #include "core/native_fs.hpp"
+#include "operator/ops/model_alignment_ops.hpp"
 
 #include "core/error.hpp"
 #include "core/error_bus.hpp"

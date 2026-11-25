@@ -199,7 +199,8 @@ namespace lfs::vis::tools {
         const auto screen_pos = projectToScreen(panel_proj, world);
         const float radius = markerScreenRadius(world, panel_proj);
         auto fill = color;
-        if (translucent) fill.a *= 0.22f;
+        if (translucent)
+            fill.a *= 0.22f;
         overlay.addCircleFilled(screen_pos, radius, fill, 32);
         if (translucent) {
             overlay.addCircleFilled(screen_pos, 2.0f, toOverlay(t.overlay.text), 12);

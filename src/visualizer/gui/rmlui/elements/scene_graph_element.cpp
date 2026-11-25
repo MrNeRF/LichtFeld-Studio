@@ -2,7 +2,6 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "operator/ops/model_alignment_ops.hpp"
 #include "gui/rmlui/elements/scene_graph_element.hpp"
 #include "core/error.hpp"
 #include "core/native_fs.hpp"
@@ -10,6 +9,7 @@
 #include "gui/rmlui/elements/scene_graph_drop_target.hpp"
 #include "gui/scene_graph_context_actions.hpp"
 #include "gui/scene_tree_session.hpp"
+#include "operator/ops/model_alignment_ops.hpp"
 
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"

@@ -169,8 +169,10 @@ namespace lfs::vis {
         {
             std::lock_guard<std::mutex> lock(
                 settings_mutex_);
-            if (position) settings_.split_position = std::clamp(*position, 0.0f, 1.0f);
-            if (offset) settings_.split_view_offset = *offset;
+            if (position)
+                settings_.split_position = std::clamp(*position, 0.0f, 1.0f);
+            if (offset)
+                settings_.split_view_offset = *offset;
             if (settings_.split_view_mode == mode) {
                 markDirty(DirtyFlag::SPLIT_VIEW, FrameReason::SettingsChange);
                 return;

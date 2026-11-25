@@ -3980,9 +3980,10 @@ namespace lfs::vis {
                         if (!slot.node || slot.slot_index >= transforms.size())
                             continue;
                         visible[slot.slot_index] = std::find(overrides->visible_nodes.begin(), overrides->visible_nodes.end(),
-                                                              slot.node->uuid) != overrides->visible_nodes.end();
+                                                             slot.node->uuid) != overrides->visible_nodes.end();
                         for (const auto& [uuid, transform] : overrides->transforms) {
-                            if (slot.node->uuid == uuid) transforms[slot.slot_index] = transform * transforms[slot.slot_index];
+                            if (slot.node->uuid == uuid)
+                                transforms[slot.slot_index] = transform * transforms[slot.slot_index];
                         }
                     }
                     return render_panel_image(viewport, size, panel, visible, nullptr, &transforms, output, &request);

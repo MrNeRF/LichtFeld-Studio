@@ -2,7 +2,6 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "operator/ops/model_alignment_ops.hpp"
 #include "visualizer_impl.hpp"
 #include "core/animatable_property.hpp"
 #include "core/crash_handler.hpp"
@@ -36,6 +35,7 @@
 #include "operator/ops/align_ops.hpp"
 #include "operator/ops/crop_polygon_ops.hpp"
 #include "operator/ops/edit_ops.hpp"
+#include "operator/ops/model_alignment_ops.hpp"
 #include "operator/ops/scale_distance_ops.hpp"
 #include "operator/ops/scene_ops.hpp"
 #include "operator/ops/selection_ops.hpp"
@@ -1087,7 +1087,8 @@ namespace lfs::vis {
 
             if (rendering_manager_) {
                 if (isOnViewerThread())
-                    if (auto* alignment = op::ModelAlignmentOperator::active()) alignment->syncCamera(viewport_);
+                    if (auto* alignment = op::ModelAlignmentOperator::active())
+                        alignment->syncCamera(viewport_);
                 rendering_manager_->markCameraPoseChanged();
             }
         });
@@ -1113,7 +1114,8 @@ namespace lfs::vis {
             vp.camera.setPivot(target);
 
             if (isOnViewerThread())
-                if (auto* alignment = op::ModelAlignmentOperator::active()) alignment->syncCamera(vp);
+                if (auto* alignment = op::ModelAlignmentOperator::active())
+                    alignment->syncCamera(vp);
             rendering_manager_->markCameraPoseChanged();
         });
         callback_cleanup_.add([] { vis::set_set_view_for_panel_callback(nullptr); });

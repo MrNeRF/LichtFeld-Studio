@@ -6,10 +6,10 @@
 #include "core/point_cloud.hpp"
 #include "core/services.hpp"
 #include "operation/undo_history.hpp"
-#include "operator/ops/align_ops.hpp"
-#include "operator/ops/model_alignment_ops.hpp"
 #include "operator/operator_registry.hpp"
+#include "operator/ops/align_ops.hpp"
 #include "operator/ops/edit_ops.hpp"
+#include "operator/ops/model_alignment_ops.hpp"
 #include "rendering/point_cloud_vulkan_renderer.hpp"
 #include "rendering/viewport_artifact_service.hpp"
 #include "rendering/viewport_request_builder.hpp"
@@ -1268,7 +1268,7 @@ namespace lfs::vis::op {
         };
         const auto undo = [&] {
             return operators().dispatchModalEvent({.type = ModalEvent::Type::ACTION,
-                .data = ActionEvent{.action = input::Action::UNDO}});
+                                                   .data = ActionEvent{.action = input::Action::UNDO}});
         };
         ASSERT_TRUE(sample({0, 0, 0}, SplitViewPanelId::Right));
         EXPECT_TRUE(active->pendingPairOnRight());
@@ -1315,7 +1315,8 @@ namespace lfs::vis::op {
         EXPECT_FALSE(active->session()->preview);
         EXPECT_EQ(active->pointState().getPickedPoints().size(), 6u);
         EXPECT_EQ(operators().dispatchModalEvent({.type = ModalEvent::Type::ACTION,
-            .data = ActionEvent{.action = input::Action::REDO}}), OperatorResult::RUNNING_MODAL);
+                                                  .data = ActionEvent{.action = input::Action::REDO}}),
+                  OperatorResult::RUNNING_MODAL);
         EXPECT_EQ(undoHistory().generation(), generation);
         operators().cancelModalOperator();
         EXPECT_EQ(ModelAlignmentOperator::active(), nullptr);
@@ -1325,8 +1326,6 @@ namespace lfs::vis::op {
         ASSERT_TRUE(undoHistory().undo().success);
         EXPECT_TRUE(operators().poll(BuiltinOp::Redo));
         EXPECT_EQ(manager_->getNodeTransform("target"), original);
-
     }
-
 
 } // namespace lfs::vis::op

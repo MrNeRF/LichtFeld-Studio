@@ -2,7 +2,6 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "operator/ops/model_alignment_ops.hpp"
 #include "gui/gui_manager.hpp"
 #include "control/command_api.hpp"
 #include "core/camera.hpp"
@@ -26,6 +25,7 @@
 #include "gui/viewport_gizmo_geometry.hpp"
 #include "gui/volume_guide_visibility.hpp"
 #include "gui/vram_hud_sample_policy.hpp"
+#include "operator/ops/model_alignment_ops.hpp"
 #include "preferences.hpp"
 #include "window/vulkan_result.hpp"
 #include <ft2build.h>
@@ -6994,9 +6994,9 @@ namespace lfs::vis::gui {
                         const auto* reference = scene.getNodeByUuid(alignment->nodes[0]);
                         const auto* mobile = scene.getNodeByUuid(alignment->nodes[1]);
                         info.left_name = alignment->composite == SplitViewPanelId::Left ? LOC("align.composite_name")
-                            : LOCF("align.reference_name", reference ? reference->name : "");
+                                                                                        : LOCF("align.reference_name", reference ? reference->name : "");
                         info.right_name = alignment->composite == SplitViewPanelId::Right ? LOC("align.composite_name")
-                            : LOCF("align.mobile_name", mobile ? mobile->name : "");
+                                                                                          : LOCF("align.mobile_name", mobile ? mobile->name : "");
                     }
                     if (alignment ||
                         splitViewUsesPLYComparison(rendering->getSettings().split_view_mode)) {

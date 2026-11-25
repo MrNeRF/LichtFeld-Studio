@@ -1,7 +1,6 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "operator/ops/model_alignment_ops.hpp"
 #include "tools/align_tool.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/number_format.hpp"
@@ -9,6 +8,7 @@
 #include "gui/string_keys.hpp"
 #include "operator/operator_registry.hpp"
 #include "operator/ops/align_ops.hpp"
+#include "operator/ops/model_alignment_ops.hpp"
 #include "point_pick_overlay.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/screen_overlay_renderer.hpp"
@@ -107,32 +107,32 @@ namespace lfs::vis::tools {
         void drawAlignmentPairs(lfs::rendering::ScreenOverlayRenderer& overlay, const PanelProjection& projection,
                                 const op::ModelAlignmentOperator& alignment, SplitViewPanelId panel, float label_size) {
             using lfs::rendering::OverlayColor;
-        static constexpr std::array pair_colors{
-            OverlayColor{0.30f, 0.79f, 1.00f, 1.0f}, // cyan
-            OverlayColor{1.00f, 0.71f, 0.24f, 1.0f}, // amber
-            OverlayColor{0.82f, 0.58f, 1.00f, 1.0f}, // violet
-            OverlayColor{0.51f, 0.88f, 0.39f, 1.0f}, // lime
-            OverlayColor{1.00f, 0.46f, 0.62f, 1.0f}, // rose
-            OverlayColor{0.20f, 0.86f, 0.69f, 1.0f}, // mint
-            OverlayColor{1.00f, 0.91f, 0.37f, 1.0f}, // yellow
-            OverlayColor{0.52f, 0.65f, 1.00f, 1.0f}, // blue
-            OverlayColor{1.00f, 0.53f, 0.30f, 1.0f}, // orange
-            OverlayColor{0.96f, 0.57f, 0.94f, 1.0f}, // magenta
-        };
+            static constexpr std::array pair_colors{
+                OverlayColor{0.30f, 0.79f, 1.00f, 1.0f}, // cyan
+                OverlayColor{1.00f, 0.71f, 0.24f, 1.0f}, // amber
+                OverlayColor{0.82f, 0.58f, 1.00f, 1.0f}, // violet
+                OverlayColor{0.51f, 0.88f, 0.39f, 1.0f}, // lime
+                OverlayColor{1.00f, 0.46f, 0.62f, 1.0f}, // rose
+                OverlayColor{0.20f, 0.86f, 0.69f, 1.0f}, // mint
+                OverlayColor{1.00f, 0.91f, 0.37f, 1.0f}, // yellow
+                OverlayColor{0.52f, 0.65f, 1.00f, 1.0f}, // blue
+                OverlayColor{1.00f, 0.53f, 0.30f, 1.0f}, // orange
+                OverlayColor{0.96f, 0.57f, 0.94f, 1.0f}, // magenta
+            };
 
             const auto& points = alignment.pointState().getPickedPoints();
             const auto selected = alignment.pointState().getSelectedPoint();
             const auto& slots = alignment.pairColorSlots();
             for (size_t i = 0; i < points.size(); ++i) {
                 const auto side = alignment.pendingPairOnRight() && i + 1 == points.size() ? 1u : i % 2;
-                if (splitViewPanelIndex(panel) != side) continue;
+                if (splitViewPanelIndex(panel) != side)
+                    continue;
                 const auto pair = i / 2;
                 const auto color = pair_colors[(pair < slots.size() ? slots[pair] : pair) % pair_colors.size()];
                 drawPointMarker(overlay, projection, points[i], selected && *selected / 2 == static_cast<int>(pair),
                                 color, label_size, std::to_string(pair + 1), true);
             }
         }
-
 
         void drawEdgeLengthLabels(lfs::rendering::ScreenOverlayRenderer& overlay,
                                   const PanelProjection& panel_proj,
