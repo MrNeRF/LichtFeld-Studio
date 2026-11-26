@@ -1022,9 +1022,9 @@ namespace lfs::vis {
         void handleSceneLoaded();
         void handleSceneChanged(uint32_t mutation_flags);
         void handleSceneCleared();
-        void handlePLYVisibilityChanged();
-        void handlePLYAdded();
-        void handlePLYRemoved();
+        void handleNodeVisibilityChanged();
+        void handleNodeAdded();
+        void handleNodeRemoved();
         void handleCropBoxChanged(bool enabled);
         void handleEllipsoidChanged(bool enabled);
         void handlePointCloudModeChanged(const lfs::core::events::ui::PointCloudModeChanged& event);

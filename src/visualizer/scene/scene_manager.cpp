@@ -669,7 +669,7 @@ namespace lfs::vis {
             removePLY(cmd.name, cmd.keep_children);
         });
 
-        event_handlers_.subscribe<cmd::SetPLYVisibility>([this](const auto& cmd) {
+        event_handlers_.subscribe<cmd::SetNodeVisibility>([this](const auto& cmd) {
             setPLYVisibility(cmd.name, cmd.visible);
         });
 
@@ -725,10 +725,10 @@ namespace lfs::vis {
                 auto [hidden, shown] = scene_.cycleVisibilityWithNames();
 
                 if (!hidden.empty()) {
-                    cmd::SetPLYVisibility{.name = hidden, .visible = false}.emit();
+                    cmd::SetNodeVisibility{.name = hidden, .visible = false}.emit();
                 }
                 if (!shown.empty()) {
-                    cmd::SetPLYVisibility{.name = shown, .visible = true}.emit();
+                    cmd::SetNodeVisibility{.name = shown, .visible = true}.emit();
                     LOG_DEBUG("Cycled to: {}", shown);
                 }
             }
@@ -1107,7 +1107,7 @@ namespace lfs::vis {
 
                 python::set_application_scene(&scene_);
 
-                state::PLYAdded{
+                state::NodeAdded{
                     .name = added_name,
                     .uuid = added->uuid,
                     .node_gaussians = 0,
@@ -1158,7 +1158,7 @@ namespace lfs::vis {
 
                 python::set_application_scene(&scene_);
 
-                state::PLYAdded{
+                state::NodeAdded{
                     .name = added_name,
                     .uuid = added->uuid,
                     .node_gaussians = gaussian_count,
@@ -1190,8 +1190,8 @@ namespace lfs::vis {
                     if (cropbox_id != core::NULL_NODE) {
                         const auto* cropbox_node = scene_.getNodeById(cropbox_id);
                         if (cropbox_node) {
-                            LOG_DEBUG("Emitting PLYAdded for cropbox '{}'", cropbox_node->name);
-                            state::PLYAdded{
+                            LOG_DEBUG("Emitting NodeAdded for cropbox '{}'", cropbox_node->name);
+                            state::NodeAdded{
                                 .name = cropbox_node->name,
                                 .uuid = cropbox_node->uuid,
                                 .node_gaussians = 0,
@@ -1343,7 +1343,7 @@ namespace lfs::vis {
                     splat_paths_[added->uuid] = path;
                 }
 
-                state::PLYAdded{
+                state::NodeAdded{
                     .name = added_name,
                     .uuid = added->uuid,
                     .node_gaussians = 0,
@@ -1405,7 +1405,7 @@ namespace lfs::vis {
                 }
             }
 
-            state::PLYAdded{
+            state::NodeAdded{
                 .name = added_name,
                 .uuid = added->uuid,
                 .node_gaussians = gaussian_count,
@@ -1892,7 +1892,7 @@ namespace lfs::vis {
         if (removed_selected_crop_volume && scene_.getNodeById(removed_parent_id)) {
             selectNode(removed_parent_id);
         }
-        state::PLYRemoved{
+        state::NodeRemoved{
             .name = node_name,
             .uuid = removed_uuid,
             .children_kept = keep_children,
@@ -4293,7 +4293,7 @@ namespace lfs::vis {
 
                 LOG_INFO("Cropped '{}': {} -> {} visible", node_name, original_visible, new_visible);
 
-                state::PLYAdded{
+                state::NodeAdded{
                     .name = node_name,
                     .uuid = node->uuid,
                     .node_gaussians = new_visible,
@@ -4454,7 +4454,7 @@ namespace lfs::vis {
                     continue;
                 scene_.markPayloadDiverged(node->id);
 
-                state::PLYAdded{
+                state::NodeAdded{
                     .name = node_name,
                     .uuid = node->uuid,
                     .node_gaussians = new_visible,
@@ -4507,7 +4507,7 @@ namespace lfs::vis {
             LOG_INFO("Polygon cropped '{}': {} -> {} visible", node_name, original_visible, new_visible);
             if (applied_mask.is_valid() && new_visible != original_visible) {
                 scene_.markPayloadDiverged(node->id);
-                state::PLYAdded{
+                state::NodeAdded{
                     .name = node_name,
                     .uuid = node->uuid,
                     .node_gaussians = new_visible,
@@ -4967,7 +4967,7 @@ namespace lfs::vis {
             python::set_application_scene(&scene_);
         }
         selection_.invalidateNodeMask();
-        state::PLYAdded{
+        state::NodeAdded{
             .name = unique_name,
             .uuid = scene_.getNodeUuid(group_id),
             .node_gaussians = 0,
@@ -5003,7 +5003,7 @@ namespace lfs::vis {
         }
 
         selection_.invalidateNodeMask();
-        state::PLYAdded{
+        state::NodeAdded{
             .name = sequence_name,
             .uuid = scene_.getNodeUuid(sequence_id),
             .node_gaussians = frame_count,
@@ -5090,7 +5090,7 @@ namespace lfs::vis {
         }
 
         if (const auto* added = scene_.getNodeById(node_id)) {
-            state::PLYAdded{
+            state::NodeAdded{
                 .name = generated_name,
                 .uuid = added->uuid,
                 .node_gaussians = added->gaussian_count.load(std::memory_order_acquire),
@@ -5170,14 +5170,14 @@ namespace lfs::vis {
         }
         selection_.invalidateNodeMask();
 
-        // Emit PLYAdded for duplicated node tree
+        // Emit NodeAdded for duplicated node tree
         std::function<void(const std::string&, const std::string&)> emit_added =
             [&](const std::string& n, const std::string& pn) {
                 const auto* node = scene_.getNode(n);
                 if (!node)
                     return;
 
-                state::PLYAdded{
+                state::NodeAdded{
                     .name = node->name,
                     .uuid = node->uuid,
                     .node_gaussians = node->gaussian_count.load(std::memory_order_acquire),
@@ -5363,7 +5363,7 @@ namespace lfs::vis {
         }
         const auto emit_removed_events = [&] {
             for (const auto& [child_name, child_uuid] : children_to_remove) {
-                state::PLYRemoved{
+                state::NodeRemoved{
                     .name = child_name,
                     .uuid = child_uuid,
                     .children_kept = false,
@@ -5373,7 +5373,7 @@ namespace lfs::vis {
                     .emit();
             }
 
-            state::PLYRemoved{
+            state::NodeRemoved{
                 .name = group_name,
                 .uuid = group_uuid,
                 .children_kept = false,
@@ -5394,10 +5394,10 @@ namespace lfs::vis {
 
         emit_removed_events();
 
-        // Emit PLYAdded for merged node
+        // Emit NodeAdded for merged node
         const auto* merged = scene_.getNode(group_name);
         if (merged) {
-            state::PLYAdded{
+            state::NodeAdded{
                 .name = merged->name,
                 .uuid = merged->uuid,
                 .node_gaussians = merged->gaussian_count.load(std::memory_order_acquire),
@@ -5935,7 +5935,7 @@ namespace lfs::vis {
         scene_.markPayloadDiverged(pasted_id);
         selection_.invalidateNodeMask();
 
-        state::PLYAdded{
+        state::NodeAdded{
             .name = name,
             .uuid = scene_.getNodeUuid(pasted_id),
             .node_gaussians = count,
@@ -6174,7 +6174,7 @@ namespace lfs::vis {
                 pasteNodeHierarchy(*entry.hierarchy, pasted_node->id);
             }
 
-            state::PLYAdded{
+            state::NodeAdded{
                 .name = pasted_name,
                 .uuid = pasted_node->uuid,
                 .node_gaussians = pasted_node->gaussian_count.load(std::memory_order_acquire),
@@ -6189,7 +6189,7 @@ namespace lfs::vis {
                 const core::NodeId cropbox_id = scene_.getCropBoxForSplat(pasted_node->id);
                 if (cropbox_id != core::NULL_NODE) {
                     if (const auto* cropbox_node = scene_.getNodeById(cropbox_id)) {
-                        state::PLYAdded{
+                        state::NodeAdded{
                             .name = cropbox_node->name,
                             .uuid = cropbox_node->uuid,
                             .node_gaussians = 0,

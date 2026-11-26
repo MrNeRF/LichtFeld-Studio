@@ -2492,7 +2492,7 @@ NB_MODULE(lichtfeld, m) {
                     return;
                 }
             }
-            lfs::core::events::cmd::SetPLYVisibility{.name = name, .visible = visible}.emit();
+            lfs::core::events::cmd::SetNodeVisibility{.name = name, .visible = visible}.emit();
         },
         nb::arg("name"), nb::arg("visible"), "Set visibility of a scene node by name");
 

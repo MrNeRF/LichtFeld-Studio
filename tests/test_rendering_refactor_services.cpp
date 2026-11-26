@@ -4475,10 +4475,10 @@ namespace lfs::vis {
             EXPECT_FLOAT_EQ(manager.getSettings().split_position, 0.35f);
         }
         scene.removeNode("third");
-        lfs::core::events::state::PLYRemoved{}.emit();
+        lfs::core::events::state::NodeRemoved{}.emit();
         EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::NodeComparison);
         scene.removeNode("second");
-        lfs::core::events::state::PLYRemoved{}.emit();
+        lfs::core::events::state::NodeRemoved{}.emit();
         EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
     }
 

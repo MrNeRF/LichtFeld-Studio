@@ -8263,7 +8263,7 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
         settings.split_view_mode = SplitViewMode::NodeComparison;
         rendering->updateSettings(settings);
         std::atomic<int> allocations{0};
-        core::events::state::PLYAdded::when([&](const auto&) {
+        core::events::state::NodeAdded::when([&](const auto&) {
             viewer.getScene().setCombinedModelAllocator(
                 [&](core::TensorShape, size_t, core::DataType, std::string_view) -> core::Tensor {
                     ++allocations;
@@ -8352,7 +8352,7 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
 
     TEST_F(VisualizerImplResetTest, QueuedBatchAttachmentGetsRollbackProtection) {
         VisualizerImpl viewer(projectOptions());
-        core::events::state::PLYAdded::when([](const auto& event) {
+        core::events::state::NodeAdded::when([](const auto& event) {
             if (event.name == "queued-failure")
                 throw std::runtime_error("GPU memory exhausted during attachment");
         });
@@ -8400,7 +8400,7 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
         const auto first = makeSplatFixture("selection-first");
         const auto second = makeSplatFixture("selection-second");
         core::NodeId user_choice = core::NULL_NODE;
-        core::events::state::PLYAdded::when([&](const auto& e) {
+        core::events::state::NodeAdded::when([&](const auto& e) {
             if (e.name == "selection-second") {
                 user_choice = viewer.getScene().addGroup("user-choice");
                 viewer.getScene().setCombinedModelAllocator(
@@ -8496,8 +8496,8 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
         std::atomic<bool> worker_allocated{false};
         const auto main_thread = std::this_thread::get_id();
         VisualizerImpl viewer(projectOptions());
-        core::events::state::PLYAdded::when([&](const auto&) {
-            // Attachment installs its own allocator before emitting PLYAdded.
+        core::events::state::NodeAdded::when([&](const auto&) {
+            // Attachment installs its own allocator before emitting NodeAdded.
             viewer.getScene().setCombinedModelAllocator(
                 [&](core::TensorShape shape, size_t, core::DataType dtype, std::string_view) {
                     if (std::this_thread::get_id() != main_thread)
@@ -9126,7 +9126,7 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
             EXPECT_EQ(e.failures.front().first.filename(), "queued-failed.ply");
             EXPECT_TRUE(gui::isImportOutOfMemory(e.failures.front().second));
         });
-        core::events::state::PLYAdded::when([](const auto& e) {
+        core::events::state::NodeAdded::when([](const auto& e) {
             if (e.name == "queued-failed")
                 throw std::runtime_error("cuMemCreate: CUDA_ERROR_OUT_OF_MEMORY");
         });
@@ -9218,7 +9218,7 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
                 message += path.filename().string() + ": " + reason + "\n";
             failures.push_back(message);
         });
-        core::events::state::PLYAdded::when([&](const auto& e) {
+        core::events::state::NodeAdded::when([&](const auto& e) {
             if (e.name == "capacity-second") {
                 viewer.getScene().renameNode("capacity-second", "renamed-provisional");
                 viewer.getScene().setCombinedModelAllocator(
@@ -9249,7 +9249,7 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
 
     TEST_F(VisualizerImplResetTest, FirstAttachmentFailureReportsBatchWithoutCancelingIt) {
         VisualizerImpl viewer(projectOptions());
-        core::events::state::PLYAdded::when([](const auto& e) {
+        core::events::state::NodeAdded::when([](const auto& e) {
             if (e.name == "first-fails")
                 throw std::runtime_error("GPU memory exhausted during attachment");
         });
@@ -9279,7 +9279,7 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
         VisualizerImpl viewer(projectOptions());
         const auto first = makeSplatFixture("attached-first");
         const auto second = makeSplatFixture("attached-second");
-        core::events::state::PLYAdded::when([&](const auto& e) {
+        core::events::state::NodeAdded::when([&](const auto& e) {
             if (e.name == "attached-second") {
                 viewer.getScene().renameNode(e.name, "renamed-before-failure");
                 throw std::runtime_error("GPU memory exhausted during attachment");

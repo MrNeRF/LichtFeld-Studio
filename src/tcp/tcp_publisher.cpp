@@ -27,8 +27,8 @@ namespace lfs::core::events::state {
     ENABLE_TO_JSON(TrainingStopped, iteration, user_requested);
 
     ENABLE_TO_JSON(ModelUpdated, iteration, num_gaussians);
-    ENABLE_TO_JSON(PLYAdded, name, uuid, node_gaussians, total_gaussians, is_visible, parent_name, is_group, node_type);
-    ENABLE_TO_JSON(PLYRemoved, name, uuid, children_kept, parent_of_removed);
+    ENABLE_TO_JSON(NodeAdded, name, uuid, node_gaussians, total_gaussians, is_visible, parent_name, is_group, node_type);
+    ENABLE_TO_JSON(NodeRemoved, name, uuid, children_kept, parent_of_removed);
     ENABLE_TO_JSON(NodeReparented, name, old_parent, new_parent);
 
     // Data loading
@@ -163,8 +163,8 @@ namespace lfs::tcp {
             SUBSCRIBE_EVENT(TrainingCompleted);
             SUBSCRIBE_EVENT(TrainingStopped);
             SUBSCRIBE_EVENT(ModelUpdated);
-            SUBSCRIBE_EVENT(PLYAdded);
-            SUBSCRIBE_EVENT(PLYRemoved);
+            SUBSCRIBE_EVENT(NodeAdded);
+            SUBSCRIBE_EVENT(NodeRemoved);
             SUBSCRIBE_EVENT(NodeReparented);
             SUBSCRIBE_EVENT(DatasetLoadStarted);
             SUBSCRIBE_EVENT(DatasetLoadProgress);

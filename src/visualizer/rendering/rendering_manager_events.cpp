@@ -74,9 +74,9 @@ namespace lfs::vis {
         event_handlers_.subscribe<state::SceneChanged>(
             [this](const auto& event) { handleSceneChanged(event.mutation_flags); });
         event_handlers_.subscribe<state::SceneCleared>([this](const auto&) { handleSceneCleared(); });
-        event_handlers_.subscribe<cmd::SetPLYVisibility>([this](const auto&) { handlePLYVisibilityChanged(); });
-        event_handlers_.subscribe<state::PLYAdded>([this](const auto&) { handlePLYAdded(); });
-        event_handlers_.subscribe<state::PLYRemoved>([this](const auto&) { handlePLYRemoved(); });
+        event_handlers_.subscribe<cmd::SetNodeVisibility>([this](const auto&) { handleNodeVisibilityChanged(); });
+        event_handlers_.subscribe<state::NodeAdded>([this](const auto&) { handleNodeAdded(); });
+        event_handlers_.subscribe<state::NodeRemoved>([this](const auto&) { handleNodeRemoved(); });
         event_handlers_.subscribe<ui::CropBoxChanged>(
             [this](const auto& event) { handleCropBoxChanged(event.enabled); });
         event_handlers_.subscribe<ui::EllipsoidChanged>(
@@ -347,16 +347,16 @@ namespace lfs::vis {
         markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
     }
 
-    void RenderingManager::handlePLYVisibilityChanged() {
+    void RenderingManager::handleNodeVisibilityChanged() {
         markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
     }
 
-    void RenderingManager::handlePLYAdded() {
-        LOG_DEBUG("PLY added, marking render dirty");
+    void RenderingManager::handleNodeAdded() {
+        LOG_DEBUG("Node added, marking render dirty");
         markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
     }
 
-    void RenderingManager::handlePLYRemoved() {
+    void RenderingManager::handleNodeRemoved() {
         SplitViewService::ModeChangeResult result;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);

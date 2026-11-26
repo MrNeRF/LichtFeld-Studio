@@ -1038,13 +1038,13 @@ namespace lfs::python {
         EXPECT_EQ(scene_manager.getPlyPath("Renamed Model"), source_path);
     }
 
-    TEST_F(SceneValidityTest, PlyStateEventsCarryUuidWithoutChangingExistingFields) {
+    TEST_F(SceneValidityTest, NodeStateEventsCarryUuidWithoutChangingExistingFields) {
         lfs::vis::SceneManager scene_manager;
-        std::optional<core::events::state::PLYAdded> added_event;
-        std::optional<core::events::state::PLYRemoved> removed_event;
-        auto added_handler = core::events::state::PLYAdded::when(
+        std::optional<core::events::state::NodeAdded> added_event;
+        std::optional<core::events::state::NodeRemoved> removed_event;
+        auto added_handler = core::events::state::NodeAdded::when(
             [&](const auto& event) { added_event = event; });
-        auto removed_handler = core::events::state::PLYRemoved::when(
+        auto removed_handler = core::events::state::NodeRemoved::when(
             [&](const auto& event) { removed_event = event; });
 
         const std::string group_name = scene_manager.addGroupNode("Event Group");
