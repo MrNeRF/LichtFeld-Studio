@@ -929,6 +929,8 @@
     "rename_conflict_message": "Ein anderes Szenenelement heißt bereits '{}'. Wählen Sie Umbenennen, um die Bearbeitung fortzusetzen, oder Abbrechen, um den aktuellen Namen beizubehalten.",
     "duplicate": "Duplizieren",
     "save_to_disk": "Auf Datenträger speichern",
+    "compare_left": "Links vergleichen",
+    "compare_right": "Rechts vergleichen",
     "go_to_camera_view": "Zur Kameraansicht wechseln",
     "fit_to_scene": "An Szene anpassen",
     "fit_to_scene_trimmed": "An Szene anpassen (beschnitten)",

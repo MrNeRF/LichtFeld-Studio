@@ -942,6 +942,8 @@
     "rename_conflict_message": "Un altro elemento della scena si chiama già '{}'. Scegli Rinomina per continuare la modifica oppure Annulla per mantenere il nome attuale.",
     "duplicate": "Duplica",
     "save_to_disk": "Salva su disco",
+    "compare_left": "Confronta a sinistra",
+    "compare_right": "Confronta a destra",
     "go_to_camera_view": "Vai alla Vista Fotocamera",
     "fit_to_scene": "Adatta alla Scena",
     "fit_to_scene_trimmed": "Adatta alla Scena (Ritagliato)",

@@ -929,6 +929,8 @@
     "rename_conflict_message": "另一个场景元素已命名为“{}”。选择“重命名”继续编辑，或选择“取消”保留当前名称。",
     "duplicate": "复制",
     "save_to_disk": "保存到磁盘",
+    "compare_left": "在左侧比较",
+    "compare_right": "在右侧比较",
     "go_to_camera_view": "转到相机视图",
     "fit_to_scene": "适应场景",
     "fit_to_scene_trimmed": "适应场景（已修剪）",

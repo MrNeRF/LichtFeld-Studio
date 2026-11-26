@@ -929,6 +929,8 @@
     "rename_conflict_message": "Een ander scène-element heet al '{}'. Kies Hernoemen om verder te bewerken of Annuleren om de huidige naam te behouden.",
     "duplicate": "Dupliceren",
     "save_to_disk": "Opslaan naar schijf",
+    "compare_left": "Links vergelijken",
+    "compare_right": "Rechts vergelijken",
     "go_to_camera_view": "Ga naar Camera Weergave",
     "fit_to_scene": "Aanpassen aan Scène",
     "fit_to_scene_trimmed": "Aanpassen aan Scène (Bijgesneden)",

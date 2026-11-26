@@ -929,6 +929,8 @@
     "rename_conflict_message": "Inny element sceny ma już nazwę '{}'. Wybierz Zmień nazwę, aby kontynuować edycję, lub Anuluj, aby zachować obecną nazwę.",
     "duplicate": "Duplikuj",
     "save_to_disk": "Zapisz na dysk",
+    "compare_left": "Porównaj po lewej",
+    "compare_right": "Porównaj po prawej",
     "go_to_camera_view": "Przejdź do Widoku Kamery",
     "fit_to_scene": "Dopasuj do Sceny",
     "fit_to_scene_trimmed": "Dopasuj do Sceny (Przycięty)",

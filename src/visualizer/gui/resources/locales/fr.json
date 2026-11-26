@@ -929,6 +929,8 @@
     "rename_conflict_message": "Un autre élément de la scène porte déjà le nom '{}'. Choisissez Renommer pour continuer la modification ou Annuler pour conserver le nom actuel.",
     "duplicate": "Dupliquer",
     "save_to_disk": "Enregistrer sur le disque",
+    "compare_left": "Comparer à gauche",
+    "compare_right": "Comparer à droite",
     "go_to_camera_view": "Aller à la Vue Caméra",
     "fit_to_scene": "Ajuster à la Scène",
     "fit_to_scene_trimmed": "Ajuster à la Scène (Rogné)",

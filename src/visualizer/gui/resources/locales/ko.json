@@ -929,6 +929,8 @@
     "rename_conflict_message": "다른 장면 요소의 이름이 이미 '{}'입니다. 편집을 계속하려면 이름 바꾸기를, 현재 이름을 유지하려면 취소를 선택하세요.",
     "duplicate": "복제",
     "save_to_disk": "디스크에 저장",
+    "compare_left": "왼쪽에서 비교",
+    "compare_right": "오른쪽에서 비교",
     "go_to_camera_view": "카메라 뷰로 이동",
     "fit_to_scene": "씬에 맞추기",
     "fit_to_scene_trimmed": "씬에 맞추기 (트림됨)",
