@@ -109,7 +109,6 @@ namespace lfs::vis::gui {
         void setSideDocks(bool left_visible, bool left_collapsed, bool right_visible, bool right_collapsed,
                           bool bottom_visible = false, bool bottom_collapsed = false);
         std::function<void()> on_bottom_dock_toggle;
-        void setLeftDockResizeIndicator(bool visible, bool active, float thickness);
         void setSplitDividerOverlay(SplitDividerOverlayState state);
         void setGTMetricsOverlay(GTMetricsOverlayState state);
         void setLodStatsOverlay(LodStatsOverlayState state);
@@ -179,7 +178,6 @@ namespace lfs::vis::gui {
         void refreshGTMetricsOverlayFromStore();
         void applySplitDividerOverlay();
         bool updateSplitDividerToolbarClearance();
-        void applyLeftDockResizeIndicator();
         void applyGTMetricsOverlay();
         void applyLodStatsOverlay();
         void applyProjectDragOverlay();
@@ -202,7 +200,6 @@ namespace lfs::vis::gui {
             PointerDrag = 1u << 13,
             Keyboard = 1u << 14,
             LodStats = 1u << 15,
-            LeftDockResize = 1u << 16,
             PerfHud = 1u << 17,
             ProjectDrag = 1u << 18,
             ThemePresentation = 1u << 19,
@@ -272,9 +269,6 @@ namespace lfs::vis::gui {
         int last_render_w_ = 0;
         int last_render_h_ = 0;
         CachedVulkanContextRender direct_cache_;
-        bool left_dock_resize_visible_ = false;
-        bool left_dock_resize_active_ = false;
-        float left_dock_resize_thickness_ = 0.0f;
         SplitDividerOverlayState split_divider_overlay_;
         float split_divider_toolbar_clearance_ = 0.0f;
         GTMetricsOverlayState gt_metrics_overlay_;

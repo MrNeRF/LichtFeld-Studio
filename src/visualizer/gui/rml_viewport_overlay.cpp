@@ -58,8 +58,7 @@ namespace lfs::vis::gui {
                    element->GetId() != "dm-root" &&
                    element->GetId() != "viewport-content" &&
                    !element->IsClassSet("viewport-split-divider") &&
-                   !element->IsClassSet("comparison-name") &&
-                   !element->IsClassSet("left-dock-resize-indicator");
+                   !element->IsClassSet("comparison-name");
         }
 
         [[nodiscard]] bool isViewportOverlayHoverRoot(const Rml::Element* const element) {
@@ -155,7 +154,6 @@ namespace lfs::vis::gui {
         append(RenderReason::PointerDrag, "pointer_drag");
         append(RenderReason::Keyboard, "keyboard");
         append(RenderReason::LodStats, "lod_stats");
-        append(RenderReason::LeftDockResize, "left_dock_resize");
         append(RenderReason::ProjectDrag, "project_drag");
         append(RenderReason::ThemePresentation, "theme_presentation");
         return sources.empty() ? "unknown" : sources;
@@ -277,7 +275,6 @@ namespace lfs::vis::gui {
             document_->Show();
             applyGTMetricsOverlay();
             applySplitDividerOverlay();
-            applyLeftDockResizeIndicator();
             applyLodStatsOverlay();
             applyProjectDragOverlay();
             applySideDocks();
@@ -502,22 +499,6 @@ namespace lfs::vis::gui {
         split_divider_overlay_ = state;
         applySplitDividerOverlay();
         markRenderNeeded(RenderReason::SplitDivider);
-    }
-
-    void RmlViewportOverlay::setLeftDockResizeIndicator(
-        const bool visible, const bool active, const float thickness) {
-        const float clamped_thickness = std::max(thickness, 0.0f);
-        if (left_dock_resize_visible_ == visible &&
-            left_dock_resize_active_ == active &&
-            std::abs(left_dock_resize_thickness_ - clamped_thickness) <= 0.5f) {
-            return;
-        }
-
-        left_dock_resize_visible_ = visible;
-        left_dock_resize_active_ = active;
-        left_dock_resize_thickness_ = clamped_thickness;
-        applyLeftDockResizeIndicator();
-        markRenderNeeded(RenderReason::LeftDockResize);
     }
 
     void RmlViewportOverlay::setGTMetricsOverlay(GTMetricsOverlayState state) {
@@ -999,7 +980,6 @@ namespace lfs::vis::gui {
         }
         if (auto* const border = document_->GetElementById("left-frame-border"))
             border->SetProperty("left", std::format("{:.1f}px", viewport_content_offset_));
-        applyLeftDockResizeIndicator();
         applySplitDividerOverlay();
         applyProjectDragOverlay();
         viewport_content_offset_dirty_ = false;
@@ -1076,23 +1056,6 @@ namespace lfs::vis::gui {
         split_divider_toolbar_clearance_ = clearance;
         applySplitDividerOverlay();
         return true;
-    }
-
-    void RmlViewportOverlay::applyLeftDockResizeIndicator() {
-        if (!document_)
-            return;
-
-        if (auto* const indicator =
-                document_->GetElementById("left-dock-resize-indicator")) {
-            indicator->SetClass("hidden", !left_dock_resize_visible_);
-            indicator->SetClass("active", left_dock_resize_active_);
-            indicator->SetProperty(
-                "left",
-                std::format("{:.1f}px", viewport_content_offset_ - left_dock_resize_thickness_));
-            indicator->SetProperty(
-                "width",
-                std::format("{:.1f}px", left_dock_resize_thickness_));
-        }
     }
 
     void RmlViewportOverlay::applyGTMetricsOverlay() {
@@ -1519,7 +1482,6 @@ namespace lfs::vis::gui {
         updateViewportContentOffset();
         applyGTMetricsOverlay();
         applySplitDividerOverlay();
-        applyLeftDockResizeIndicator();
         applyLodStatsOverlay();
         applyProjectDragOverlay();
         applySideDocks();

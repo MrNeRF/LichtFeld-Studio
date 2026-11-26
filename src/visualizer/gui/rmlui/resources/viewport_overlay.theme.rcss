@@ -184,14 +184,6 @@
     background-color: @{menu.background};
 }
 
-.left-dock-resize-indicator {
-    background-color: @{right_panel.resize_hover};
-}
-
-.left-dock-resize-indicator.active {
-    background-color: @{right_panel.resize_active};
-}
-
 .viewport-split-divider {
     background-color: @{menu.background};
 }

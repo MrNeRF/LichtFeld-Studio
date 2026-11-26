@@ -7255,12 +7255,22 @@ namespace lfs::vis::gui {
         if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr) {
             overlay_renderer = rendering->getScreenOverlayRenderer();
         }
+        const bool left_resize_highlight = panel_layout_.isLeftDockResizeHighlighted() && left_dock_layout.panel_width > 0.0f;
         const bool needs_screen_overlay_frame =
-            has_viewport_overlay_panels || has_python_overlay_hooks || has_overlay_popups ||
+            left_resize_highlight || has_viewport_overlay_panels || has_python_overlay_hooks || has_overlay_popups ||
             (floating_panel_cursor_hidden_ && !vulkan_gui_);
         if (overlay_renderer && needs_screen_overlay_frame) {
             LOG_TIMER_THRESHOLD("gui_render.screen_overlay_renderer.beginFrame", 0.25);
             overlay_renderer->beginFrame();
+            if (left_resize_highlight) {
+                const auto& color = theme().palette.info;
+                const float alpha = panel_layout_.isLeftDockResizing() ? DOCK_RESIZE_ACTIVE_ALPHA : DOCK_RESIZE_HOVER_ALPHA;
+                const float edge = left_dock_layout.panel_x + left_dock_layout.panel_width;
+                const float inner_edge = resizeHitZone(edge, current_ui_scale_).min;
+                overlay_renderer->addRectFilled(
+                    {inner_edge, screen.work_pos.y}, {edge, screen.work_pos.y + left_dock_h},
+                    {color.x, color.y, color.z, alpha});
+            }
         }
 
         const auto draw_screen_overlay_content = [&]() {

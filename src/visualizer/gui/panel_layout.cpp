@@ -6,7 +6,6 @@
 #include "core/logger.hpp"
 #include "core/native_fs.hpp"
 #include "gui/panels/python_console_panel.hpp"
-#include "gui/rml_viewport_overlay.hpp"
 #include "python/python_runtime.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/preferences.hpp"
@@ -16,21 +15,6 @@
 #include <nlohmann/json.hpp>
 
 namespace lfs::vis::gui {
-    namespace {
-        void drawLeftDockResizeIndicator(const PanelDrawContext& draw_ctx,
-                                         const float dpi,
-                                         const bool visible,
-                                         const bool active) {
-            if (!draw_ctx.ui || !draw_ctx.ui->viewport_overlay)
-                return;
-
-            const float thickness =
-                RESIZE_GRAB_HALF_WIDTH_DP * std::max(dpi, 1.0f);
-            draw_ctx.ui->viewport_overlay->setLeftDockResizeIndicator(
-                visible, active, thickness);
-        }
-    } // namespace
-
     PanelLayoutManager::PanelLayoutManager() = default;
 
     void PanelLayoutManager::setBottomDockActiveTab(const std::string& id) {
@@ -837,7 +821,6 @@ namespace lfs::vis::gui {
         LOG_TIMER("gui_render.panel_layout.renderLeftDock");
         auto& reg = PanelRegistry::instance();
         if (!willRenderLeftDock(show_main_panel, ui_hidden, screen)) {
-            drawLeftDockResizeIndicator(draw_ctx, lfs::python::get_shared_dpi_scale(), false, false);
             left_dock_hovering_edge_ = false;
             left_dock_resizing_ = false;
             left_dock_visible_ = false;
@@ -939,10 +922,6 @@ namespace lfs::vis::gui {
             left_dock_visible_ = preloaded_h > 0.0f || drawn_h > 0.0f;
         }
 
-        drawLeftDockResizeIndicator(
-            draw_ctx, dpi,
-            left_dock_hovering_edge_ || left_dock_resizing_,
-            left_dock_resizing_);
     }
 
     void PanelLayoutManager::renderLeftDockCached(const PanelDrawContext& draw_ctx,
@@ -951,7 +930,6 @@ namespace lfs::vis::gui {
                                                   const PanelInputState& input,
                                                   const ScreenState& screen) {
         LOG_TIMER("gui_render.panel_layout.renderLeftDock.cached");
-        drawLeftDockResizeIndicator(draw_ctx, lfs::python::get_shared_dpi_scale(), false, false);
         auto& reg = PanelRegistry::instance();
         if (!willRenderLeftDock(show_main_panel, ui_hidden, screen)) {
             left_dock_hovering_edge_ = false;

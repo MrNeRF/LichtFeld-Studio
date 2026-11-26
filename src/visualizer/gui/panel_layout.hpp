@@ -170,6 +170,8 @@ namespace lfs::vis::gui {
             bottom_dock_collapsed_ = !bottom_dock_collapsed_;
             bottom_dock_hovering_edge_ = bottom_dock_resizing_ = false;
         }
+        bool isLeftDockResizeHighlighted() const { return left_dock_hovering_edge_ || left_dock_resizing_; }
+        bool isLeftDockResizing() const { return left_dock_resizing_; }
         bool isBottomDockCollapsed() const { return bottom_dock_collapsed_; }
         bool isBottomDockVisible() const { return bottom_dock_visible_; }
         float bottomDockTopY() const { return bottom_dock_top_y_; }
