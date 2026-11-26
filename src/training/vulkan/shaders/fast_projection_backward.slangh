@@ -145,14 +145,15 @@ void projectionBackward(BackPush back, uint primitive_idx) {
         store3(back.dcGradient, primitive_idx, 0.28209479177387814f * gc);
         float basis[16];
         shBasis(direction(load3(p.means, primitive_idx) - load3(p.camera, 0)), basis);
-        const uint64_t slot0 = shSlotStart(primitive_idx, (p.rest * 3 + 3) / 4);
+        // The SH gradient row's 64-bit address (see shRowAddress), with its slots as small indices.
+        Ptr<float4, Access.ReadWrite> shGradientRow = (Ptr<float4, Access.ReadWrite>)shRowAddress(back.shGradient, 1, p.rest, primitive_idx);
         [unroll] for (uint slot = 0; slot < 12; ++slot) if (slot < (p.rest * 3 + 3) / 4) {
             float4 value;
             [unroll] for (uint c = 0; c < 4; ++c) {
                 uint a = slot * 4 + c;
                 value[c] = a < p.rest * 3 && a / 3 + 1 < p.activeBases ? basis[min(a / 3 + 1, 15u)] * gc[a % 3] : 0;
             }
-            ((Ptr<float4, Access.ReadWrite>)back.shGradient)[slot0 + slot * 32] = value;
+            shGradientRow[slot * 32] = value;
         }
         const float3 mean3d = load3(p.means, primitive_idx);
 
@@ -413,9 +414,9 @@ void projectionBackward(BackPush back, uint primitive_idx) {
             stats[primitive_idx] += 1.0f;
         }
         store3(back.dcGradient, primitive_idx, float3(0));
-        const uint64_t slot0 = shSlotStart(primitive_idx, (p.rest * 3 + 3) / 4);
+        Ptr<float4, Access.ReadWrite> shGradientRow = (Ptr<float4, Access.ReadWrite>)shRowAddress(back.shGradient, 1, p.rest, primitive_idx);
         [unroll] for (uint slot = 0; slot < 12; ++slot) if (slot < (p.rest * 3 + 3) / 4)
-            ((Ptr<float4, Access.ReadWrite>)back.shGradient)[slot0 + slot * 32] = float4(0);
+            shGradientRow[slot * 32] = float4(0);
         if (!back.regRenderedOnly) {
             [unroll] for (uint a = 0; a < 3; ++a)
                 scale_grads[a] = scaleRegularization(back, primitive_idx * 3 + a);
@@ -473,9 +474,8 @@ void projectionBackward(BackPush back, uint primitive_idx) {
                 for (uint k = 0; k < p.activeBases - 1; ++k) {
                     float v = shColor(p, primitive_idx, k)[c];
                     uint a = k * 3 + c;
-                    uint64_t cell = (shSlotStart(primitive_idx, back.slots) + a / 4 * 32) * 4 + a % 4;
                     if (allowed)
-                        ((Ptr<float, Access.ReadWrite>)back.shGradient)[cell] += 2.0f * coef * v;
+                        ((Ptr<float, Access.ReadWrite>)shRowAddress(back.shGradient, 1, p.rest, primitive_idx))[shRowIndex(1, a)] += 2.0f * coef * v;
                     shLoss += coef * v * v;
                 }
             }

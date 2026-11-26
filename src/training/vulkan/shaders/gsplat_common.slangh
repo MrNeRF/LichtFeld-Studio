@@ -578,12 +578,6 @@ static void gsplat_sh_basis(const float3 dir, const uint degree, out float b[16]
     b[15] = -0.5900435899266435f * fC2;
 }
 
-// Float index of SH-rest value (coeff, channel) in swizzled float storage.
-static uint64_t gsplat_sh_float_index(const uint g, const uint coeff, const uint channel, const uint layout_rest) {
-    const uint offset = coeff * 3u + channel;
-    return shOffset(g, offset, layout_rest, false);
-}
-
 // ---------------------------------------------------------------------------
 // Projection, SH colour and tile count per gaussian (ProjectionUT3DGSFused.cu,
 // IntersectTile.cu first pass, spherical_harmonics_swizzled_fwd).

@@ -231,11 +231,13 @@ void gsplat_accumulate(GsplatAccumulateParams p, uint g) {
     float basis[16];
     gsplat_sh_basis(gsplat_load3(p.means, g) - gsplat_camera_load((Ptr<float, Access.ReadWrite>)p.camera).origin, p.degree, basis);
     const uint bases = (p.degree + 1u) * (p.degree + 1u);
+    // The SH-rest gradient row's 64-bit address (see shRowAddress), with its values as small indices.
+    Ptr<float, Access.ReadWrite> sh_rest_row = (Ptr<float, Access.ReadWrite>)shRowAddress(uint64_t(p.sh_rest_grad), 1, p.layout_rest, g);
     for (uint c = 0; c < 3u; ++c) {
         const float v_color = v[11u + c];
         p.sh0_grad[g * 3u + c] += basis[0] * v_color;
         for (uint k = 1; k < bases && p.sh_rest_grad != 0; ++k)
-            p.sh_rest_grad[gsplat_sh_float_index(g, k - 1u, c, p.layout_rest)] += basis[k] * v_color;
+            sh_rest_row[shRowIndex(1, (k - 1u) * 3u + c)] += basis[k] * v_color;
     }
 
     if (p.grad_norms != 0)
