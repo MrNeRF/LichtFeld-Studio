@@ -6,5 +6,6 @@
     <div id="menu-region"></div>
     <div id="right-panel-region"></div>
     <div id="status-region"></div>
+    <div id="left-resize-region"></div>
 </body>
 </rml>
