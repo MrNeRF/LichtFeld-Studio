@@ -3357,14 +3357,16 @@ static ulong rad_sh_index(constant RadPageParams& p, uint i, uint slot) {
     return ((ulong(p.page) * p.page_splats + i) / 32 * p.slots + slot) * 32 + i % 32;
 }
 
+// A resident row's SH offsets are 64-bit: in 32 bits, at SH 3, the Q16 cells wrap at 95.4M rows and the float4
+// slots of f32 and f16 at 89.5M.
 static float rad_resident_sh(constant RadSources& s, uint i, uint c) {
-    const uint splat = s.offset + i;
+    const ulong splat = ulong(s.offset) + i;
     if (s.quant_sh != 0) {
         const float lo = s.sh_bounds[splat / 256 * 2], hi = s.sh_bounds[splat / 256 * 2 + 1];
-        const uint cell = splat / 32 * (s.rest * 3 * 32) + c * 32 + splat % 32;
+        const ulong cell = splat / 32 * (s.rest * 3 * 32) + c * 32 + splat % 32;
         return lo + (hi - lo) * (float(((device const ushort*)s.shN)[cell]) * (1.0f / 65535.0f));
     }
-    const uint index = ((splat / 32 * ((s.rest * 3 + 3) / 4) + c / 4) * 32 + splat % 32) * 4 + c % 4;
+    const ulong index = ((splat / 32 * ((s.rest * 3 + 3) / 4) + c / 4) * 32 + splat % 32) * 4 + c % 4;
     return s.half_sh != 0 ? rad_half_to_float(((device const ushort*)s.shN)[index])
                           : ((device const float*)s.shN)[index];
 }
@@ -3395,7 +3397,8 @@ kernel void rad_page(constant RadPageParams& p [[buffer(0)]], uint i [[thread_po
             return;
         }
         const bool live = i < s.count;
-        const uint row = s.offset + i;
+        // 64-bit as the SH above: 4 floats a row wrap at 1.07G rows in 32 bits, 3 at 1.43G.
+        const ulong row = ulong(s.offset) + i;
         for (uint c = 0; c < 3; ++c)
             p.means[dst * 3 + c] = live ? as_type<uint>(s.means[row * 3 + c]) : 0;
         const float3 rgb = live ? float3(s.sh0[row * 3], s.sh0[row * 3 + 1], s.sh0[row * 3 + 2]) : 0;
