@@ -2854,12 +2854,14 @@ static void sort_axes(thread float3& a, thread float3& b, thread float& la, thre
 kernel void affine_splat_geometry(constant AffineSplatParams& p [[buffer(0)]], uint i [[thread_position_in_grid]]) {
     if (i >= p.count)
         return;
+    // Row offsets in 64 bits: in 32, 9 floats a row wrap at 477.2M rows, 4 at 1.07G and 3 at 1.43G.
+    const ulong r = i;
     float linear[9];
-    for(int k=0;k<9;++k) linear[k]=p.matrices ? p.matrices[9*i+k] : p.linear[k];
-    device float* const out_scale = p.out_scales + 3 * i;
-    device float* const out_rotation = p.out_rotations + 4 * i;
-    const float3 log_scale(p.scales[3 * i], p.scales[3 * i + 1], p.scales[3 * i + 2]);
-    float4 q(p.rotations[4 * i], p.rotations[4 * i + 1], p.rotations[4 * i + 2], p.rotations[4 * i + 3]);
+    for(int k=0;k<9;++k) linear[k]=p.matrices ? p.matrices[9*r+k] : p.linear[k];
+    device float* const out_scale = p.out_scales + 3 * r;
+    device float* const out_rotation = p.out_rotations + 4 * r;
+    const float3 log_scale(p.scales[3 * r], p.scales[3 * r + 1], p.scales[3 * r + 2]);
+    float4 q(p.rotations[4 * r], p.rotations[4 * r + 1], p.rotations[4 * r + 2], p.rotations[4 * r + 3]);
     const float qm = max(max(abs(q.x), abs(q.y)), max(abs(q.z), abs(q.w)));
     q = qm > 0 ? normalize(q / qm) : float4(1, 0, 0, 0);
     const float w = q.x, x = q.y, y = q.z, z = q.w;
