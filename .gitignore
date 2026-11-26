@@ -127,3 +127,4 @@ src/rendering/rasterizer/vulkan/shader/radix_sort/*.spv
 !tests/media/png_metadata_fixture.py
 
 !tests/media/srt_metadata_fixture.py
+!tests/media/insta360_fixture.py

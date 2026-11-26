@@ -728,7 +728,7 @@ class MediaDescription:
 
     def to_json(self) -> str:
         """
-        Return the shared probe JSON, including explicitly collected timed packet bytes and clocks when present.
+        Return the shared probe JSON, including explicitly collected timed packets or Insta360 IMU samples when present.
         """
 
     def dji_metadata_json(self) -> str:
@@ -959,9 +959,9 @@ class MediaIngest:
     def codec_build_info() -> CodecBuildInfo: ...
 
     @staticmethod
-    def probe(path: str | os.PathLike, headers_only: bool = False, timeout_ms: int = 10000, timed_metadata_stream: int | None = None, timed_metadata_limits: TimedMetadataLimits = ...) -> MediaDescription:
+    def probe(path: str | os.PathLike, headers_only: bool = False, timeout_ms: int = 10000, timed_metadata_stream: int | None = None, timed_metadata_limits: TimedMetadataLimits = ..., insta360_imu: bool = False) -> MediaDescription:
         """
-        Inspect headers or stream information. Selecting a timed metadata stream performs a bounded raw packet scan in Headers mode without interpreting telemetry or decoding pixels.
+        Inspect headers or stream information. Select a timed metadata stream to collect its packets, or enable insta360_imu to read compact IMU samples from the trailer in Headers mode.
         """
 
     @staticmethod

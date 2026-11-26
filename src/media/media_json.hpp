@@ -445,6 +445,23 @@ namespace lfs::media::json_detail {
             result["timed_metadata"] = timedMetadata(*media.timed_metadata);
         return result;
     }
+
+    // Append IMU samples one at a time so large observations never build a JSON tree of samples.
+    inline std::string dumpProbeDescription(const json& description, const MediaDescription& media) {
+        auto result = dump(description);
+        if (!media.insta360_imu)
+            return result;
+        result.pop_back();
+        result += R"(,"insta360_imu":[)";
+        for (const auto& sample : *media.insta360_imu) {
+            if (result.back() != '[')
+                result += ',';
+            result += dump(json{{"device_tick", sample.device_tick}, {"acceleration_counts", sample.acceleration_counts}, {"angular_velocity_counts", sample.angular_velocity_counts}});
+        }
+        result += "]}";
+        return result;
+    }
+
     inline json sourceMetadataResult(const SourceMetadataCatalog& catalog, const MetadataSummary& summary) {
         return {{"schema_version", 1}, {"success", true}, {"metadata", sourceMetadata(catalog)}, {"summary", metadataSummary(summary)}};
     }

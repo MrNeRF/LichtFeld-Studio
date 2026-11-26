@@ -249,6 +249,8 @@ namespace lfs::media {
         if (path.empty() || path.native().find(std::filesystem::path::value_type{}) != std::string::npos || options.timeout.count() <= 0 ||
             (options.depth != ProbeDepth::Headers && options.depth != ProbeDepth::StreamInfo))
             return detail::probeInvalidOptions("Probe requires a valid path, depth and positive timeout");
+        if (options.collect_insta360_imu && options.depth != ProbeDepth::Headers)
+            return detail::probeInvalidOptions("Insta360 IMU collection requires Headers depth");
         // Complete allocating path conversions before creating the FFmpeg context.
         // The native-path NUL check above also covers the display representation.
         std::string native;
@@ -266,9 +268,10 @@ namespace lfs::media {
         }
         // Timed collection is scoped to embedded MOV/MP4 tracks. Forcing this
         // demuxer also keeps standalone subtitles on the canonical SRT reader.
-        const auto* input_format = options.timed_metadata_stream ? av_find_input_format("mov") : nullptr;
-        if (options.timed_metadata_stream && !input_format)
-            return detail::probeFailure(AVERROR_DEMUXER_NOT_FOUND, "Locate timed metadata demuxer", false);
+        const bool require_mov = options.timed_metadata_stream || options.collect_insta360_imu;
+        const auto* input_format = require_mov ? av_find_input_format("mov") : nullptr;
+        if (require_mov && !input_format)
+            return detail::probeFailure(AVERROR_DEMUXER_NOT_FOUND, "Locate MOV metadata demuxer", false);
         Deadline deadline{std::chrono::steady_clock::now(), options.timeout};
         AVFormatContext* raw = avformat_alloc_context();
         if (!raw)
@@ -294,6 +297,12 @@ namespace lfs::media {
                 if (!observed)
                     return observed.error();
                 description.timed_metadata = std::move(*observed);
+            }
+            if (options.collect_insta360_imu) {
+                auto samples = detail::collectInsta360Imu(context.get());
+                if (!samples)
+                    return samples.error();
+                description.insta360_imu = std::move(*samples);
             }
             return description;
         } catch (const std::bad_alloc&) {

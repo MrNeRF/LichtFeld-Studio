@@ -70,7 +70,7 @@ namespace {
     int run(const std::vector<std::string>& args) {
         try {
             if (args.size() == 2 && (args[1] == "--help" || args[1] == "-h")) {
-                std::cout << "media-ingest version\nmedia-ingest capabilities\nmedia-ingest source-exif INPUT\nmedia-ingest source-metadata INPUT\nmedia-ingest source-container-metadata INPUT\nmedia-ingest source-sidecar-metadata IMAGE SIDECAR\nmedia-ingest source-srt-metadata SIDECAR [--timestamp TICKS NUM DEN --offset-ms N [--point-tolerance-ms N]]\nmedia-ingest probe INPUT [--headers-only] [--timeout-ms N] [--timed-stream INDEX] [--dji-metadata] [--gpmf-metadata [--gpmf-max-decoded-bytes N]] [--timed-max-bytes N] [--timed-max-records N]\n"
+                std::cout << "media-ingest version\nmedia-ingest capabilities\nmedia-ingest source-exif INPUT\nmedia-ingest source-metadata INPUT\nmedia-ingest source-container-metadata INPUT\nmedia-ingest source-sidecar-metadata IMAGE SIDECAR\nmedia-ingest source-srt-metadata SIDECAR [--timestamp TICKS NUM DEN --offset-ms N [--point-tolerance-ms N]]\nmedia-ingest probe INPUT [--headers-only] [--timeout-ms N] [--insta360-imu] [--timed-stream INDEX] [--dji-metadata] [--gpmf-metadata [--gpmf-max-decoded-bytes N]] [--timed-max-bytes N] [--timed-max-records N]\n"
                              "media-ingest extract INPUT --output DIRECTORY [--fps N | --interval N]\n"
                              "  [--start SECONDS] [--end SECONDS] [--rotate 0|90|180|270]\n"
                              "  [--scale N | --size WIDTH HEIGHT] [--format png|jpeg|exr|tiff16|jxl|avif] [--quality N]\n"
@@ -209,7 +209,10 @@ namespace {
                 if (args[1] == "probe") {
                     if (flag == "--dji-metadata" && !dji_metadata_requested)
                         dji_metadata_requested = true;
-                    else if (flag == "--gpmf-metadata" && !gpmf_metadata_requested)
+                    else if (flag == "--insta360-imu" && !probe.collect_insta360_imu) {
+                        probe.collect_insta360_imu = true;
+                        probe.depth = ProbeDepth::Headers;
+                    } else if (flag == "--gpmf-metadata" && !gpmf_metadata_requested)
                         gpmf_metadata_requested = true;
                     else if (flag == "--gpmf-max-decoded-bytes") {
                         if (gpmf_decoded_bytes)
@@ -407,12 +410,12 @@ namespace {
                         media["dji_metadata"] = std::move(*dji_metadata);
                     if (gpmf_metadata)
                         media["gpmf_metadata"] = std::move(*gpmf_metadata);
-                    auto response = json{{"schema_version", 1}, {"success", true}, {"media", std::move(media)}};
-                    std::cout << json_detail::dump(response) << '\n';
+                    const auto payload = json_detail::dumpProbeDescription(media, *result);
+                    std::cout << R"({"media":)" << payload << R"(,"schema_version":1,"success":true})" << '\n';
                 } catch (const std::bad_alloc&) {
-                    if (!gpmf_metadata_requested)
+                    if (!gpmf_metadata_requested && !probe.collect_insta360_imu)
                         throw;
-                    return failed(lfs::make_error({.code = lfs::ErrorCode::ResourceExhausted, .domain = lfs::ErrorDomain::IO, .detail = "GPMF JSON allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()}));
+                    return failed(lfs::make_error({.code = lfs::ErrorCode::ResourceExhausted, .domain = lfs::ErrorDomain::IO, .detail = probe.collect_insta360_imu ? "Probe JSON allocation failed" : "GPMF JSON allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()}));
                 }
                 return 0;
             }

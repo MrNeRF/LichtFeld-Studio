@@ -19,6 +19,9 @@ import tempfile
 import struct
 import unittest
 import zlib
+
+import insta360_fixture
+
 ROOT=Path(__file__).resolve().parents[2]
 _srt_spec = importlib.util.spec_from_file_location("srt_metadata_fixture", ROOT / "tests/media/srt_metadata_fixture.py")
 srt_metadata_fixture = importlib.util.module_from_spec(_srt_spec)
@@ -2089,6 +2092,77 @@ class IngestCLI(unittest.TestCase):
             limited, _ = self.invoke("probe", path, flag, "1", "--timed-stream", "1", code=4)
             self.assertEqual(limited["error"]["code"], "ResourceExhausted")
         self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), (original, modified))
+
+    def test_insta360_imu_probe(self):
+        original = srt_metadata_fixture.embedded(self.root, FFMPEG).read_bytes()
+        path = self.root / "Insta360 é 日本語.insv"
+        record = insta360_fixture.record
+
+        def write(records, *, size_adjustment=0, version=3):
+            footer = insta360_fixture.footer(len(records) + size_adjustment, version=version)
+            path.write_bytes(original + records + footer)
+
+        first = insta360_fixture.FIRST
+        imu = record(0x300, first + insta360_fixture.SECOND)
+        compact = record(0x101, insta360_fixture.COMPACT)
+        path.write_bytes(original + insta360_fixture.imu_trailer())
+        before, mtime = path.read_bytes(), path.stat().st_mtime_ns
+        ordinary, _ = self.invoke("probe", path, "--headers-only")
+        decoded, _ = self.invoke("probe", path, "--insta360-imu")
+        samples = decoded["media"].pop("insta360_imu")
+        self.assertEqual(decoded, ordinary)
+        self.assertEqual(samples, [
+            {"device_tick": 534773966, "acceleration_counts": [-1025, 26, 34],
+             "angular_velocity_counts": [7, 18, 7]},
+            {"device_tick": 534774966, "acceleration_counts": [-32768, 32767, 0],
+             "angular_velocity_counts": [1, -1, 0]},
+        ])
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(path.stat().st_mtime_ns, mtime)
+        timed, _ = self.invoke("probe", path, "--timed-stream", "1")
+        combined, _ = self.invoke("probe", path, "--timed-stream", "1", "--insta360-imu")
+        self.assertEqual(combined["media"].pop("insta360_imu"), samples)
+        self.assertEqual(combined, timed)
+
+        # This size is divisible by both sample widths. The declared layout wins.
+        write(record(0x300, first * 14) + compact)
+        result, _ = self.invoke("probe", path, "--insta360-imu")
+        self.assertEqual(result["media"]["insta360_imu"], [samples[0]] * 14)
+
+        for records, adjustments, expected, detail in (
+            (imu + compact, {"size_adjustment": len(original) + 1}, "DataLoss", f"file_bytes={len(original) + len(imu) + len(compact) + 72}"),
+            (imu + imu + compact, {}, "DataLoss", None),
+            (imu + compact, {"version": 2}, "Unsupported", "version=2, supported=3"),
+            (imu + compact + record(0, bytes(10)), {}, "Unsupported", None),
+            (imu, {}, "Unsupported", None),
+            (imu + record(0x101, b"\xf0\x03\x00"), {}, "Unsupported", None),
+            (imu + record(0x101, b"\xf0\x03"), {}, "DataLoss", None),
+            (record(0x300, first + b"partial") + compact, {}, "DataLoss", "record_bytes=27, sample_bytes=20"),
+            (record(0x200, b"preview"), {}, "Unsupported", None),
+        ):
+            with self.subTest(error=expected, adjustments=adjustments, length=len(records)):
+                write(records, **adjustments)
+                result, _ = self.invoke("probe", path, "--insta360-imu", code=3)
+                self.assertEqual(result["error"]["code"], expected)
+                if detail:
+                    self.assertIn(detail, result["error"]["message"])
+
+        # Seek across a valid-sized compact record that exceeds retained storage.
+        payload_size = 20 * 6_000_001
+        with path.open("wb") as file:
+            file.write(original)
+            file.seek(payload_size, os.SEEK_CUR)
+            file.write(struct.pack("<HI", 0x300, payload_size) + compact)
+            file.write(insta360_fixture.footer(payload_size + len(compact) + 6))
+        result, _ = self.invoke("probe", path, "--insta360-imu", code=4)
+        self.assertEqual(result["error"]["code"], "ResourceExhausted")
+
+        self.assertIn("samples=6000001, limit=6000000", result["error"]["message"])
+
+        write(imu + compact + record(0x200, b"") * 4096)
+        result, _ = self.invoke("probe", path, "--insta360-imu", code=4)
+        self.assertEqual(result["error"]["code"], "ResourceExhausted")
+        self.assertIn("records=4097, limit=4096", result["error"]["message"])
 
     def test_timed_metadata_probe_missing_payload_and_empty_track(self):
         import struct
