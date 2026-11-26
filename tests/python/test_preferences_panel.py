@@ -368,6 +368,7 @@ def preferences_panel_module(monkeypatch):
             TOGGLE_UI=SimpleNamespace(name="TOGGLE_UI", value=63),
             TOGGLE_LEFT_DOCK=SimpleNamespace(name="TOGGLE_LEFT_DOCK", value=110),
             TOGGLE_RIGHT_DOCK=SimpleNamespace(name="TOGGLE_RIGHT_DOCK", value=111),
+            TOGGLE_BOTTOM_DOCK=SimpleNamespace(name="TOGGLE_BOTTOM_DOCK", value=112),
             TOGGLE_FULLSCREEN=SimpleNamespace(name="TOGGLE_FULLSCREEN", value=64),
             OPEN_PREFERENCES=SimpleNamespace(name="OPEN_PREFERENCES", value=65),
             TOGGLE_MCP_SERVER=SimpleNamespace(name="TOGGLE_MCP_SERVER", value=66),
