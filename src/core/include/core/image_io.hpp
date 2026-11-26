@@ -52,6 +52,9 @@ namespace lfs::core {
     LFS_CORE_API std::tuple<unsigned char*, int, int, int>
     load_image_thumbnail(std::filesystem::path p, int max_width,
                          bool* used_exif_thumbnail = nullptr);
+    // Bounded JPEG decode from the full image; never substitutes EXIF thumbnail pixels.
+    LFS_CORE_API std::tuple<unsigned char*, int, int, int>
+    load_image_thumbnail_no_exif(std::filesystem::path p, int max_width);
 
     LFS_CORE_API std::tuple<uint16_t*, int, int, int>
     load_image_u16(std::filesystem::path p, int res_div = -1, int max_width = 0);

@@ -520,7 +520,8 @@ namespace {
     std::tuple<T*, int, int, int>
     load_image_t(std::filesystem::path p, int res_div, int max_width,
                  const bool prefer_embedded_thumbnail = false,
-                 bool* used_embedded_thumbnail = nullptr) {
+                 bool* used_embedded_thumbnail = nullptr,
+                 const bool allow_embedded_thumbnail = true) {
         LOG_TIMER("load_image total");
         if (used_embedded_thumbnail)
             *used_embedded_thumbnail = false;
@@ -535,7 +536,7 @@ namespace {
         int source_height = 0;
         T* base = nullptr;
         std::optional<JpegExifData> exif;
-        if (prefer_embedded_thumbnail && max_width > 0) {
+        if (prefer_embedded_thumbnail && allow_embedded_thumbnail && max_width > 0) {
             auto extension = lfs::core::path_to_utf8(p.extension());
             std::transform(extension.begin(), extension.end(), extension.begin(),
                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -713,6 +714,13 @@ namespace lfs::core {
         if (max_width <= 0)
             throw std::invalid_argument("load_image_thumbnail: max_width must be positive");
         return ::load_image_t<unsigned char>(std::move(p), -1, max_width, true, used_exif_thumbnail);
+    }
+
+    std::tuple<unsigned char*, int, int, int>
+    load_image_thumbnail_no_exif(std::filesystem::path p, const int max_width) {
+        if (max_width <= 0)
+            throw std::invalid_argument("load_image_thumbnail_no_exif: max_width must be positive");
+        return ::load_image_t<unsigned char>(std::move(p), -1, max_width, true, nullptr, false);
     }
 
     std::tuple<uint16_t*, int, int, int>

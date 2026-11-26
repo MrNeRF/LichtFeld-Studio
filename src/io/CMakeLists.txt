@@ -270,6 +270,7 @@ add_library(lfs_io STATIC
         # Format implementations (load + save)
         formats/ply.hpp
         formats/ply.cpp
+        ply_stream_merge.cpp
         formats/colmap.hpp
         formats/colmap.cpp
         formats/transforms.hpp
