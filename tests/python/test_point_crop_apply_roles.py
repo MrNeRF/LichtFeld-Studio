@@ -47,8 +47,8 @@ def test_apply_crop_preserves_roi_and_undo_restores_points(tmp_path, order, shap
             code = ("import hashlib, lichtfeld as lf\n"
                     "cloud=lf.get_scene().get_node('PointCloud').point_cloud()\n"
                     "h=hashlib.sha256()\n"
-                    "h.update(cloud.means.cpu().numpy().tobytes())\n"
-                    "h.update(cloud.colors.cpu().numpy().tobytes())\n"
+                    "h.update(repr(cloud.means.cpu().tolist()).encode())\n"
+                    "h.update(repr(cloud.colors.cpu().tolist()).encode())\n"
                     "print(h.hexdigest())")
             return run(code).strip()
         names = {}
@@ -71,6 +71,13 @@ def test_apply_crop_preserves_roi_and_undo_restores_points(tmp_path, order, shap
         if order[-1] != "builtin.crop":
             dispatch("tool", "builtin.crop")
         dispatch("crop_trim")
+        # The generated cloud is a flat grid whose trimmed bounds hold every point; a smaller Crop
+        # leaves its outer ring outside.
+        geometry = {"box": {"min": [-.5, -.5, -1.], "max": [.5, .5, 1.]},
+                    "ellipsoid": {"radii": [.6, .6, 1.]},
+                    "polygon": {"vertices": [[-.5, -.5], [.5, -.5], [.5, .5], [-.5, .5]], "half_depth": 1.}}[shape]
+        assert _tool(endpoint, "crop_volume_set", {"owner": "PointCloud", "role": "crop", "shape": shape,
+                                                   "translation": [0., 0., 0.], **geometry})["success"]
         before_roi = roi_state(names["builtin.cropbox"])
         before_count = next(n["gaussian_count"] for n in nodes() if n["name"] == "PointCloud")
         assert before_count > 0
