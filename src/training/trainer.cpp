@@ -2376,6 +2376,8 @@ namespace lfs::training {
                 !storage) {
                 return lfs::Status::failure(std::move(storage).error());
             }
+            // MCMC only marks the rows deleted; the scene's live count reads the cached deleted count.
+            strategy_->get_model().refresh_deleted_count();
             syncTrainingSceneTopology(scene_, strategy_->get_model());
         }
         // MCMC soft-deletes removed splats, so count the live ones.
