@@ -136,6 +136,7 @@ namespace lfs::vis::gui {
             bool rename_enabled = false;
             int camera_uid = -1;
             std::optional<std::string> camera_loss_icon_color;
+            bool roi_volume = false;
         };
 
         struct FlatRow {
@@ -162,6 +163,7 @@ namespace lfs::vis::gui {
             bool can_rename = false;
             bool rename_enabled = false;
             std::optional<std::string> camera_loss_icon_color;
+            bool roi_volume = false;
         };
 
         struct RowSlot {

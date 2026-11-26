@@ -58,6 +58,7 @@
 #include "visualizer/gui/gizmo_manager.hpp"
 #include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui/panel_registry.hpp"
+#include "visualizer/gui_capabilities.hpp"
 #include "visualizer/input/sdl_coordinate_utils.hpp"
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/operation/undo_history.hpp"
@@ -4253,6 +4254,23 @@ namespace lfs::python {
             nb::arg("id"), "Set the active tool via C++ event");
 
         m.def(
+            "activate_crop_tool", [](const std::string& role) -> bool {
+                if (role != "roi" && role != "crop")
+                    return false;
+                return invoke_on_viewer([role] {
+                    const std::string id = "builtin." + role;
+                    auto& registry = vis::UnifiedToolRegistry::instance();
+                    auto* gui = get_gui_manager();
+                    if (!gui || !registry.poll(id) || !gui->gizmo().activateCropTool(id))
+                        return false;
+                    markProjectSessionChapterCommitted("VIEW");
+                    return true;
+                },
+                                        false);
+            },
+            nb::arg("role"), "Activate the pre-training roi or crop tool and select its volume, creating a box when there is none");
+
+        m.def(
             "set_active_operator",
             [](const std::string& id, const std::string& gizmo_type) {
                 invoke_on_viewer([id, gizmo_type] {
@@ -4616,6 +4634,36 @@ namespace lfs::python {
                 }
             },
             "Apply the active crop tool primitive through the node-backed crop command path");
+
+        m.def(
+            "set_crop_polygon_outline", [](const std::string& uuid, const std::vector<std::array<float, 2>>& points) {
+                const auto parsed = core::Uuid::from_string(uuid);
+                if (!parsed)
+                    return false;
+                return invoke_on_viewer([uuid = *parsed, points] {
+                    auto* manager = get_scene_manager();
+                    const auto* node = manager ? manager->getScene().getNodeByUuid(uuid) : nullptr;
+                    if (!node || !node->crop_polygon)
+                        return false;
+                    // Same availability as the crop tool: no edits while locked, tools are disabled or a
+                    // modal runs, and the retained training ROI stays fixed while training is active.
+                    auto& scene = manager->getScene();
+                    const auto* editor = vis::services().editorOrNull();
+                    const auto* trainer = vis::services().trainerOrNull();
+                    if (scene.isNodeEffectivelyLocked(node->id) || (editor && editor->isToolsDisabled()) ||
+                        vis::op::operators().hasModalOperator() ||
+                        (vis::isTrainingRoi(scene, *node) && trainer && trainer->isTrainingActive()))
+                        return false;
+                    std::vector<glm::vec2> vertices;
+                    vertices.reserve(points.size());
+                    for (const auto& p : points)
+                        vertices.emplace_back(p[0], p[1]);
+                    return static_cast<bool>(vis::cap::setCropPolygonOutline(
+                        *manager, get_rendering_manager(), node->id, std::move(vertices)));
+                },
+                                        false);
+            },
+            nb::arg("uuid"), nb::arg("vertices"), "Update a crop polygon outline in one undo step");
 
         m.def(
             "start_crop_polygon",

@@ -816,6 +816,7 @@ set(TEST_FILES
     ${POPSPA_TEST_FILES}
     test_mcmc_tensor_ops.cpp
     test_training_cropbox_mask.cpp
+    test_crop_roles.cpp
     test_training_parameters.cpp
     test_property_defaults.cpp
     test_tensor_index_select_uint8.cpp
@@ -906,6 +907,7 @@ set(TEST_FILES
     test_video_cuda_frame_handoff.cpp
     test_video_hdr_logic.cpp
     test_visualizer_post_work.cpp
+    test_orthographic_zoom.cpp
     test_collision_project_open.cpp
     test_file_association.cpp
     test_panel_registry_animation_demand.cpp

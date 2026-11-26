@@ -339,7 +339,7 @@ class TransformControlsController:
         active_tool = _native_store_value("active_tool", _MISSING)
         if active_tool is _MISSING:
             active_tool = lf.ui.get_active_tool() or ""
-        self._crop_active = active_tool == "builtin.cropbox"
+        self._crop_active = active_tool in ("builtin.cropbox", "builtin.crop", "builtin.roi")
         if self._crop_active:
             operation = lf.ui.get_crop_tool_operation()
             active_tool = f"builtin.{operation}"

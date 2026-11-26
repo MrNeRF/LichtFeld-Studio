@@ -4,13 +4,51 @@
 
 #include "core/editor_context.hpp"
 #include "scene/scene_manager.hpp"
+#include "tools/unified_tool_registry.hpp"
 #include "training/training_manager.hpp"
 #include "visualizer/app_store.hpp"
+#include "visualizer/core/services.hpp"
 #include "visualizer/gui_capabilities.hpp"
 
 #include <string_view>
 
 namespace lfs::vis {
+
+    bool isTrainingRoi(const core::Scene& scene, const core::SceneNode& node) {
+        const auto* owner = scene.getNodeById(node.parent_id);
+        return owner && !scene.getTrainingModelNodeUuid().is_nil() &&
+               owner->uuid == scene.getTrainingModelNodeUuid() &&
+               node.cropRole() == core::CropRole::Primary;
+    }
+
+    bool isPreTrainingPointCloud(const core::Scene& scene, const core::SceneNode& owner) {
+        return owner.type == core::NodeType::POINTCLOUD && scene.getDatasetPointCloudNode() == &owner;
+    }
+
+    bool isPointCloudRoi(const core::Scene& scene, const core::SceneNode& node) {
+        const auto* owner = scene.getNodeById(node.parent_id);
+        return owner && node.cropRole() == core::CropRole::Primary && isPreTrainingPointCloud(scene, *owner);
+    }
+
+    bool isCropToolId(const std::string_view id) {
+        return id == "builtin.cropbox" || id == "builtin.roi" || id == "builtin.crop";
+    }
+
+    const char* cropToolIdForRole(const core::CropRole role) {
+        // The registry resolves builtin.cropbox to builtin.roi while the point cloud is forced.
+        return role == core::CropRole::Secondary ? "builtin.crop" : "builtin.cropbox";
+    }
+
+    core::CropRole activeCropRole(const core::SceneNode* owner) {
+        return owner && owner->type == core::NodeType::POINTCLOUD &&
+                       UnifiedToolRegistry::instance().getActiveTool() == "builtin.crop"
+                   ? core::CropRole::Secondary
+                   : core::CropRole::Primary;
+    }
+
+    bool rejectsRoiEllipsoid(const core::Scene& scene, const core::SceneNode* owner, const core::CropRole role) {
+        return owner && role == core::CropRole::Primary && isPreTrainingPointCloud(scene, *owner);
+    }
 
     namespace {
         [[nodiscard]] std::string formatTransformSelectionError(const bool has_editable,
@@ -279,7 +317,7 @@ namespace lfs::vis {
 
     void EditorContext::setActiveOperator(const std::string& id, const std::string& gizmo_type) {
         LOG_DEBUG("EditorContext::setActiveOperator: id='{}', gizmo_type='{}'", id, gizmo_type);
-        active_operator_id_ = id;
+        active_operator_id_ = id == "builtin.cropbox" && forcePointCloudMode() ? "builtin.roi" : id;
         gizmo_type_ = gizmo_type;
         app_store().active_tool.set(active_operator_id_);
         LOG_DEBUG("EditorContext::setActiveOperator: active_operator_id_='{}', hasActive={}",

@@ -2072,6 +2072,45 @@ namespace lfs::vis {
         EXPECT_EQ(*plyComparisonPairForOffset(3, 3), (std::pair<size_t, size_t>{0, 1}));
     }
 
+    TEST_F(SceneManagerRenderStateTest, TrainingRoiDoesNotCreateViewportCropFilters) {
+        SceneManager manager;
+        auto& scene = manager.getScene();
+        const auto model = scene.addSplat("Training model", makeTestSplat(0.0f));
+        const auto other = scene.addSplat("Other model", makeTestSplat(2.0f));
+        ASSERT_NE(model, core::NULL_NODE);
+        ASSERT_NE(other, core::NULL_NODE);
+        scene.setTrainingModelNode(model);
+        const auto roi_box = scene.addCropBox("Training ROI box", model);
+        const auto other_box = scene.addCropBox("Other crop", other);
+        ASSERT_NE(roi_box, core::NULL_NODE);
+        ASSERT_NE(other_box, core::NULL_NODE);
+        scene.getCropBoxData(roi_box)->enabled = true;
+        scene.getCropBoxData(other_box)->enabled = true;
+        core::CropPolygonData polygon;
+        polygon.vertices = {{-1.f, -1.f}, {1.f, -1.f}, {0.f, 1.f}};
+        polygon.half_depth = 1.f;
+        polygon.enabled = true;
+        const auto roi_polygon = scene.addCropPolygon("Training ROI polygon", model, polygon);
+        ASSERT_NE(roi_polygon, core::NULL_NODE);
+        Viewport viewport(640, 480);
+        const auto state = manager.buildRenderState();
+        FrameContext ctx{.viewport = viewport, .scene_manager = &manager, .scene_state = state, .settings = RenderSettings{}, .render_size = {640, 480}, .training_active = true};
+        const auto request = buildViewportRenderRequest(ctx, {640, 480});
+        ASSERT_EQ(request.filters.crop_regions.size(), 1u);
+        EXPECT_EQ(request.filters.crop_regions.front().parent_node_index, scene.getVisibleNodeIndex(other));
+        EXPECT_TRUE(request.filters.crop_polygon_regions.empty());
+        EXPECT_TRUE(scene.getCropBoxData(roi_box)->enabled);
+        EXPECT_TRUE(scene.getCropPolygonData(roi_polygon)->enabled);
+        ctx.training_active = false;
+        const auto completed = buildViewportRenderRequest(ctx, {640, 480});
+        EXPECT_EQ(completed.filters.crop_regions.size(), 1u);
+        EXPECT_TRUE(completed.filters.crop_polygon_regions.empty());
+        scene.setTrainingModelNode(core::NULL_NODE);
+        const auto editing = buildViewportRenderRequest(ctx, {640, 480});
+        EXPECT_EQ(editing.filters.crop_regions.size(), 2u);
+        EXPECT_EQ(editing.filters.crop_polygon_regions.size(), 1u);
+    }
+
     TEST_F(SceneManagerRenderStateTest, HiddenEnabledCropBoxStillFiltersRender) {
         SceneManager manager;
         auto& scene = manager.getScene();
@@ -3423,6 +3462,188 @@ namespace lfs::vis {
         EXPECT_EQ(manager.getSelectedNodeName(), cropbox_name);
     }
 
+    TEST_F(SceneManagerRenderStateTest, SplatCropShapesFilterPointCloudRequestsInAllSelectionStates) {
+        for (const auto shape : {core::NodeType::CROPBOX, core::NodeType::ELLIPSOID, core::NodeType::CROP_POLYGON}) {
+            SCOPED_TRACE(static_cast<int>(shape));
+            SceneManager manager;
+            auto& scene = manager.getScene();
+            const auto owner = scene.addSplat("Splat", makeTestSplat(0.0f));
+            ASSERT_NE(owner, core::NULL_NODE);
+            core::NodeId crop = core::NULL_NODE;
+            if (shape == core::NodeType::CROPBOX) {
+                crop = scene.addCropBox("Box", owner);
+                scene.getCropBoxData(crop)->enabled = true;
+            } else if (shape == core::NodeType::ELLIPSOID) {
+                crop = scene.addEllipsoid("Ellipsoid", owner);
+                scene.getEllipsoidData(crop)->enabled = true;
+            } else {
+                auto data = makeCropPolygonData();
+                data.enabled = true;
+                crop = scene.addCropPolygon("Polygon", owner, data);
+            }
+            ASSERT_NE(crop, core::NULL_NODE);
+            ASSERT_EQ(scene.getNodeById(crop)->cropRole(), core::CropRole::Primary);
+            Viewport viewport(640, 480);
+            RenderSettings settings;
+            settings.point_cloud_mode = true;
+            const auto check = [&](const lfs::rendering::PointCloudRenderRequest& req) {
+                EXPECT_EQ(req.filters.crop_box.has_value(), shape == core::NodeType::CROPBOX);
+                EXPECT_EQ(req.filters.crop_ellipsoid.has_value(), shape == core::NodeType::ELLIPSOID);
+                EXPECT_EQ(req.filters.crop_polygon.has_value(), shape == core::NodeType::CROP_POLYGON);
+            };
+            for (const bool selected : {true, false}) {
+                SCOPED_TRACE(selected);
+                if (selected)
+                    manager.selectNode(crop);
+                else
+                    manager.clearSelection();
+                const auto state = manager.buildRenderState();
+                FrameContext ctx{.viewport = viewport, .scene_manager = &manager, .scene_state = state, .settings = settings, .render_size = {640, 480}};
+                check(buildPointCloudRenderRequest(ctx, {640, 480}, state.model_transforms));
+                check(buildPointCloudNodeRenderRequest(ctx, scene, *scene.getNodeById(owner),
+                                                       {640, 480}, state.model_transforms));
+                if (selected) {
+                    if (shape == core::NodeType::CROPBOX) {
+                        ctx.gizmo.cropbox_active = ctx.gizmo.cropbox_affects_render = true;
+                        ctx.gizmo.cropbox_parent_node_index = state.cropboxes.front().parent_node_index;
+                        ctx.gizmo.cropbox_min = {-3, -3, -3};
+                        ctx.gizmo.cropbox_max = {3, 3, 3};
+                    } else if (shape == core::NodeType::ELLIPSOID) {
+                        ctx.gizmo.ellipsoid_active = ctx.gizmo.ellipsoid_affects_render = true;
+                        ctx.gizmo.ellipsoid_parent_node_index = state.ellipsoids.front().parent_node_index;
+                        ctx.gizmo.ellipsoid_radii = {3, 4, 5};
+                    } else {
+                        ctx.gizmo.crop_polygon_active = ctx.gizmo.crop_polygon_affects_render = true;
+                        ctx.gizmo.crop_polygon_parent_node_index = state.crop_polygons.front().parent_node_index;
+                        ctx.gizmo.crop_polygon_vertices = {{-2, -2}, {2, -2}, {0, 2}};
+                        ctx.gizmo.crop_polygon_half_depth = 2;
+                    }
+                    const auto live = buildPointCloudNodeRenderRequest(ctx, scene, *scene.getNodeById(owner),
+                                                                       {640, 480}, state.model_transforms);
+                    check(live);
+                    if (shape == core::NodeType::CROPBOX && live.filters.crop_box)
+                        EXPECT_EQ(live.filters.crop_box->min, glm::vec3(-3));
+                    if (shape == core::NodeType::ELLIPSOID && live.filters.crop_ellipsoid)
+                        EXPECT_EQ(live.filters.crop_ellipsoid->radii, (glm::vec3{3, 4, 5}));
+                    if (shape == core::NodeType::CROP_POLYGON && live.filters.crop_polygon)
+                        EXPECT_FLOAT_EQ(live.filters.crop_polygon->half_depth, 2);
+                }
+            }
+        }
+    }
+
+    TEST_F(SceneManagerRenderStateTest, BoundTrainingRoiDoesNotFilterPointCloudDisplay) {
+        SceneManager manager;
+        auto& scene = manager.getScene();
+        const auto owner = scene.addSplat("Training", makeTestSplat(0.0f));
+        scene.setTrainingModelNode(owner);
+        const auto roi = scene.addCropBox("ROI", owner);
+        ASSERT_NE(roi, core::NULL_NODE);
+        scene.getCropBoxData(roi)->enabled = true;
+        manager.selectNode(roi);
+        const auto state = manager.buildRenderState();
+        Viewport viewport(640, 480);
+        RenderSettings settings;
+        settings.point_cloud_mode = true;
+        FrameContext ctx{.viewport = viewport, .scene_manager = &manager, .scene_state = state, .settings = settings, .render_size = {640, 480}};
+        ctx.gizmo.cropbox_active = ctx.gizmo.cropbox_affects_render = true;
+        ctx.gizmo.cropbox_parent_node_index = state.cropboxes.front().parent_node_index;
+        EXPECT_FALSE(buildPointCloudRenderRequest(ctx, {640, 480}, state.model_transforms).filters.crop_box);
+        EXPECT_FALSE(buildPointCloudNodeRenderRequest(ctx, scene, *scene.getNodeById(owner),
+                                                      {640, 480}, state.model_transforms)
+                         .filters.crop_box);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, PointCloudRoiNeverFiltersAndCropKeepsFilteringWhileRoiIsEdited) {
+        for (const bool secondary_first : {false, true}) {
+            SCOPED_TRACE(secondary_first);
+            SceneManager manager;
+            auto& scene = manager.getScene();
+            // The ROI belongs to the dataset point cloud that training starts from.
+            const auto cloud = scene.addPointCloud("Role Cloud", makeTestPointCloud(), scene.addDataset("Dataset"));
+            ASSERT_NE(cloud, core::NULL_NODE);
+            const auto make = [&](const core::CropRole role) {
+                return cap::ensureCropBox(manager, nullptr, cloud, role);
+            };
+            const auto first = make(secondary_first ? core::CropRole::Secondary : core::CropRole::Primary);
+            const auto second = make(secondary_first ? core::CropRole::Primary : core::CropRole::Secondary);
+            ASSERT_TRUE(first);
+            ASSERT_TRUE(second);
+            const auto roi = secondary_first ? *second : *first;
+            const auto crop = secondary_first ? *first : *second;
+            scene.getNodeById(roi)->cropbox->min = {-2.0f, -2.0f, -2.0f};
+            scene.getNodeById(roi)->cropbox->max = {2.0f, 2.0f, 2.0f};
+            scene.getNodeById(crop)->cropbox->min = {-0.25f, -0.5f, -0.75f};
+            scene.getNodeById(crop)->cropbox->max = {0.25f, 0.5f, 0.75f};
+            Viewport viewport(640, 480);
+            RenderSettings settings;
+            manager.selectNode(roi);
+            const auto scene_state = manager.buildRenderState();
+            const FrameContext ctx{
+                .viewport = viewport,
+                .scene_manager = &manager,
+                .scene_state = scene_state,
+                .settings = settings,
+                .render_size = {640, 480},
+                .gizmo = {.cropbox_active = true,
+                          .cropbox_min = {-3.0f, -3.0f, -3.0f},
+                          .cropbox_max = {3.0f, 3.0f, 3.0f},
+                          .cropbox_affects_render = true},
+            };
+            const auto req = buildPointCloudRenderRequest(ctx, {640, 480}, scene_state.model_transforms);
+            ASSERT_TRUE(req.filters.crop_box);
+            EXPECT_EQ(req.filters.crop_box->min, (glm::vec3{-0.25f, -0.5f, -0.75f}));
+            EXPECT_EQ(req.filters.crop_box->max, (glm::vec3{0.25f, 0.5f, 0.75f}));
+            const auto node_req = buildPointCloudNodeRenderRequest(ctx, scene, *scene.getNodeById(cloud),
+                                                                   {640, 480}, scene_state.model_transforms);
+            ASSERT_TRUE(node_req.filters.crop_box);
+            EXPECT_EQ(node_req.filters.crop_box->min, (glm::vec3{-0.25f, -0.5f, -0.75f}));
+            scene.getNodeById(crop)->cropbox->enabled = false;
+            scene.notifyMutation(core::Scene::MutationType::TRANSFORM_CHANGED);
+            const auto roi_only_state = manager.buildRenderState();
+            FrameContext roi_only = ctx;
+            roi_only.scene_state = roi_only_state;
+            const auto unfiltered = buildPointCloudRenderRequest(roi_only, {640, 480}, roi_only_state.model_transforms);
+            EXPECT_FALSE(unfiltered.filters.crop_box);
+            EXPECT_FALSE(unfiltered.filters.crop_ellipsoid);
+            EXPECT_FALSE(unfiltered.filters.crop_polygon);
+        }
+    }
+    TEST_F(SceneManagerRenderStateTest, PointCloudCropShapeRemainsActiveWhenRoiIsSelected) {
+        SceneManager manager;
+        auto& scene = manager.getScene();
+        const auto cloud = scene.addPointCloud("Shape Cloud", makeTestPointCloud(), scene.addDataset("Dataset"));
+        ASSERT_NE(cloud, core::NULL_NODE);
+        const auto roi = cap::ensureCropBox(manager, nullptr, cloud, core::CropRole::Primary);
+        ASSERT_TRUE(roi);
+        ASSERT_TRUE(cap::ensureCropBox(manager, nullptr, cloud, core::CropRole::Secondary));
+        Viewport viewport(640, 480);
+        RenderSettings settings;
+        for (const auto shape : {core::NodeType::CROPBOX, core::NodeType::ELLIPSOID, core::NodeType::CROP_POLYGON}) {
+            SCOPED_TRACE(static_cast<int>(shape));
+            if (shape == core::NodeType::ELLIPSOID) {
+                ASSERT_TRUE(cap::ensureEllipsoid(manager, nullptr, cloud, core::CropRole::Secondary));
+            } else if (shape == core::NodeType::CROP_POLYGON) {
+                auto data = makeCropPolygonData();
+                data.role = core::CropRole::Secondary;
+                ASSERT_TRUE(cap::createCropPolygon(manager, nullptr, cloud, data, glm::mat4(1.0f)));
+            }
+            ASSERT_NE(scene.getCropForRole(cloud, core::CropRole::Secondary, shape), core::NULL_NODE);
+            ASSERT_EQ(scene.getCropForRole(cloud, core::CropRole::Primary, core::NodeType::CROPBOX), *roi);
+            manager.selectNode(*roi);
+            auto state = manager.buildRenderState();
+            FrameContext ctx{.viewport = viewport, .scene_manager = &manager, .scene_state = state, .settings = settings, .render_size = {640, 480}};
+            const auto req = buildPointCloudRenderRequest(ctx, {640, 480}, state.model_transforms);
+            EXPECT_EQ(req.filters.crop_box.has_value(), shape == core::NodeType::CROPBOX);
+            EXPECT_EQ(req.filters.crop_ellipsoid.has_value(), shape == core::NodeType::ELLIPSOID);
+            EXPECT_EQ(req.filters.crop_polygon.has_value(), shape == core::NodeType::CROP_POLYGON);
+            const auto node_req = buildPointCloudNodeRenderRequest(ctx, scene, *scene.getNodeById(cloud),
+                                                                   {640, 480}, state.model_transforms);
+            EXPECT_EQ(node_req.filters.crop_box.has_value(), shape == core::NodeType::CROPBOX);
+            EXPECT_EQ(node_req.filters.crop_ellipsoid.has_value(), shape == core::NodeType::ELLIPSOID);
+            EXPECT_EQ(node_req.filters.crop_polygon.has_value(), shape == core::NodeType::CROP_POLYGON);
+        }
+    }
     TEST_F(SceneManagerRenderStateTest, PointCloudRequestKeepsSingleEnabledCropBoxAfterDeselection) {
         SceneManager manager;
         auto& scene = manager.getScene();

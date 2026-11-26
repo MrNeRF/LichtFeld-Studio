@@ -56,6 +56,14 @@ Then narrow further:
 | `shader_*` | Shader assets, bindings, parameter overrides and diagnostics |
 | `camera_*`, `render_*`, `sequencer_*` | View state, captures, and timeline workflows |
 
+## Pre-training ROI and Crop
+
+Before training, with the dataset point cloud selected, invoke `ui_tool_invoke` with `tool_id` set to `builtin.roi` or `builtin.crop`. The first activation creates the corresponding box; subsequent activations select the existing volume. Check `lichtfeld://ui/state` for the active tool and `lichtfeld://scene/nodes` for each volume's `crop_role` and UUID.
+
+Use `crop_volume_get`, `crop_volume_set`, and `crop_volume_action` with a point cloud `owner` name or `owner_uuid` and `role` of `roi` or `crop`. Shape changes and geometry edits target only that role. Box bounds and ellipsoid radii are local; translation, XYZ rotation in radians, and scale use visualizer-world coordinates. Polygon vertices are local XY coordinates and `half_depth` is local. Supported actions are `fit`, `reset`, `delete`, and `apply`; only Crop can be applied. ROI supports box and polygon, while Crop also supports ellipsoid; an ellipsoid ROI from an older project loads and converts to a box or polygon.
+
+From the Python editor, `lf.ui.activate_crop_tool("roi")` and `lf.ui.activate_crop_tool("crop")` activate the same workflows. `SceneNode.crop_role` exposes `"roi"` or `"crop"` for the dataset point cloud's volumes and `"roi"` for the training model's ROI, and `lf.ui.set_crop_polygon_outline(uuid, vertices)` updates an outline as one undoable action. Existing `role` properties continue to use `"primary"` and `"secondary"`.
+
 ## Runtime Model
 
 `lichtfeld://runtime/catalog` is the bootstrap resource for long-running work. It advertises normalized job ids and event types, including:

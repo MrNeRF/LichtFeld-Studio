@@ -2282,6 +2282,11 @@ def is_tool_available(id: str) -> bool:
 def set_active_tool(id: str) -> None:
     """Set the active tool via C++ event"""
 
+def activate_crop_tool(role: str) -> bool:
+    """
+    Activate the pre-training roi or crop tool and select its volume, creating a box when there is none
+    """
+
 def set_active_operator(id: str, gizmo_type: str = '') -> None:
     """Set active operator with optional gizmo type"""
 
@@ -2390,6 +2395,9 @@ def apply_crop_tool() -> None:
     """
     Apply the active crop tool primitive through the node-backed crop command path
     """
+
+def set_crop_polygon_outline(uuid: str, vertices: Sequence[Sequence[float]]) -> bool:
+    """Update a crop polygon outline in one undo step"""
 
 def start_crop_polygon() -> None:
     """

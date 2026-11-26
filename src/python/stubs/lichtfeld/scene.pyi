@@ -242,6 +242,10 @@ class SelectionGroup:
 
 class CropBox:
     @property
+    def role(self) -> str:
+        """Stable crop role: primary or secondary"""
+
+    @property
     def __property_group__(self) -> str:
         """Property group name for introspection"""
 
@@ -263,6 +267,10 @@ class CropBox:
 
 class Ellipsoid:
     @property
+    def role(self) -> str:
+        """Stable crop role: primary or secondary"""
+
+    @property
     def __property_group__(self) -> str:
         """Property group name for introspection"""
 
@@ -283,6 +291,10 @@ class Ellipsoid:
         """List available attributes"""
 
 class CropPolygon:
+    @property
+    def role(self) -> str:
+        """Stable crop role: primary or secondary"""
+
     @property
     def __property_group__(self) -> str:
         """Property group name for introspection"""
@@ -401,6 +413,10 @@ class SceneNode:
     @property
     def parent_id(self) -> int:
         """Parent node identifier (-1 for root)"""
+
+    @property
+    def crop_role(self) -> str | None:
+        """Point-cloud crop role: roi or crop, or None"""
 
     @property
     def children(self) -> list[int]:

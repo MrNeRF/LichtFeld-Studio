@@ -7,7 +7,7 @@ from typing import Optional
 from .tool_defs.builtin import BUILTIN_TOOLS, get_tool_by_id
 from .tool_defs.definition import ToolDef
 
-_OPERATOR_BACKED_BUILTIN_TOOL_IDS = {"builtin.cropbox"}
+_OPERATOR_BACKED_BUILTIN_TOOL_IDS = {"builtin.cropbox", "builtin.crop", "builtin.roi"}
 _NATIVE_BUILTIN_TOOL_IDS = {tool.id for tool in BUILTIN_TOOLS} - _OPERATOR_BACKED_BUILTIN_TOOL_IDS
 
 
@@ -51,6 +51,10 @@ class ToolRegistry:
             return False
 
         import lichtfeld as lf
+
+        if tool_id == "builtin.cropbox" and getattr(lf.ui, "is_point_cloud_forced", lambda: False)():
+            tool_id = "builtin.roi"
+            tool = cls.get(tool_id)
 
         from .op_context import get_context
 

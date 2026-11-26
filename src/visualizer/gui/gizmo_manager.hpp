@@ -93,8 +93,13 @@ namespace lfs::vis {
                 return ensureCropToolState();
             }
             [[nodiscard]] LFS_VIS_API std::string cropToolOperation() const;
+            // Applies the active Crop; on a point-cloud ROI it commits the edit and leaves the tool.
             LFS_VIS_API void applyActiveCropTool();
             LFS_VIS_API void deleteActiveCropToolVolume();
+            // Enters builtin.cropbox, builtin.roi or builtin.crop on the selected splat or point cloud and
+            // selects that role's volume, creating a box when there is none. False when no volume is edited.
+            LFS_VIS_API bool activateCropTool(const std::string& tool_id);
+            [[nodiscard]] core::NodeId cropToolVolumeNodeId() const { return crop_tool_volume_node_id_; }
             // Polygon button: edit the selected splat's or point cloud's polygon, or start drawing one.
             LFS_VIS_API void activateCropPolygonTool();
             // Fit or reset the selected crop polygon, or the selected splat's or point cloud's.
@@ -194,6 +199,7 @@ namespace lfs::vis {
             bool crop_tool_initialized_ = false;
             core::NodeId crop_tool_target_node_id_ = core::NULL_NODE;
             core::NodeId crop_tool_volume_node_id_ = core::NULL_NODE;
+            core::NodeType crop_tool_volume_type_ = core::NodeType::CROPBOX;
             bool crop_tool_drag_active_ = false;
             bool crop_tool_drag_changed_ = false;
             glm::vec3 crop_tool_box_min_before_drag_{-0.5f};
@@ -294,6 +300,8 @@ namespace lfs::vis {
             void previewCropPolygonOutline(const std::vector<glm::vec2>& vertices, const glm::mat4& polygon_to_world);
             bool commitCropPolygonOutline(std::vector<glm::vec2> vertices);
             [[nodiscard]] bool isCropToolActive() const;
+            void showRoiEllipsoidUnsupported();
+            void followSelectedCropRole(const std::string& gizmo_type);
             [[nodiscard]] bool isSelectionVolumeMode() const;
             [[nodiscard]] bool isVolumeGizmoToolActive() const;
             [[nodiscard]] std::optional<core::NodeId> selectedCropTargetNodeId() const;

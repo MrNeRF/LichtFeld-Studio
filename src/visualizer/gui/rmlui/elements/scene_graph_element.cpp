@@ -41,6 +41,7 @@
 #include "scene/scene_manager.hpp"
 #include "sequencer/sequencer_controller.hpp"
 #include "training/training_manager.hpp"
+#include "visualizer/core/editor_context.hpp"
 #include "visualizer/core/parameter_manager.hpp"
 #include "visualizer/core/services.hpp"
 #include "visualizer/gui_capabilities.hpp"
@@ -1244,6 +1245,16 @@ namespace lfs::vis::gui {
                 snapshot.label = node->name;
                 break;
             }
+            // The training ROI and a point cloud's Crop name their role, and the ROI icon takes its colour.
+            if (const auto role = node->cropRole()) {
+                const auto* owner = scene.getNodeById(node->parent_id);
+                if (isPointCloudRoi(scene, *node) || isTrainingRoi(scene, *node)) {
+                    snapshot.roi_volume = true;
+                    snapshot.label = std::format("{} ({})", snapshot.label, LOC("tool_defs.roi"));
+                } else if (*role == core::CropRole::Secondary && owner && isPreTrainingPointCloud(scene, *owner)) {
+                    snapshot.label = std::format("{} ({})", snapshot.label, LOC("tool_defs.crop"));
+                }
+            }
             switch (node->payload_hydration) {
             case core::PayloadHydrationState::Unloaded:
                 snapshot.label += "  [Unloaded]";
@@ -1361,6 +1372,7 @@ namespace lfs::vis::gui {
             .can_rename = snapshot.can_rename,
             .rename_enabled = snapshot.rename_enabled,
             .camera_loss_icon_color = snapshot.camera_loss_icon_color,
+            .roi_volume = snapshot.roi_volume,
         });
         if (snapshot.has_children && !collapsed_ids_.contains(snapshot.id))
             rows.insert(rows.end(), child_rows.begin(), child_rows.end());
@@ -1751,7 +1763,9 @@ namespace lfs::vis::gui {
 
         if (!icon_sprite.empty()) {
             setCachedAttribute(slot.type_icon, "sprite", std::string(icon_sprite));
-            setCachedOptionalProperty(slot.type_icon, "image-color", row.camera_loss_icon_color);
+            setCachedOptionalProperty(slot.type_icon, "image-color",
+                                      row.roi_volume ? std::optional<std::string>{"rgba(179, 77, 255, 255)"}
+                                                     : row.camera_loss_icon_color);
             setCachedProperty(slot.type_icon, "display", "inline");
             setCachedProperty(slot.unicode_icon, "display", "none");
         } else if (!unicode.empty()) {

@@ -339,6 +339,7 @@ namespace lfs::io::project {
                 .visible = node.visible.get(),
                 .locked = node.locked.get(),
                 .training_enabled = node.training_enabled,
+                .secondary_crop = node.cropRole() == lfs::core::CropRole::Secondary,
                 .payload_diverged = node.payload_diverged,
                 .point_cloud_source = node.point_cloud_source,
                 .georef_pose = std::nullopt,
@@ -817,6 +818,7 @@ namespace lfs::io::project {
                                                record.cropbox->color[2]),
                             .line_width = record.cropbox->line_width,
                             .flash_intensity = 0.0f,
+                            .role = record.secondary_crop ? lfs::core::CropRole::Secondary : lfs::core::CropRole::Primary,
                         });
                 }
                 if (record.ellipsoid) {
@@ -832,6 +834,7 @@ namespace lfs::io::project {
                                                record.ellipsoid->color[2]),
                             .line_width = record.ellipsoid->line_width,
                             .flash_intensity = 0.0f,
+                            .role = record.secondary_crop ? lfs::core::CropRole::Secondary : lfs::core::CropRole::Primary,
                         });
                 }
                 if (record.crop_polygon) {
@@ -847,6 +850,7 @@ namespace lfs::io::project {
                                             record.crop_polygon->color[1],
                                             record.crop_polygon->color[2]);
                     data->line_width = record.crop_polygon->line_width;
+                    data->role = record.secondary_crop ? lfs::core::CropRole::Secondary : lfs::core::CropRole::Primary;
                     desc.crop_polygon = std::move(data);
                 }
                 if (record.camera) {

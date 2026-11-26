@@ -10,6 +10,7 @@
 #include "core/scene.hpp"
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 namespace lfs::vis {
 
@@ -22,6 +23,21 @@ namespace lfs::vis {
 
     class SceneManager;
     class TrainerManager;
+
+    // The bound training model retains the pre-training ROI while training is active.
+    [[nodiscard]] LFS_VIS_API bool isTrainingRoi(const core::Scene& scene, const core::SceneNode& node);
+    // The dataset's untrained point cloud owns the pre-training ROI (primary) and Crop (secondary).
+    [[nodiscard]] LFS_VIS_API bool isPreTrainingPointCloud(const core::Scene& scene, const core::SceneNode& owner);
+    // That point cloud's primary volume is the training ROI: it never filters or crops the points.
+    [[nodiscard]] LFS_VIS_API bool isPointCloudRoi(const core::Scene& scene, const core::SceneNode& node);
+    // builtin.cropbox and its pre-training ROI form builtin.roi edit the primary volume; builtin.crop
+    // edits a point cloud's secondary Crop beside it.
+    [[nodiscard]] LFS_VIS_API bool isCropToolId(std::string_view id);
+    [[nodiscard]] LFS_VIS_API const char* cropToolIdForRole(core::CropRole role);
+    // The role the active crop tool edits under owner; secondary only for builtin.crop on a point cloud.
+    [[nodiscard]] LFS_VIS_API core::CropRole activeCropRole(const core::SceneNode* owner);
+    // Training ignores an ellipsoid ROI, so the dataset point cloud's primary volume cannot become one.
+    [[nodiscard]] LFS_VIS_API bool rejectsRoiEllipsoid(const core::Scene& scene, const core::SceneNode* owner, core::CropRole role);
 
     // Application editing mode
     enum class EditorMode : uint8_t {

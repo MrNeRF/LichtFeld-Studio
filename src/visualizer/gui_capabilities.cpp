@@ -8,6 +8,7 @@
 
 #include "core/crop_polygon.hpp"
 #include "core/cuda/sh_layout.cuh"
+#include "core/editor_context.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
@@ -187,6 +188,7 @@ namespace lfs::vis::cap {
                 data->color = source.color;
                 data->line_width = source.line_width;
                 data->flash_intensity = source.flash_intensity;
+                data->role = source.role;
                 node->type = core::NodeType::CROPBOX;
                 node->ellipsoid.reset();
                 node->cropbox = std::move(data);
@@ -207,6 +209,7 @@ namespace lfs::vis::cap {
                 data->color = source.color;
                 data->line_width = source.line_width;
                 data->flash_intensity = source.flash_intensity;
+                data->role = source.role;
                 node->type = core::NodeType::ELLIPSOID;
                 node->cropbox.reset();
                 node->ellipsoid = std::move(data);
@@ -261,12 +264,51 @@ namespace lfs::vis::cap {
                 vis::op::SceneGraphPatchEntry::captureState(scene_manager, {keep_name}, history_options)));
         }
 
-        // One crop volume per splat: a new box or ellipsoid replaces a drawn polygon
-        // inside the same history entry, and a new polygon replaces either shape.
+        // One crop volume per splat and role: a new box or ellipsoid replaces a drawn polygon
+        // of the same role inside the same history entry, and a new polygon replaces either shape.
         [[nodiscard]] std::vector<std::string> replace_crop_polygon_names(const core::Scene& scene,
-                                                                          const core::NodeId parent_id) {
-            const auto* const polygon = scene.getNodeById(scene.getCropPolygonForSplat(parent_id));
+                                                                          const core::NodeId parent_id,
+                                                                          const core::CropRole role) {
+            const auto* const polygon =
+                scene.getNodeById(scene.getCropForRole(parent_id, role, core::NodeType::CROP_POLYGON));
             return polygon ? std::vector<std::string>{polygon->name} : std::vector<std::string>{};
+        }
+
+        // The dataset point cloud's volumes are named by role (its ROI and its Crop), others by shape.
+        [[nodiscard]] bool names_crop_volumes_by_role(const core::Scene& scene, const core::SceneNode& parent,
+                                                      const core::CropRole role) {
+            return isPreTrainingPointCloud(scene, parent) || role == core::CropRole::Secondary;
+        }
+
+        [[nodiscard]] std::string crop_volume_name(const core::Scene& scene, const core::SceneNode& parent,
+                                                   const core::CropRole role, const std::string_view shape_suffix) {
+            if (names_crop_volumes_by_role(scene, parent, role))
+                return parent.name + (role == core::CropRole::Primary ? "_ROI" : "_Crop");
+            return parent.name + std::string(shape_suffix);
+        }
+
+        // A volume named by role, and the ROI bound to the training model, stays one node across shape changes,
+        // so its UUID, its selection and the project's reference to it survive.
+        [[nodiscard]] bool keeps_node_across_shapes(const core::Scene& scene, const core::SceneNode& volume) {
+            const auto* const owner = scene.getNodeById(volume.parent_id);
+            const auto role = volume.cropRole();
+            return owner && role && (names_crop_volumes_by_role(scene, *owner, *role) || isTrainingRoi(scene, volume));
+        }
+
+        // The box around a polygon prism; writers keep the outline centred on the volume's origin.
+        [[nodiscard]] glm::vec3 crop_polygon_half_extents(const core::CropPolygonData& polygon) {
+            return glm::max(glm::vec3(core::crop_polygon::outlineHalfExtents(polygon.vertices), polygon.half_depth),
+                            glm::vec3(kCropVolumeMinExtent));
+        }
+
+        template <typename Data>
+        void copy_crop_volume_style(const core::CropPolygonData& source, Data& target) {
+            target.inverse = source.inverse;
+            target.enabled = source.enabled;
+            target.color = source.color;
+            target.line_width = source.line_width;
+            target.flash_intensity = source.flash_intensity;
+            target.role = source.role;
         }
 
         [[nodiscard]] lfs::Error crop_polygon_error(const lfs::ErrorCode code, std::string message) {
@@ -282,6 +324,87 @@ namespace lfs::vis::cap {
                 .fields = {},
                 .native = std::nullopt,
             });
+        }
+
+        // A point cloud holds its ROI and its Crop side by side. Replacing one role's volume records the
+        // owner's children, so undo puts the volume back in its old place and the sibling's history stays valid.
+        [[nodiscard]] vis::op::SceneGraphStateSnapshot capture_crop_volume_owner(const SceneManager& scene_manager,
+                                                                                 const core::NodeId owner_id,
+                                                                                 const std::vector<std::string>& volume_names) {
+            const auto& scene = scene_manager.getScene();
+            std::vector<core::Uuid> volume_uuids;
+            for (const auto& name : volume_names)
+                if (const auto* const node = scene.getNode(name))
+                    volume_uuids.push_back(node->uuid);
+            return vis::op::SceneGraphPatchEntry::captureStateByIds(
+                scene_manager, {owner_id},
+                vis::op::SceneGraphCaptureOptions{
+                    .mode = vis::op::SceneGraphCaptureMode::FULL,
+                    .include_selected_nodes = false,
+                    .include_scene_context = false,
+                    .preserve_node_ids = false,
+                    .scoped_topology = true,
+                    .payload_uuids = std::move(volume_uuids),
+                });
+        }
+
+        // Gives the volume node another shape in one undo step; exactly one of the shape data is set.
+        core::NodeId reshape_crop_volume(SceneManager& scene_manager,
+                                         RenderingManager* rendering_manager,
+                                         const core::NodeId volume_id,
+                                         std::unique_ptr<core::CropBoxData> cropbox,
+                                         std::unique_ptr<core::EllipsoidData> ellipsoid,
+                                         std::unique_ptr<core::CropPolygonData> polygon,
+                                         const glm::mat4& local_transform,
+                                         const std::string& label) {
+            auto& scene = scene_manager.getScene();
+            auto* const node = scene.getNodeById(volume_id);
+            if (!node)
+                return core::NULL_NODE;
+            const std::string name = node->name;
+            const core::NodeId owner_id = node->parent_id;
+            auto history_before = capture_crop_volume_owner(scene_manager, owner_id, {name});
+            node->type = cropbox     ? core::NodeType::CROPBOX
+                         : ellipsoid ? core::NodeType::ELLIPSOID
+                                     : core::NodeType::CROP_POLYGON;
+            node->cropbox = std::move(cropbox);
+            node->ellipsoid = std::move(ellipsoid);
+            node->crop_polygon = std::move(polygon);
+            scene.setNodeTransform(name, local_transform);
+            scene.notifyMutation(core::Scene::MutationType::NODE_ADDED);
+            if (rendering_manager)
+                rendering_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
+            vis::op::undoHistory().push(std::make_unique<vis::op::SceneGraphPatchEntry>(
+                scene_manager, label, std::move(history_before),
+                capture_crop_volume_owner(scene_manager, owner_id, {name})));
+            return volume_id;
+        }
+
+        // A role-named polygon becomes a box or an ellipsoid of its footprint, keeping its node.
+        core::NodeId reshape_crop_polygon(SceneManager& scene_manager,
+                                          RenderingManager* rendering_manager,
+                                          const core::SceneNode& polygon_node,
+                                          const CropVolumeShape target_shape) {
+            const auto& polygon = *polygon_node.crop_polygon;
+            const glm::vec3 half_extents = crop_polygon_half_extents(polygon);
+            std::unique_ptr<core::CropBoxData> cropbox;
+            std::unique_ptr<core::EllipsoidData> ellipsoid;
+            if (target_shape == CropVolumeShape::Box) {
+                cropbox = std::make_unique<core::CropBoxData>();
+                cropbox->min = -half_extents;
+                cropbox->max = half_extents;
+                copy_crop_volume_style(polygon, *cropbox);
+            } else {
+                ellipsoid = std::make_unique<core::EllipsoidData>();
+                ellipsoid->radii = half_extents;
+                copy_crop_volume_style(polygon, *ellipsoid);
+            }
+            const core::NodeId id = reshape_crop_volume(
+                scene_manager, rendering_manager, polygon_node.id, std::move(cropbox), std::move(ellipsoid), nullptr,
+                polygon_node.local_transform.get(), crop_volume_conversion_label(target_shape));
+            if (const auto* const node = scene_manager.getScene().getNodeById(id))
+                sync_crop_volume_render_settings(rendering_manager, *node, target_shape);
+            return id;
         }
 
         void remove_crop_volumes(core::Scene& scene,
@@ -767,7 +890,8 @@ namespace lfs::vis::cap {
 
             for (const core::NodeId child_id : parent->children) {
                 const auto* const child = scene.getNodeById(child_id);
-                if (child && child->type == type)
+                // A point cloud's secondary Crop is addressed by its own name, never through the owner.
+                if (child && child->type == type && child->cropRole().value_or(core::CropRole::Primary) == core::CropRole::Primary)
                     return child_id;
             }
 
@@ -1498,7 +1622,8 @@ namespace lfs::vis::cap {
 
     std::expected<core::NodeId, std::string> ensureCropBox(SceneManager& scene_manager,
                                                            RenderingManager* rendering_manager,
-                                                           const core::NodeId parent_id) {
+                                                           const core::NodeId parent_id,
+                                                           const core::CropRole role) {
         auto& scene = scene_manager.getScene();
         const auto* const parent = scene.getNodeById(parent_id);
         if (!parent)
@@ -1507,11 +1632,14 @@ namespace lfs::vis::cap {
         if (parent->type != core::NodeType::SPLAT && parent->type != core::NodeType::POINTCLOUD)
             return std::unexpected("Crop boxes can only be attached to splat or pointcloud nodes");
 
-        if (const core::NodeId existing = scene.getCropBoxForSplat(parent_id); existing != core::NULL_NODE) {
+        if (const core::NodeId existing = scene.getCropForRole(parent_id, role, core::NodeType::CROPBOX);
+            existing != core::NULL_NODE) {
             remove_opposite_crop_volume_if_present(
-                scene_manager, rendering_manager, existing, scene.getEllipsoidForSplat(parent_id), CropVolumeShape::Box);
+                scene_manager, rendering_manager, existing,
+                scene.getCropForRole(parent_id, role, core::NodeType::ELLIPSOID), CropVolumeShape::Box);
             remove_opposite_crop_volume_if_present(
-                scene_manager, rendering_manager, existing, scene.getCropPolygonForSplat(parent_id), CropVolumeShape::Box);
+                scene_manager, rendering_manager, existing,
+                scene.getCropForRole(parent_id, role, core::NodeType::CROP_POLYGON), CropVolumeShape::Box);
             if (rendering_manager) {
                 auto settings = rendering_manager->getSettings();
                 if (const auto* node = scene.getNodeById(existing)) {
@@ -1525,24 +1653,23 @@ namespace lfs::vis::cap {
             return existing;
         }
 
-        if (const core::NodeId existing_ellipsoid = scene.getEllipsoidForSplat(parent_id);
+        if (const core::NodeId existing_ellipsoid = scene.getCropForRole(parent_id, role, core::NodeType::ELLIPSOID);
             existing_ellipsoid != core::NULL_NODE) {
             remove_opposite_crop_volume_if_present(
-                scene_manager, rendering_manager, existing_ellipsoid, scene.getCropPolygonForSplat(parent_id),
-                CropVolumeShape::Ellipsoid);
+                scene_manager, rendering_manager, existing_ellipsoid,
+                scene.getCropForRole(parent_id, role, core::NodeType::CROP_POLYGON), CropVolumeShape::Ellipsoid);
             return convert_crop_volume_in_place(scene_manager, rendering_manager, existing_ellipsoid, CropVolumeShape::Box);
         }
 
-        const vis::op::SceneGraphCaptureOptions history_options{
-            .mode = vis::op::SceneGraphCaptureMode::FULL,
-            .include_selected_nodes = false,
-            .include_scene_context = false,
-        };
-        const auto replaced_polygon = replace_crop_polygon_names(scene, parent_id);
-        auto history_before = vis::op::SceneGraphPatchEntry::captureState(scene_manager, replaced_polygon, history_options);
+        if (const auto* const polygon = scene.getNodeById(scene.getCropForRole(parent_id, role, core::NodeType::CROP_POLYGON));
+            polygon && polygon->crop_polygon && keeps_node_across_shapes(scene, *polygon))
+            return reshape_crop_polygon(scene_manager, rendering_manager, *polygon, CropVolumeShape::Box);
+
+        const auto replaced_polygon = replace_crop_polygon_names(scene, parent_id, role);
+        auto history_before = capture_crop_volume_owner(scene_manager, parent_id, replaced_polygon);
         remove_crop_volumes(scene, rendering_manager, replaced_polygon);
-        const std::string cropbox_name = parent->name + "_cropbox";
-        const core::NodeId cropbox_id = scene.addCropBox(cropbox_name, parent_id);
+        const std::string cropbox_name = crop_volume_name(scene, *parent, role, "_cropbox");
+        const core::NodeId cropbox_id = scene.addCropBox(cropbox_name, parent_id, role);
         if (cropbox_id == core::NULL_NODE)
             return std::unexpected("Failed to create crop box for node: " + parent->name);
         const auto* const cropbox_node = scene.getNodeById(cropbox_id);
@@ -1581,7 +1708,7 @@ namespace lfs::vis::cap {
             scene_manager,
             "Add Crop Box",
             std::move(history_before),
-            vis::op::SceneGraphPatchEntry::captureState(scene_manager, {created_cropbox_name}, history_options)));
+            capture_crop_volume_owner(scene_manager, parent_id, {created_cropbox_name})));
 
         return cropbox_id;
     }
@@ -1706,7 +1833,8 @@ namespace lfs::vis::cap {
         bool use_before = cropbox_node->cropbox->enabled;
 
         const glm::vec3 center = (min_bounds + max_bounds) * 0.5f;
-        const glm::vec3 half_size = (max_bounds - min_bounds) * 0.5f;
+        // A planar cloud has no thickness; a box without one holds none of its points.
+        const glm::vec3 half_size = glm::max((max_bounds - min_bounds) * 0.5f, glm::vec3(kCropVolumeMinExtent));
 
         auto updated_data = before_data;
         updated_data.min = -half_size;
@@ -1847,7 +1975,8 @@ namespace lfs::vis::cap {
 
     std::expected<core::NodeId, std::string> ensureEllipsoid(SceneManager& scene_manager,
                                                              RenderingManager* rendering_manager,
-                                                             const core::NodeId parent_id) {
+                                                             const core::NodeId parent_id,
+                                                             const core::CropRole role) {
         constexpr float CIRCUMSCRIBE_FACTOR = 1.732050808f; // sqrt(3)
 
         auto& scene = scene_manager.getScene();
@@ -1858,11 +1987,14 @@ namespace lfs::vis::cap {
         if (parent->type != core::NodeType::SPLAT && parent->type != core::NodeType::POINTCLOUD)
             return std::unexpected("Ellipsoids can only be attached to splat or pointcloud nodes");
 
-        if (const core::NodeId existing = scene.getEllipsoidForSplat(parent_id); existing != core::NULL_NODE) {
+        if (const core::NodeId existing = scene.getCropForRole(parent_id, role, core::NodeType::ELLIPSOID);
+            existing != core::NULL_NODE) {
             remove_opposite_crop_volume_if_present(
-                scene_manager, rendering_manager, existing, scene.getCropBoxForSplat(parent_id), CropVolumeShape::Ellipsoid);
+                scene_manager, rendering_manager, existing,
+                scene.getCropForRole(parent_id, role, core::NodeType::CROPBOX), CropVolumeShape::Ellipsoid);
             remove_opposite_crop_volume_if_present(
-                scene_manager, rendering_manager, existing, scene.getCropPolygonForSplat(parent_id), CropVolumeShape::Ellipsoid);
+                scene_manager, rendering_manager, existing,
+                scene.getCropForRole(parent_id, role, core::NodeType::CROP_POLYGON), CropVolumeShape::Ellipsoid);
             if (rendering_manager) {
                 auto settings = rendering_manager->getSettings();
                 if (const auto* node = scene.getNodeById(existing)) {
@@ -1876,24 +2008,27 @@ namespace lfs::vis::cap {
             return existing;
         }
 
-        if (const core::NodeId existing_cropbox = scene.getCropBoxForSplat(parent_id);
+        // An ellipsoid ROI from an older project stays; a new one would be ignored by training.
+        if (rejectsRoiEllipsoid(scene, parent, role))
+            return std::unexpected("The training ROI is a box or a polygon; use the Crop for an ellipsoid");
+
+        if (const core::NodeId existing_cropbox = scene.getCropForRole(parent_id, role, core::NodeType::CROPBOX);
             existing_cropbox != core::NULL_NODE) {
             remove_opposite_crop_volume_if_present(
-                scene_manager, rendering_manager, existing_cropbox, scene.getCropPolygonForSplat(parent_id),
-                CropVolumeShape::Box);
+                scene_manager, rendering_manager, existing_cropbox,
+                scene.getCropForRole(parent_id, role, core::NodeType::CROP_POLYGON), CropVolumeShape::Box);
             return convert_crop_volume_in_place(scene_manager, rendering_manager, existing_cropbox, CropVolumeShape::Ellipsoid);
         }
 
-        const vis::op::SceneGraphCaptureOptions history_options{
-            .mode = vis::op::SceneGraphCaptureMode::FULL,
-            .include_selected_nodes = false,
-            .include_scene_context = false,
-        };
-        const auto replaced_polygon = replace_crop_polygon_names(scene, parent_id);
-        auto history_before = vis::op::SceneGraphPatchEntry::captureState(scene_manager, replaced_polygon, history_options);
+        if (const auto* const polygon = scene.getNodeById(scene.getCropForRole(parent_id, role, core::NodeType::CROP_POLYGON));
+            polygon && polygon->crop_polygon && keeps_node_across_shapes(scene, *polygon))
+            return reshape_crop_polygon(scene_manager, rendering_manager, *polygon, CropVolumeShape::Ellipsoid);
+
+        const auto replaced_polygon = replace_crop_polygon_names(scene, parent_id, role);
+        auto history_before = capture_crop_volume_owner(scene_manager, parent_id, replaced_polygon);
         remove_crop_volumes(scene, rendering_manager, replaced_polygon);
-        const std::string ellipsoid_name = parent->name + "_ellipsoid";
-        const core::NodeId ellipsoid_id = scene.addEllipsoid(ellipsoid_name, parent_id);
+        const std::string ellipsoid_name = crop_volume_name(scene, *parent, role, "_ellipsoid");
+        const core::NodeId ellipsoid_id = scene.addEllipsoid(ellipsoid_name, parent_id, role);
         if (ellipsoid_id == core::NULL_NODE)
             return std::unexpected("Failed to create ellipsoid for node: " + parent->name);
         const auto* const ellipsoid_node = scene.getNodeById(ellipsoid_id);
@@ -1940,7 +2075,7 @@ namespace lfs::vis::cap {
             scene_manager,
             "Add Ellipsoid",
             std::move(history_before),
-            vis::op::SceneGraphPatchEntry::captureState(scene_manager, {created_ellipsoid_name}, history_options)));
+            capture_crop_volume_owner(scene_manager, parent_id, {created_ellipsoid_name})));
         return ellipsoid_id;
     }
 
@@ -2230,26 +2365,32 @@ namespace lfs::vis::cap {
             return crop_polygon_error(lfs::ErrorCode::InvalidArgument,
                                       "The crop polygon outline or depth is degenerate");
 
-        std::vector<std::string> replaced;
-        for (const core::NodeId volume_id : {scene.getCropBoxForSplat(parent_id),
-                                             scene.getEllipsoidForSplat(parent_id),
-                                             scene.getCropPolygonForSplat(parent_id)}) {
+        // Only the volume of the same role is replaced; a point cloud's ROI and Crop are independent.
+        std::vector<const core::SceneNode*> same_role;
+        for (const core::NodeId volume_id : {scene.getCropForRole(parent_id, data.role, core::NodeType::CROPBOX),
+                                             scene.getCropForRole(parent_id, data.role, core::NodeType::ELLIPSOID),
+                                             scene.getCropForRole(parent_id, data.role, core::NodeType::CROP_POLYGON)}) {
             if (const auto* const volume = scene.getNodeById(volume_id))
-                replaced.push_back(volume->name);
+                same_role.push_back(volume);
         }
+        if (same_role.size() == 1 && keeps_node_across_shapes(scene, *same_role.front())) {
+            data.enabled = true;
+            return reshape_crop_volume(scene_manager, rendering_manager, same_role.front()->id, nullptr, nullptr,
+                                       std::make_unique<core::CropPolygonData>(std::move(data)), local_transform,
+                                       "Add Crop Polygon");
+        }
+        std::vector<std::string> replaced;
+        for (const auto* const volume : same_role)
+            replaced.push_back(volume->name);
 
-        const vis::op::SceneGraphCaptureOptions history_options{
-            .mode = vis::op::SceneGraphCaptureMode::FULL,
-            .include_selected_nodes = false,
-            .include_scene_context = false,
-        };
-        auto history_before = vis::op::SceneGraphPatchEntry::captureState(scene_manager, replaced, history_options);
+        auto history_before = capture_crop_volume_owner(scene_manager, parent_id, replaced);
         remove_crop_volumes(scene, rendering_manager, replaced);
 
         const std::string parent_name = parent->name;
+        const std::string polygon_name_base = crop_volume_name(scene, *parent, data.role, "_crop_polygon");
         data.enabled = true;
         const core::NodeId polygon_id =
-            scene.addCropPolygon(parent_name + "_crop_polygon", parent_id, std::move(data), local_transform);
+            scene.addCropPolygon(polygon_name_base, parent_id, std::move(data), local_transform);
         const auto* const polygon_node = scene.getNodeById(polygon_id);
         if (!polygon_node)
             return crop_polygon_error(lfs::ErrorCode::Internal, "Failed to create crop polygon for node: " + parent_name);
@@ -2273,7 +2414,7 @@ namespace lfs::vis::cap {
             scene_manager,
             "Add Crop Polygon",
             std::move(history_before),
-            vis::op::SceneGraphPatchEntry::captureState(scene_manager, {polygon_name}, history_options)));
+            capture_crop_volume_owner(scene_manager, parent_id, {polygon_name})));
         return polygon_id;
     }
 
