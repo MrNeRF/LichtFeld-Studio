@@ -167,9 +167,9 @@ namespace lfs::training {
         void encode_q16(In swizzled, Out codes, Out bounds, const size_t primitives,
                         const uint32_t rest, const size_t code_offset, const size_t bounds_offset) {
             const auto src = ref(swizzled), dst = ref(codes), bnd = ref(bounds);
-            LFS_ASSERT_MSG(code_offset <= UINT32_MAX / sizeof(uint16_t) &&
-                               bounds_offset <= UINT32_MAX / sizeof(float),
-                           "Vulkan SH encode offset exceeds 32-bit byte indexing");
+            // The offsets are added to the 64-bit buffer addresses here, as on Metal and CUDA, and the shader
+            // indexes only these rows' cells from there, so they need no 32-bit limit; the row count does.
+            LFS_ASSERT_MSG(primitives <= UINT32_MAX, "Vulkan SH encode row count exceeds 32-bit indexing");
             StorageRef code_storage = dst;
             StorageRef bounds_storage = bnd;
             code_storage.byte_offset += code_offset * sizeof(uint16_t);
