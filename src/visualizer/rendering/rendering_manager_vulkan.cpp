@@ -5006,7 +5006,7 @@ namespace lfs::vis {
                 render_error = "Gaussian viewer rendering requires a VkSplat backend";
             }
         } else if (has_visible_gaussian_model && render_error.empty()) {
-            // PLY comparison intentionally leaves FrameContext.model empty and
+            // Node comparison intentionally leaves FrameContext.model empty and
             // renders the two owned node models into dedicated output slots.
             // If panel preparation fails, never fall through to the full-frame
             // renderer and dereference that absent aggregate model.

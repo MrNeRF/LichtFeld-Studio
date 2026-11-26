@@ -89,7 +89,7 @@ void main() {
 
     // Pixel-center UV inside the content rect. Normalized texture coordinates
     // place the first and last pixel centers at 0.5 / extent and
-    // (extent - 0.5) / extent; dividing by extent - 1 stretches clipped PLY
+    // (extent - 0.5) / extent; dividing by extent - 1 stretches clipped comparison
     // panels differently after their cached widths are refreshed.
     vec2 content_uv = vec2(
         (px.x - pc.rect.x) / max(pc.rect.z, 1.0),
