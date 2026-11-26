@@ -36,6 +36,12 @@ void gsplat_atomic_add(Ptr<float, Access.ReadWrite> output, uint index, float va
     }
 #endif
 }
+// A splat's gradient row starts at a 64-bit byte offset: g * kGsplatGradStride in 32 bits wraps past 306.8M
+// Gaussians. Fields are small indices from the row's address, which also keeps every access within 4 GiB of its
+// pointer, as NVIDIA's Vulkan needs without VK_EXT_shader_64bit_indexing (the buffer passes 4 GiB at 76.7M rows).
+Ptr<float, Access.ReadWrite> gsplat_grad_row(Ptr<float, Access.ReadWrite> grads, uint g) {
+    return (Ptr<float, Access.ReadWrite>)(uint64_t(grads) + uint64_t(g) * kGsplatGradStride * 4);
+}
 // One pixel of the backward walk.
 struct GsplatPixel {
     float3 origin, dir, v_c, buffer, depth_axis;
@@ -209,7 +215,7 @@ struct GsplatAccumulateParams {
 void gsplat_accumulate(GsplatAccumulateParams p, uint g) {
     if (g >= p.count)
         return;
-    Ptr<float, Access.ReadWrite> v = (Ptr<float, Access.ReadWrite>)(uint64_t(p.grads) + uint64_t(g) * kGsplatGradStride * 4);
+    Ptr<float, Access.ReadWrite> v = gsplat_grad_row(p.grads, g);
     const float3 scale = exp(gsplat_load3(p.scales, g));
     const float3 scaleChain = p.mip != 0 ? scale * scale / gsplat_filtered_scale(scale, p.mip, g) : scale;
     for (uint k = 0; k < 3u; ++k) {
@@ -320,7 +326,7 @@ void raster(GsplatRasterParams p, uint tile, uint lane) {
                     }
                     const uint g = ids[t];
                     if (wl < 14 && values[0] != 0)
-                        gsplat_atomic_add(p.grads, g * 14 + wl, values[0]);
+                        gsplat_atomic_add(gsplat_grad_row(p.grads, g), wl, values[0]);
                     if (wl >= 14 && wl < 16 && p.densification != 0 && p.error_map != 0)
                         gsplat_atomic_add(p.densification, (wl - 14) * p.count + g, values[0]);
                     if (wl == 16 && p.edge_scores != 0)
@@ -344,7 +350,7 @@ void raster(GsplatRasterParams p, uint tile, uint lane) {
             if (WaveGetLaneCount() != 32 && lane % 32 == 0) {
                 uint g = ids[t];
                 [unroll] for (uint k = 0; k < 14; ++k) if (values[k] != 0)
-                    gsplat_atomic_add(p.grads, g * 14 + k, values[k]);
+                    gsplat_atomic_add(gsplat_grad_row(p.grads, g), k, values[k]);
                 if (p.densification != 0 && p.error_map != 0) {
                     gsplat_atomic_add(p.densification, g, values[14]);
                     gsplat_atomic_add(p.densification, p.count + g, values[15]);
