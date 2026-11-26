@@ -43,9 +43,12 @@ float2 decode(uint64_t cell, uint sourceRow, uniform Parameters p) {
     const float sMax = bounds[block * 4u + 3u];
     float uq, sq;
     if (p.bits == 16u) {
-        Ptr<uint16_t, Access.Read> codes = (Ptr<uint16_t, Access.Read>)p.source;
-        uq = float(codes[cell * 2u]);
-        sq = float(codes[cell * 2u + 1u]);
+        // A cell's codes at their 64-bit byte address (the 8-bit path's byte helpers already address in integer
+        // math): NVIDIA's Vulkan computes an access chain's byte offset in 32 bits without
+        // VK_EXT_shader_64bit_indexing.
+        Ptr<uint16_t, Access.Read> codes = (Ptr<uint16_t, Access.Read>)(p.source + cell * 4u);
+        uq = float(codes[0]);
+        sq = float(codes[1]);
     } else {
         uq = float(loadByte(p.source, cell * 2u));
         sq = float(loadByte(p.source, cell * 2u + 1u));
@@ -75,9 +78,9 @@ void encode(uint64_t cell, float2 value, uint destinationRow, uniform Parameters
     const uint uq = codeOf(maxCode * (value.x - uMin) * (1.0f / max(uMax - uMin, 1e-15f)), maxCode);
     const uint sq = codeOf(maxCode * (value.y - sMin) * (1.0f / max(sMax - sMin, 1e-15f)), maxCode);
     if (p.bits == 16u) {
-        Ptr<uint16_t, Access.ReadWrite> codes = (Ptr<uint16_t, Access.ReadWrite>)p.destination;
-        codes[cell * 2u] = uint16_t(uq);
-        codes[cell * 2u + 1u] = uint16_t(sq);
+        Ptr<uint16_t, Access.ReadWrite> codes = (Ptr<uint16_t, Access.ReadWrite>)(p.destination + cell * 4u);
+        codes[0] = uint16_t(uq);
+        codes[1] = uint16_t(sq);
     } else {
         // Odd cells sit in the upper half of their aligned word.
         const uint64_t address = p.destination + cell * 2u;
@@ -97,13 +100,14 @@ void main(uint3 groupId : SV_GroupID, uint3 laneId : SV_GroupThreadID, uniform P
         const uint wordsPerSlot = 32u * (p.bits == 16u ? 4u : 2u);
         const uint groupWords = (p.slotEnd - p.slotBegin) * wordsPerSlot;
         const uint64_t words = uint64_t((p.primitives + 31u) / 32u) * groupWords;
-        Ptr<uint, Access.Read> source = (Ptr<uint, Access.Read>)p.source;
-        Ptr<uint, Access.ReadWrite> destination = (Ptr<uint, Access.ReadWrite>)p.destination;
+        // Words at their 64-bit byte address: the moments pass 4 GiB at 44.7M rows (8-bit, degree 3), past which
+        // NVIDIA's Vulkan wraps an access chain's 32-bit byte offset without VK_EXT_shader_64bit_indexing.
         for (uint64_t word = uint64_t(groupId.x) * 256u + lane;
              word < words; word += uint64_t(grid.x) * 256u) {
             const uint64_t tile = word / groupWords;
             const uint local = uint(word % groupWords);
-            destination[tile * p.width * wordsPerSlot + p.slotBegin * wordsPerSlot + local] = source[word];
+            const uint64_t to = tile * p.width * wordsPerSlot + p.slotBegin * wordsPerSlot + local;
+            ((Ptr<uint, Access.ReadWrite>)(p.destination + to * 4u))[0] = ((Ptr<uint, Access.Read>)(p.source + word * 4u))[0];
         }
         return;
     }
