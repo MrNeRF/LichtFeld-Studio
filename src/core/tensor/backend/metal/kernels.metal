@@ -3070,7 +3070,7 @@ struct ShParams {
     uint source_offset, destination_offset, padding;
 };
 
-static uint sh_offset(uint row, uint cell, uint rest, bool q16) {
+static ulong sh_offset(ulong row, uint cell, uint rest, bool q16) {
     if (q16)
         return (row / 32 * (rest * 3) + cell) * 32 + row % 32;
     return ((row / 32 * ((rest * 3 + 3) / 4) + cell / 4) * 32 + row % 32) * 4 + cell % 4;
@@ -3084,7 +3084,7 @@ static float sh_read(constant ShParams& p, uint row, uint c) {
     const uint width = kShSource == 1 || kShSource == 2 ? (kShSourceRest * 3 + 3) / 4 * 4 : kShSourceRest * 3;
     if (row >= p.source_rows || c >= width)
         return 0;
-    const uint offset = kShSource == 0 ? row * kShSourceRest * 3 + c : sh_offset(row, c, kShSourceRest, kShSource == 3);
+    const ulong offset = kShSource == 0 ? ulong(row) * (kShSourceRest * 3) + c : sh_offset(row, c, kShSourceRest, kShSource == 3);
     if (kShSource == 3) {
         const float lo = p.source_bounds[row / 256 * 2], hi = p.source_bounds[row / 256 * 2 + 1];
         const uint code = ((device const ushort*)p.source)[offset];
@@ -3102,18 +3102,19 @@ kernel void sh_codec(constant ShParams& p [[buffer(0)]], uint index [[thread_pos
     // A range that ends the destination also zeroes the tail lanes of its last tile.
     if (kScatter == 0 && p.destination_offset + p.count == p.destination_rows && kShDestination != 0)
         rows += (32 - p.destination_rows % 32) % 32;
-    for (uint i = index; i < (rows + 31) / 32 * 32 * width; i += threads) {
+    const ulong total = ulong((rows + 31) / 32 * 32) * width;
+    for (ulong i = index; i < total; i += threads) {
         // Destinations are enumerated in memory order.
-        const uint row = kShDestination == 0 ? i / width : i / (width * 32) * 32 + i / 4 % 32;
-        const uint c = kShDestination == 0 ? i % width : i / 128 % (width / 4) * 4 + i % 4;
+        const uint row = uint(kShDestination == 0 ? i / width : i / (width * 32) * 32 + i / 4 % 32);
+        const uint c = uint(kShDestination == 0 ? i % width : i / 128 % (width / 4) * 4 + i % 4);
         if (row >= rows)
             continue;
         const uint source_row = kShIndices != 0 && kScatter == 0 && row < p.count ? sh_index(p, row) : p.source_offset + row;
         const uint destination_row = kScatter != 0 ? sh_index(p, row) : p.destination_offset + row;
         const float value =
             row < p.count && !(c >= kShDestinationRest * 3 && kShSource != 1) ? sh_read(p, source_row, c) : 0;
-        const uint offset = kShDestination == 0 ? destination_row * width + c
-                                                : sh_offset(destination_row, c, kShDestinationRest, false);
+        const ulong offset = kShDestination == 0 ? ulong(destination_row) * width + c
+                                                 : sh_offset(destination_row, c, kShDestinationRest, false);
         if (kShDestination == 2)
             ((device half*)p.destination)[offset] = half(value);
         else
