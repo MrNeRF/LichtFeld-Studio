@@ -209,7 +209,8 @@ namespace lfs::vis::gui {
         // Scene tabs, filter chips, search and footer take about 130 dp; this keeps
         // three tree rows visible under them.
         static constexpr float SCENE_PANEL_MIN_HEIGHT = 200.0f;
-        static constexpr float DOCK_GRIP_H = RESIZE_GRAB_HALF_WIDTH_DP;
+        // Visual strip height. The pointer band is defined by resizeHitZone.
+        static constexpr float DOCK_GRIP_H = 4.0f;
         static constexpr float TAB_BAR_H = 28.0f;
         static constexpr float RIGHT_TAB_BAR_W = 28.0f;
         static constexpr float RIGHT_PANEL_SECTION_GAP = 4.0f;

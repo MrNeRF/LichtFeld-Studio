@@ -837,6 +837,15 @@ namespace lfs::python {
             "set_bottom_dock_active_tab", [](const std::string& panel_id) {
                 invoke_on_viewer([panel_id] {
                     if (auto* const gui_manager = get_gui_manager())
+                        gui_manager->panelLayout().setBottomDockActiveTab(panel_id);
+                });
+            },
+            nb::arg("panel_id"), "Set the active bottom-dock panel id");
+
+        m.def(
+            "activate_bottom_dock_tab", [](const std::string& panel_id) {
+                invoke_on_viewer([panel_id] {
+                    if (auto* const gui_manager = get_gui_manager())
                         gui_manager->panelLayout().activateBottomDockTab(panel_id);
                 });
             },

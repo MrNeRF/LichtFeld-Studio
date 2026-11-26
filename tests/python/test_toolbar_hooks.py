@@ -338,7 +338,8 @@ def test_toolbar_binds_overlay_model_fields(toolbar_module):
     assert "viewport_export_action" in model.bound_events
 
 
-def test_bottom_dock_toolbar_selection_and_dispatch_rules(toolbar_module, monkeypatch):
+@pytest.mark.parametrize("explicit_activation", [False, True])
+def test_bottom_dock_toolbar_selection_and_dispatch_rules(toolbar_module, monkeypatch, explicit_activation):
     module, _hook_calls, _remove_calls = toolbar_module
     lf_stub = sys.modules["lichtfeld"]
     spaces = {
@@ -364,7 +365,10 @@ def test_bottom_dock_toolbar_selection_and_dispatch_rules(toolbar_module, monkey
     calls = []
     set_visible = lambda value: calls.append(("visible", value))
     set_active = lambda panel_id: (calls.append(("active", panel_id)), active.__setitem__(0, panel_id))
-    monkeypatch.setattr(lf_stub.ui, "set_bottom_dock_active_tab", set_active, raising=False)
+    if explicit_activation:
+        monkeypatch.setattr(lf_stub.ui, "activate_bottom_dock_tab", set_active, raising=False)
+    else:
+        monkeypatch.setattr(lf_stub.ui, "set_bottom_dock_active_tab", set_active, raising=False)
 
     active[0] = ""
     module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, False, set_visible)

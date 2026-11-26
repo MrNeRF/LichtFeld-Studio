@@ -148,16 +148,18 @@ def _toggle_bottom_dock_panel(panel_id, visible, set_visible):
     import lichtfeld as lf
 
     active_getter = getattr(lf.ui, "get_bottom_dock_active_tab", None)
-    set_active = getattr(lf.ui, "set_bottom_dock_active_tab", None)
+    activate = getattr(lf.ui, "activate_bottom_dock_tab", None)
+    if not callable(activate):
+        activate = getattr(lf.ui, "set_bottom_dock_active_tab", None)
     floating = getattr(getattr(lf.ui, "PanelSpace", None), "FLOATING", None)
     active = active_getter() if callable(active_getter) else ""
     if not visible:
         set_visible(True)
-        if callable(set_active):
-            set_active(panel_id)
+        if callable(activate):
+            activate(panel_id)
     elif _bottom_dock_panel_space(panel_id) != floating and active != panel_id:
-        if callable(set_active):
-            set_active(panel_id)
+        if callable(activate):
+            activate(panel_id)
     else:
         set_visible(False)
 

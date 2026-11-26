@@ -6332,6 +6332,7 @@ namespace lfs::vis::gui {
             const bool over_left_edge =
                 PanelLayoutManager::leftDockResizeHovered(left, frame_input, panel_y, panel_h);
             if (!block_underlay_input && left.panel_width > 0.0f && (dragging || over_left_edge)) {
+                // Paint inside the dock separator; the pointer band also extends into the viewport.
                 shell_regions.left_resize = {left.edge_min_x, panel_y,
                                              left.panel_x + left.panel_width - left.edge_min_x, panel_h};
                 shell_regions.left_resize_active = dragging;

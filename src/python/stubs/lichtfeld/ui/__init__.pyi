@@ -477,6 +477,9 @@ def get_bottom_dock_active_tab() -> str:
     """Get the active bottom-dock panel id"""
 
 def set_bottom_dock_active_tab(panel_id: str) -> None:
+    """Set the active bottom-dock panel id"""
+
+def activate_bottom_dock_tab(panel_id: str) -> None:
     """Activate a bottom-dock panel and reopen the dock if it is collapsed."""
 
 def set_main_panel_active_tab(panel_id: str) -> None:

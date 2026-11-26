@@ -594,11 +594,16 @@ TEST_F(PanelLayoutRenderDemandTest, BottomDockCollapseKeepsActivePanelAndHeight)
     EXPECT_EQ(late_panel->draw_count, 0);
     EXPECT_EQ(restored.getBottomDockActiveTab(), active);
 
+    restored.setBottomDockActiveTab("test.bottom.late");
+    EXPECT_TRUE(restored.isBottomDockCollapsed());
+    EXPECT_EQ(restored.getBottomDockActiveTab(), "test.bottom.late");
+
     restored.activateBottomDockTab(active);
     restored.renderBottomDock(draw_ctx, true, false, input, s);
     EXPECT_FLOAT_EQ(restored.computeBottomDockReservedHeight(true, false, s), expanded_height);
     EXPECT_EQ(restored.getBottomDockActiveTab(), active);
     EXPECT_GT(panel->draw_count, draws);
+    EXPECT_EQ(late_panel->draw_count, 0);
 }
 
 TEST_F(PanelLayoutRenderDemandTest, VerticalTabsReserveWidthInLiveAndCachedContent) {

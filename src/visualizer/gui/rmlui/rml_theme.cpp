@@ -1000,6 +1000,13 @@ namespace lfs::vis::gui::rml_theme {
                 {"startup.select_bg", colorToRmlAlpha(p.background, is_light ? 0.90f : 0.78f)},
                 {"startup.selectbox_bg", colorToRmlAlpha(p.surface, is_light ? 0.95f : 0.90f)},
             };
+            // Older plugin stylesheets share this resolver. Keep their names
+            // mapped to the canonical dock values rather than duplicating formulas.
+            tokens.emplace("right_panel.tab_hover_decor", tokens.at("dock.tab_hover_decor"));
+            tokens.emplace("right_panel.separator", tokens.at("dock.tab_separator"));
+            tokens.emplace("right_panel.resize_hover", tokens.at("dock.resize_hover"));
+            tokens.emplace("right_panel.resize_active", tokens.at("dock.resize_active"));
+            tokens.emplace("right_panel.tab_active_bg", colorToRmlAlpha(p.surface_bright, 0.4f));
             return tokens;
         }
 
