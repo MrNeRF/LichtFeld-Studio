@@ -15,19 +15,36 @@ uint64_t shOffset(uint row, uint cell, uint rest, bool q16) {
 uint64_t shSlotStart(uint row, uint slots) {
     return uint64_t(row / 32) * (slots * 32) + row % 32;
 }
+// Byte address of a row of an SH store, and the index of the row's value c from there in the store's element type.
+// Formats: 0 canonical fp32 rows of rest * 3 values, 1 fp32 and 2 f16 float4 slots, 3 Q16 cells, 4 bytes in float4
+// slots. The row's start is 64-bit integer math and the value a small index from it, because NVIDIA's Vulkan computes
+// an access chain's byte offset in 32 bits unless the pipeline asks for 64-bit indexing: indexed from its own start, an
+// SH store that passes 4 GiB (22.4M rows in fp32 at degree 3, 44.7M in f16, 47.7M in Q16) is read and written at the
+// wrong address past it.
+uint64_t shRowAddress(uint64_t store, uint format, uint rest, uint row) {
+    if (format == 0)
+        return store + uint64_t(row) * (rest * 3) * 4;
+    if (format == 3)
+        return store + (uint64_t(row / 32) * (rest * 3 * 32) + row % 32) * 2;
+    return store + shSlotStart(row, (rest * 3 + 3) / 4) * (format == 1 ? 16 : format == 2 ? 8 : 4);
+}
+uint shRowIndex(uint format, uint c) {
+    return format == 0 ? c : format == 3 ? c * 32 : c / 4 * 128 + c % 4;
+}
 float shReadCell(uint64_t source, uint64_t bounds, uint format, uint rest, uint rows, uint row, uint c) {
     uint width = format == 1 || format == 2 ? (rest * 3 + 3) / 4 * 4 : rest * 3;
     if (row >= rows || c >= width)
         return 0;
-    uint64_t offset = format == 0 ? uint64_t(row) * (rest * 3) + c : shOffset(row, c, rest, format == 3);
+    const uint64_t address = shRowAddress(source, format, rest, row);
+    const uint index = shRowIndex(format, c);
     if (format == 3) {
         float lo = ((Ptr<float, Access.Read>)bounds)[row / 256 * 2];
         float hi = ((Ptr<float, Access.Read>)bounds)[row / 256 * 2 + 1];
-        uint code = ((Ptr<uint16_t, Access.Read>)source)[offset];
+        uint code = ((Ptr<uint16_t, Access.Read>)address)[index];
         return fma(hi - lo, float(code) * (1.0f / 65535.0f), lo);
     }
     if (format == 2)
-        return f16tof32(((Ptr<uint16_t, Access.Read>)source)[offset]);
-    return ((Ptr<float, Access.Read>)source)[offset];
+        return f16tof32(((Ptr<uint16_t, Access.Read>)address)[index]);
+    return ((Ptr<float, Access.Read>)address)[index];
 }
 #endif
