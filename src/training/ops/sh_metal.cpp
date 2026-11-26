@@ -12,6 +12,8 @@
 #include "metal_families.hpp"
 #include "metal_kernels.hpp"
 
+#include <algorithm>
+#include <atomic>
 #include <format>
 #include <limits>
 #include <stdexcept>
@@ -26,8 +28,19 @@ namespace lfs::training {
             return address(tensor);
         }
 
+        namespace {
+            // A Metal dispatch runs its thread count modulo 2^32 (measured), so byte fills and copies past this many
+            // bytes go in pieces, each from its own 64-bit offset. A test lowers it.
+            constexpr size_t kBytePieceItems = size_t{1} << 31;
+            std::atomic<size_t> byte_piece_items{kBytePieceItems};
+        } // namespace
+
+        void set_byte_piece_items_for_testing(const size_t items) noexcept {
+            byte_piece_items.store(items == 0 ? kBytePieceItems : items, std::memory_order_relaxed);
+        }
+
         struct CopyParams {
-            uint64_t source, destination, width, rows, source_pitch, destination_pitch;
+            uint64_t source, destination, width, rows, source_pitch, destination_pitch, first, count;
         };
 
         void copy_rows(const uint64_t source, const uint64_t destination, const size_t width, const size_t rows,
@@ -35,8 +48,12 @@ namespace lfs::training {
                        const std::initializer_list<const core::Tensor*> uses) {
             if (width == 0 || rows == 0)
                 return;
-            const CopyParams params{source, destination, width, rows, source_pitch, destination_pitch};
-            launch_items("sh_copy_rows", params, uses, width * rows);
+            const size_t total = width * rows, piece = byte_piece_items.load(std::memory_order_relaxed);
+            for (size_t first = 0; first < total; first += piece) {
+                const size_t count = std::min(piece, total - first);
+                const CopyParams params{source, destination, width, rows, source_pitch, destination_pitch, first, count};
+                launch_items("sh_copy_rows", params, uses, count);
+            }
         }
 
     } // namespace metal
@@ -316,8 +333,11 @@ namespace lfs::training {
         void fill_bytes(Tensor& storage, const size_t byte_count, const uint8_t value) {
             if (byte_count == 0)
                 return;
-            const FillParams params{mk::address(storage), byte_count, value};
-            mk::launch_items("sh_fill_bytes", params, {&storage}, byte_count);
+            const size_t piece = mk::byte_piece_items.load(std::memory_order_relaxed);
+            for (size_t first = 0; first < byte_count; first += piece) {
+                const FillParams params{mk::address(storage) + first, std::min(piece, byte_count - first), value};
+                mk::launch_items("sh_fill_bytes", params, {&storage}, params.count);
+            }
         }
 
         // Metal tensors cannot view raw device memory, so the result is an owned
