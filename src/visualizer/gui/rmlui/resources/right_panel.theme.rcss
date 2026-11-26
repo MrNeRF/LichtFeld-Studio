@@ -82,7 +82,7 @@
 }
 
 #left-border {
-    @{chrome.right_panel_edge_shape};
+    background-color: @{border};
 }
 
 #resize-handle:hover,

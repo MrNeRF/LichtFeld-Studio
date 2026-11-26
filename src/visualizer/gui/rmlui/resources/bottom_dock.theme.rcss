@@ -3,13 +3,16 @@
 }
 
 #dock-grip {
+    border-top-color: @{border};
     background-color: transparent;
 }
 
 #dock-grip.hover {
+    border-top-color: transparent;
     background-color: @{right_panel.resize_hover};
 }
 
 #dock-grip.active {
+    border-top-color: transparent;
     background-color: @{right_panel.resize_active};
 }

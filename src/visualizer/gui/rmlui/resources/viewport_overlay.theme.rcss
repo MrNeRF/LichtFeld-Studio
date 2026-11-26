@@ -181,15 +181,15 @@
 }
 
 .viewport-frame-border {
-    background-color: @{menu.background};
+    background-color: @{border};
 }
 
 .left-dock-resize-indicator {
-    background-color: @{alpha(info,0.30)};
+    background-color: @{right_panel.resize_hover};
 }
 
 .left-dock-resize-indicator.active {
-    background-color: @{alpha(info,0.50)};
+    background-color: @{right_panel.resize_active};
 }
 
 .viewport-split-divider {

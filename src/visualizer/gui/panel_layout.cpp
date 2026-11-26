@@ -25,8 +25,7 @@ namespace lfs::vis::gui {
                 return;
 
             const float thickness =
-                std::max(active ? 3.0f : 2.0f,
-                         (active ? 3.0f : 2.0f) * dpi);
+                RESIZE_GRAB_HALF_WIDTH_DP * std::max(dpi, 1.0f);
             draw_ctx.ui->viewport_overlay->setLeftDockResizeIndicator(
                 visible, active, thickness);
         }
