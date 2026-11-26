@@ -108,7 +108,6 @@ namespace lfs::vis::gui {
                               float secondary_width = 0.0f);
         void setSideDocks(bool left_visible, bool left_collapsed, bool right_visible, bool right_collapsed,
                           bool bottom_visible = false, bool bottom_collapsed = false);
-        std::function<void()> on_bottom_dock_toggle;
         void setSplitDividerOverlay(SplitDividerOverlayState state);
         void setGTMetricsOverlay(GTMetricsOverlayState state);
         void setLodStatsOverlay(LodStatsOverlayState state);
@@ -145,8 +144,7 @@ namespace lfs::vis::gui {
 
         struct SideDockListener final : Rml::EventListener {
             void ProcessEvent(Rml::Event& event) override;
-            RmlViewportOverlay* owner = nullptr;
-        } side_dock_listener_{ };
+        } side_dock_listener_;
         void applySideDocks();
         bool left_dock_available_ = false;
         bool left_dock_collapsed_ = false;

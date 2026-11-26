@@ -58,7 +58,7 @@
 }
 
 .tab {
-    background-color: @{alpha(surface_bright,0.36)};
+    background-color: @{dock.tab_idle_background};
     color: @{text_dim};
     border-color: @{border};
 }
@@ -87,11 +87,11 @@
 
 #resize-handle:hover,
 #resize-handle.hover {
-    background-color: @{right_panel.resize_hover};
+    background-color: @{dock.resize_hover};
 }
 
 #resize-handle.dragging {
-    background-color: @{right_panel.resize_active};
+    background-color: @{dock.resize_active};
 }
 
 .tab-edge { background-color: @{right_panel.tab_active_border}; }

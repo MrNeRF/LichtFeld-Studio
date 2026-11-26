@@ -139,7 +139,7 @@ namespace lfs::vis::input {
 
         static_assert(kLatestHistoricalProfileVersion == PROFILE_VERSION - 1,
                       "Snapshot the previous keymap defaults before bumping PROFILE_VERSION");
-        constexpr Action LAST_ACTION = Action::TOGGLE_RIGHT_DOCK;
+        constexpr Action LAST_ACTION = Action::TOGGLE_BOTTOM_DOCK;
         constexpr int REMOVED_TOOL_MODE_2 = 2;
         constexpr int REMOVED_ACTION_39 = 39;
         constexpr int REMOVED_ACTION_66 = 66;
@@ -2267,6 +2267,7 @@ namespace lfs::vis::input {
         case Action::TOGGLE_UI: return "Toggle UI";
         case Action::TOGGLE_LEFT_DOCK: return "Toggle Left Dock";
         case Action::TOGGLE_RIGHT_DOCK: return "Toggle Right Dock";
+        case Action::TOGGLE_BOTTOM_DOCK: return "Toggle Bottom Dock";
         case Action::TOGGLE_FULLSCREEN: return "Toggle Fullscreen";
         case Action::TOGGLE_PERFORMANCE_HUD: return "Toggle Performance HUD";
         case Action::SEQUENCER_ADD_KEYFRAME: return "Add Keyframe";
@@ -2383,6 +2384,7 @@ namespace lfs::vis::input {
         case Action::TOGGLE_UI: return "toggle_ui";
         case Action::TOGGLE_LEFT_DOCK: return "toggle_left_dock";
         case Action::TOGGLE_RIGHT_DOCK: return "toggle_right_dock";
+        case Action::TOGGLE_BOTTOM_DOCK: return "toggle_bottom_dock";
         case Action::TOGGLE_FULLSCREEN: return "toggle_fullscreen";
         case Action::TOGGLE_PERFORMANCE_HUD: return "toggle_performance_hud";
         case Action::SEQUENCER_ADD_KEYFRAME: return "sequencer_add_keyframe";
@@ -3207,6 +3209,7 @@ namespace lfs::vis::input {
 
         case Action::TOGGLE_LEFT_DOCK:
         case Action::TOGGLE_RIGHT_DOCK:
+        case Action::TOGGLE_BOTTOM_DOCK:
         case Action::TOGGLE_UI:
         case Action::NEXT_SIDEBAR_CATEGORY:
         case Action::PREVIOUS_SIDEBAR_CATEGORY:

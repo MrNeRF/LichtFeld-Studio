@@ -7,9 +7,9 @@
 }
 
 #dock-grip.hover {
-    background-color: @{right_panel.resize_hover};
+    background-color: @{dock.resize_hover};
 }
 
 #dock-grip.active {
-    background-color: @{right_panel.resize_active};
+    background-color: @{dock.resize_active};
 }

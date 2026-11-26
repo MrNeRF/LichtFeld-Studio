@@ -9,8 +9,6 @@
 namespace lfs::vis::gui {
 
     inline constexpr float RESIZE_GRAB_HALF_WIDTH_DP = 4.0f;
-    inline constexpr float DOCK_RESIZE_HOVER_ALPHA = 0.30f;
-    inline constexpr float DOCK_RESIZE_ACTIVE_ALPHA = 0.50f;
 
     struct ResizeHitZone {
         float min;

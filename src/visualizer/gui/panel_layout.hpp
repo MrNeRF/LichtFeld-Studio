@@ -29,6 +29,10 @@ namespace lfs::vis::gui {
     struct DockHorizontalLayout {
         float x = 0.0f;
         float width = 0.0f;
+
+        [[nodiscard]] bool containsResizePointer(float mouse_x, float mouse_y, float edge, float scale) const {
+            return mouse_x >= x && mouse_x < x + width && resizeHitZone(edge, scale).contains(mouse_y);
+        }
     };
 
     struct LeftDockLayout {
@@ -37,6 +41,11 @@ namespace lfs::vis::gui {
         float toolbar_x = 0.0f;
         float edge_min_x = 0.0f;
         float edge_max_x = 0.0f;
+
+        [[nodiscard]] bool containsResizePointer(float x, float y, float top, float height) const {
+            return panel_width > 0.0f && x >= edge_min_x && x < edge_max_x &&
+                   y >= top && y < top + height;
+        }
     };
 
     enum class CursorRequest : uint8_t { None,
@@ -87,6 +96,7 @@ namespace lfs::vis::gui {
         float left_dock_width = 320.0f;
         bool left_dock_collapsed = false;
         bool right_dock_collapsed = false;
+        bool bottom_dock_collapsed = false;
         bool show_sequencer = false;
         std::string active_tab_id;
         std::string bottom_dock_active_tab_id;
@@ -166,19 +176,17 @@ namespace lfs::vis::gui {
         float computeBottomDockReservedHeight(bool show_main_panel, bool ui_hidden,
                                               const ScreenState& screen) const;
         float getBottomDockHeight() const { return bottom_dock_height_; }
-        void toggleBottomDockCollapsed() {
-            bottom_dock_collapsed_ = !bottom_dock_collapsed_;
-            bottom_dock_hovering_edge_ = bottom_dock_resizing_ = false;
-        }
         bool isLeftDockResizing() const { return left_dock_resizing_; }
         bool isBottomDockCollapsed() const { return bottom_dock_collapsed_; }
         bool isBottomDockVisible() const { return bottom_dock_visible_; }
+        bool isBottomDockExpanded() const { return bottom_dock_visible_ && !bottom_dock_collapsed_; }
         float bottomDockTopY() const { return bottom_dock_top_y_; }
         const std::vector<PanelSummary>& bottomDockTabs() const { return bottom_dock_tabs_; }
         const std::string& getBottomDockActiveTab() const { return bottom_dock_active_tab_id_; }
         bool isBottomDockHoveringEdge() const { return bottom_dock_hovering_edge_; }
         bool isBottomDockResizing() const { return bottom_dock_resizing_; }
         void setBottomDockActiveTab(const std::string& id);
+        void activateBottomDockTab(const std::string& id);
         bool bottomDockActiveTabChanged() const { return bottom_dock_active_tab_changed_; }
         PanelDrawBounds bottomDockTabBarRect() const { return bottom_dock_tab_bar_rect_; }
         float getLeftDockWidth() const { return left_dock_width_; }

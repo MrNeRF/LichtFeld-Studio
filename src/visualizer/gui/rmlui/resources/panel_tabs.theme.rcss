@@ -7,7 +7,7 @@
 .tab {
     border-top-left-radius: 4dp;
     border-top-right-radius: 4dp;
-    background-color: @{alpha(surface_bright,0.36)};
+    background-color: @{dock.tab_idle_background};
     color: @{text_dim};
     border-color: @{border};
 }

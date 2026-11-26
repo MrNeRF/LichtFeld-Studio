@@ -2597,6 +2597,9 @@ namespace lfs::vis {
             case input::Action::TOGGLE_LEFT_DOCK:
                 ui::ToggleSideDock{.side = lfs::core::SideDock::Left}.emit();
                 return;
+            case input::Action::TOGGLE_BOTTOM_DOCK:
+                ui::ToggleSideDock{.side = lfs::core::SideDock::Bottom}.emit();
+                return;
             case input::Action::TOGGLE_RIGHT_DOCK:
                 ui::ToggleSideDock{.side = lfs::core::SideDock::Right}.emit();
                 return;

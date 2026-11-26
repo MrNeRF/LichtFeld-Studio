@@ -2,7 +2,6 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "gui/resize_geometry.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "core/logger.hpp"
 #include "core/native_fs.hpp"
@@ -937,8 +936,9 @@ namespace lfs::vis::gui::rml_theme {
                 {"right_panel.splitter_active", colorToRmlAlpha(p.info, 0.8f)},
                 {"right_panel.border", colorToRmlAlpha(p.border, 0.6f)},
                 {"right_panel.separator", colorToRmlAlpha(p.border, 0.4f)},
-                {"right_panel.resize_hover", colorToRmlAlpha(p.info, DOCK_RESIZE_HOVER_ALPHA)},
-                {"right_panel.resize_active", colorToRmlAlpha(p.info, DOCK_RESIZE_ACTIVE_ALPHA)},
+                {"dock.tab_idle_background", colorToRmlAlpha(p.surface_bright, 0.36f)},
+                {"dock.resize_hover", colorToRmlAlpha(p.info, 0.3f)},
+                {"dock.resize_active", colorToRmlAlpha(p.info, 0.5f)},
                 {"modal.surface", colorToRmlAlpha(p.surface, 0.98f)},
                 {"modal.border", colorToRmlAlpha(p.border, 0.4f)},
                 {"modal.backdrop", colorToRmlAlpha(is_light ? ThemeColor{0.12f, 0.14f, 0.18f, 1.0f} : p.background,

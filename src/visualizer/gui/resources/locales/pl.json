@@ -1045,7 +1045,6 @@
     "writing_spz": "Zapisywanie SPZ"
   },
   "common": {
-    "toggle_bottom_dock": "Pokaż lub ukryj dolny dok",
     "ok": "OK",
     "cancel": "Anuluj",
     "close": "Zamknij",
@@ -1958,6 +1957,7 @@
     "action.toggle_ui": "Przełącz interfejs",
     "action.toggle_left_dock": "Zwiń/rozwiń lewy panel",
     "action.toggle_right_dock": "Zwiń/rozwiń prawy panel",
+    "action.toggle_bottom_dock": "Pokaż lub ukryj dolny dok",
     "action.toggle_fullscreen": "Przełącz pełny ekran",
     "action.open_preferences": "Otwórz preferencje",
     "action.toggle_mcp_server": "Włącz/wyłącz serwer MCP",

@@ -25,6 +25,14 @@ namespace lfs::vis::gui {
         lfs::python::request_redraw();
     }
 
+    void PanelLayoutManager::activateBottomDockTab(const std::string& id) {
+        if (bottom_dock_collapsed_ && !id.empty()) {
+            setSideDockCollapsed(lfs::core::SideDock::Bottom, false);
+            lfs::python::request_redraw();
+        }
+        setBottomDockActiveTab(id);
+    }
+
     void PanelLayoutManager::setShowSequencer(const bool visible) {
         if (show_sequencer_ == visible)
             return;
@@ -70,6 +78,7 @@ namespace lfs::vis::gui {
             .left_dock_width = left_dock_preferred_width_,
             .left_dock_collapsed = left_dock_collapsed_,
             .right_dock_collapsed = right_dock_collapsed_,
+            .bottom_dock_collapsed = bottom_dock_collapsed_,
             .show_sequencer = show_sequencer_,
             .active_tab_id = active_tab_id_,
             .bottom_dock_active_tab_id = bottom_dock_active_tab_id_,
@@ -95,6 +104,7 @@ namespace lfs::vis::gui {
             left_dock_width_ = left_dock_preferred_width_ = state.left_dock_width;
         setSideDockCollapsed(lfs::core::SideDock::Left, state.left_dock_collapsed);
         setSideDockCollapsed(lfs::core::SideDock::Right, state.right_dock_collapsed);
+        setSideDockCollapsed(lfs::core::SideDock::Bottom, state.bottom_dock_collapsed);
         setShowSequencer(state.show_sequencer);
         active_tab_id_ = state.active_tab_id;
         setBottomDockActiveTab(state.bottom_dock_active_tab_id);
@@ -106,6 +116,11 @@ namespace lfs::vis::gui {
     }
 
     void PanelLayoutManager::setSideDockCollapsed(const lfs::core::SideDock side, const bool collapsed) {
+        if (side == lfs::core::SideDock::Bottom) {
+            bottom_dock_collapsed_ = collapsed;
+            bottom_dock_hovering_edge_ = bottom_dock_resizing_ = false;
+            return;
+        }
         const bool right = side == lfs::core::SideDock::Right;
         (right ? right_dock_collapsed_ : left_dock_collapsed_) = collapsed;
         if (right) {
@@ -577,7 +592,7 @@ namespace lfs::vis::gui {
         if (bottom_dock_sync_seeded_) {
             for (const auto& tab : docked_tabs) {
                 if (!previous_bottom_docked_ids_.contains(tab.id)) {
-                    setBottomDockActiveTab(tab.id);
+                    activateBottomDockTab(tab.id);
                     bottom_dock_active_tab_changed_ = true;
                 }
             }
@@ -668,9 +683,7 @@ namespace lfs::vis::gui {
 
         bottom_dock_hovering_edge_ =
             !float_blocks_bottom_dock &&
-            dock_input.mouse_x >= panel_x &&
-            dock_input.mouse_x <= panel_x + panel_w &&
-            resizeHitZone(panel_y, dpi).contains(dock_input.mouse_y);
+            horizontal_layout.containsResizePointer(dock_input.mouse_x, dock_input.mouse_y, panel_y, dpi);
 
         if (bottom_dock_resizing_) {
             const float bottom_y = screen.work_pos.y + screen.work_size.y;
@@ -783,9 +796,7 @@ namespace lfs::vis::gui {
         const bool float_blocks_bottom_dock = reg.isPositionOverFloatingPanel(input.mouse_x, input.mouse_y);
         bottom_dock_hovering_edge_ =
             !float_blocks_bottom_dock &&
-            input.mouse_x >= panel_x &&
-            input.mouse_x <= panel_x + panel_w &&
-            resizeHitZone(panel_y, dpi).contains(input.mouse_y);
+            horizontal_layout.containsResizePointer(input.mouse_x, input.mouse_y, panel_y, dpi);
         if (bottom_dock_hovering_edge_ || bottom_dock_resizing_)
             cursor_request_ = CursorRequest::ResizeNS;
         const float tab_bar_h = TAB_BAR_H * dpi;
@@ -868,9 +879,7 @@ namespace lfs::vis::gui {
 
         left_dock_hovering_edge_ =
             !float_blocks_left_dock &&
-            resizeHitZone(dock_layout.panel_x + dock_layout.panel_width, dpi).contains(dock_input.mouse_x) &&
-            dock_input.mouse_y >= screen.work_pos.y &&
-            dock_input.mouse_y <= screen.work_pos.y + panel_h;
+            dock_layout.containsResizePointer(dock_input.mouse_x, dock_input.mouse_y, screen.work_pos.y, panel_h);
 
         if (left_dock_resizing_) {
             left_dock_width_ = left_dock_drag_.edgeAt(

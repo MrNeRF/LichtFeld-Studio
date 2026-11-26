@@ -575,7 +575,7 @@ TEST_F(PanelLayoutRenderDemandTest, BottomDockCollapseKeepsActivePanelAndHeight)
     const auto active = layout.getBottomDockActiveTab();
     const int draws = panel->draw_count;
 
-    layout.toggleBottomDockCollapsed();
+    layout.setSideDockCollapsed(lfs::core::SideDock::Bottom, !layout.isBottomDockCollapsed());
     layout.renderBottomDock(draw_ctx, true, false, input, s);
     layout.renderBottomDockCached(draw_ctx, true, false, input, s);
     EXPECT_TRUE(layout.isBottomDockVisible());
@@ -583,8 +583,12 @@ TEST_F(PanelLayoutRenderDemandTest, BottomDockCollapseKeepsActivePanelAndHeight)
     EXPECT_EQ(layout.computeBottomDockReservedHeight(true, true, s), 0.0f);
     EXPECT_EQ(panel->draw_count, draws);
     EXPECT_EQ(panel->cached_draw_count, 0);
+    auto saved = layout.captureProjectState();
+    PanelLayoutManager restored;
+    restored.applyProjectState(saved);
+    EXPECT_TRUE(restored.isBottomDockCollapsed());
 
-    layout.toggleBottomDockCollapsed();
+    layout.activateBottomDockTab(active);
     layout.renderBottomDock(draw_ctx, true, false, input, s);
     EXPECT_FLOAT_EQ(layout.computeBottomDockReservedHeight(true, false, s), expanded_height);
     EXPECT_EQ(layout.getBottomDockActiveTab(), active);

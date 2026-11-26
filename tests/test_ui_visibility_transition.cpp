@@ -161,7 +161,7 @@ namespace lfs::vis {
         auto state = layout.captureProjectState();
         state.left_dock_width = 290.0f;
         state.right_panel_width = 370.0f;
-        state.left_dock_collapsed = state.right_dock_collapsed = true;
+        state.left_dock_collapsed = state.right_dock_collapsed = state.bottom_dock_collapsed = true;
         layout.applyProjectState(state);
         std::vector<CameraBookmarkProjectState> bookmarks;
         auto captured = require_result(captureGuiSession(viewer, {}, bookmarks));
@@ -169,20 +169,24 @@ namespace lfs::vis {
         auto& fixed = gui["layouts"][0]["areas"][0]["spaces"][0]["opaque_payload"];
         EXPECT_EQ(fixed["left_dock_collapsed"], true);
         EXPECT_EQ(fixed["right_dock_collapsed"], true);
+        EXPECT_EQ(fixed["bottom_dock_collapsed"], true);
         EXPECT_EQ(fixed["left_dock_width"], 290.0f);
         EXPECT_EQ(fixed["right_panel_width"], 370.0f);
         layout.applyProjectState({});
         applyGuiSession(viewer, require_result(prepareGuiSessionRestore(captured)), bookmarks);
         EXPECT_TRUE(layout.isLeftDockCollapsed());
         EXPECT_TRUE(layout.isRightDockCollapsed());
+        EXPECT_TRUE(layout.isBottomDockCollapsed());
         EXPECT_FLOAT_EQ(layout.captureProjectState().left_dock_width, 290.0f);
         EXPECT_FLOAT_EQ(layout.captureProjectState().right_panel_width, 370.0f);
         fixed.erase("left_dock_collapsed");
         fixed.erase("right_dock_collapsed");
+        fixed.erase("bottom_dock_collapsed");
         captured.gui_layout = require_result(lfs::io::project::GuiLayoutChapter::parse(gui.dump()));
         applyGuiSession(viewer, require_result(prepareGuiSessionRestore(captured)), bookmarks);
         EXPECT_FALSE(layout.isLeftDockCollapsed());
         EXPECT_FALSE(layout.isRightDockCollapsed());
+        EXPECT_FALSE(layout.isBottomDockCollapsed());
     }
 
     TEST_F(UiVisibilityTransitionTest, UiVisibilityFinishesWithoutWaitingForFullscreenGuard) {

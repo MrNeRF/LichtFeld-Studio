@@ -1045,7 +1045,6 @@
     "writing_spz": "Écriture SPZ"
   },
   "common": {
-    "toggle_bottom_dock": "Afficher ou masquer le panneau inférieur",
     "ok": "OK",
     "cancel": "Annuler",
     "close": "Fermer",
@@ -1958,6 +1957,7 @@
     "action.toggle_ui": "Basculer l'interface",
     "action.toggle_left_dock": "Replier/déplier le panneau gauche",
     "action.toggle_right_dock": "Replier/déplier le panneau droit",
+    "action.toggle_bottom_dock": "Afficher ou masquer le panneau inférieur",
     "action.toggle_fullscreen": "Basculer le plein écran",
     "action.open_preferences": "Ouvrir les préférences",
     "action.toggle_mcp_server": "Activer/désactiver le serveur MCP",

@@ -4684,16 +4684,6 @@ namespace lfs::vis::gui {
             viewer_->projectMarkSessionChapterCommitted("GUIL");
         };
         rml_bottom_dock_.init(&rmlui_manager_);
-        rml_viewport_overlay_.on_bottom_dock_toggle = [this] {
-            panel_layout_.toggleBottomDockCollapsed();
-            if (viewer_) {
-                if (auto* rm = viewer_->getRenderingManager())
-                    rm->frameDemandLedger().request({.reason = FrameReason::GuiLayout,
-                                                     .scope = FrameScope::Gui,
-                                                     .views = 0,
-                                                     .detail = "bottom_dock_toggle"});
-            }
-        };
         rml_bottom_dock_.on_tab_changed = [this](const std::string& id) {
             if (panel_layout_.getBottomDockActiveTab() != id && viewer_) {
                 viewer_->projectMarkSessionChapterCommitted("GUIL");
@@ -5727,6 +5717,7 @@ namespace lfs::vis::gui {
         const auto now = std::chrono::steady_clock::now();
         ui_visibility_target_hidden_ = ui_toggle_pending_ ? !ui_hidden_ : ui_hidden_;
         ui_target_left_collapsed_ = panel_layout_.isLeftDockCollapsed() != side_dock_toggle_pending_.test(std::to_underlying(lfs::core::SideDock::Left));
+        ui_target_bottom_collapsed_ = panel_layout_.isBottomDockCollapsed() != side_dock_toggle_pending_.test(std::to_underlying(lfs::core::SideDock::Bottom));
         ui_target_right_collapsed_ = panel_layout_.isRightDockCollapsed() != side_dock_toggle_pending_.test(std::to_underlying(lfs::core::SideDock::Right));
         ui_toggle_pending_ = false;
         side_dock_toggle_pending_.reset();
@@ -5758,6 +5749,7 @@ namespace lfs::vis::gui {
                 auto target_layout = panel_layout_;
                 target_layout.setSideDockCollapsed(lfs::core::SideDock::Left, ui_target_left_collapsed_);
                 target_layout.setSideDockCollapsed(lfs::core::SideDock::Right, ui_target_right_collapsed_);
+                target_layout.setSideDockCollapsed(lfs::core::SideDock::Bottom, ui_target_bottom_collapsed_);
                 target_layout.enforceWidthConstraints(
                     show_main_panel_, ui_visibility_target_hidden_, transition_screen);
                 ui_visibility_target_console_width_ = show_main_panel_ && !ui_visibility_target_hidden_ && window_states_["python_console"]
@@ -5782,6 +5774,7 @@ namespace lfs::vis::gui {
             // preserve, so commit directly and let the normal layout pass resolve it.
             panel_layout_.setSideDockCollapsed(lfs::core::SideDock::Left, ui_target_left_collapsed_);
             panel_layout_.setSideDockCollapsed(lfs::core::SideDock::Right, ui_target_right_collapsed_);
+            panel_layout_.setSideDockCollapsed(lfs::core::SideDock::Bottom, ui_target_bottom_collapsed_);
             ui_hidden_ = ui_visibility_target_hidden_;
             ui_visibility_layout_committed_ = true;
             viewer_->projectMarkSessionChapterCommitted("GUIL");
@@ -6337,8 +6330,7 @@ namespace lfs::vis::gui {
             const auto left = panel_layout_.computeLeftDockLayout(show_main_panel_, ui_hidden_, shell_screen);
             const bool dragging = panel_layout_.isLeftDockResizing() && frame_input.mouse_down[0];
             const bool over_left_edge =
-                frame_input.mouse_x >= left.edge_min_x && frame_input.mouse_x < left.edge_max_x &&
-                frame_input.mouse_y >= panel_y && frame_input.mouse_y < panel_y + panel_h &&
+                left.containsResizePointer(frame_input.mouse_x, frame_input.mouse_y, panel_y, panel_h) &&
                 !reg.isPositionOverFloatingPanel(frame_input.mouse_x, frame_input.mouse_y);
             if (!block_underlay_input && left.panel_width > 0.0f && (dragging || over_left_edge)) {
                 shell_regions.left_resize = {left.edge_min_x, panel_y,
@@ -6744,12 +6736,9 @@ namespace lfs::vis::gui {
                         glm::vec2{bottom_dock_x, bottom_dock_y},
                         glm::vec2{bottom_dock_w, bottom_dock_h});
         const bool pointer_over_bottom_dock_edge =
-            !panel_layout_.isBottomDockCollapsed() &&
-            panel_layout_.isBottomDockVisible() &&
-            panel_input.mouse_x >= bottom_dock_x &&
-            panel_input.mouse_x < bottom_dock_x + bottom_dock_w &&
-            resizeHitZone(bottom_dock_y, current_ui_scale_)
-                .contains(panel_input.mouse_y);
+            panel_layout_.isBottomDockExpanded() &&
+            bottom_dock_layout.containsResizePointer(panel_input.mouse_x, panel_input.mouse_y,
+                                                     bottom_dock_y, current_ui_scale_);
         const bool pointer_targets_bottom_dock =
             pointer_over_bottom_dock || pointer_over_bottom_dock_edge;
         if (pointer_targets_bottom_dock &&
@@ -6765,8 +6754,8 @@ namespace lfs::vis::gui {
             bottom_dock_pointer_activity ||
             hasKeyboardActivity(sdl_input);
         const auto bottom_dock_active_before_input = panel_layout_.getBottomDockActiveTab();
-        rml_bottom_dock_.setVisible(panel_layout_.isBottomDockVisible() && !panel_layout_.isBottomDockCollapsed());
-        if (panel_layout_.isBottomDockVisible() && !panel_layout_.isBottomDockCollapsed()) {
+        rml_bottom_dock_.setVisible(panel_layout_.isBottomDockExpanded());
+        if (panel_layout_.isBottomDockExpanded()) {
             BottomDockLayout bottom_dock_rml_layout;
             bottom_dock_rml_layout.pos = {bottom_dock_x, bottom_dock_y};
             bottom_dock_rml_layout.size = {bottom_dock_w, bottom_dock_h};
@@ -6796,7 +6785,7 @@ namespace lfs::vis::gui {
             panel_layout_.renderBottomDock(draw_ctx, show_main_panel_, ui_hidden_,
                                            panel_input, screen);
         }
-        rml_bottom_dock_.setVisible(panel_layout_.isBottomDockVisible() && !panel_layout_.isBottomDockCollapsed());
+        rml_bottom_dock_.setVisible(panel_layout_.isBottomDockExpanded());
         std::vector<TabSnapshot> bottom_dock_tab_snaps;
         const auto& bottom_dock_tabs = panel_layout_.bottomDockTabs();
         bottom_dock_tab_snaps.reserve(bottom_dock_tabs.size());
@@ -6808,7 +6797,7 @@ namespace lfs::vis::gui {
                 .closeable = true,
             });
         }
-        if (panel_layout_.isBottomDockVisible() && !panel_layout_.isBottomDockCollapsed()) {
+        if (panel_layout_.isBottomDockExpanded()) {
             BottomDockLayout bottom_dock_rml_layout;
             bottom_dock_rml_layout.pos = {bottom_dock_x, bottom_dock_y};
             bottom_dock_rml_layout.size = {bottom_dock_w, bottom_dock_h};
@@ -8188,6 +8177,7 @@ namespace lfs::vis::gui {
         panel_layout_.setPythonConsoleWidth(ui_visibility_target_console_width_);
         panel_layout_.setSideDockCollapsed(lfs::core::SideDock::Left, ui_target_left_collapsed_);
         panel_layout_.setSideDockCollapsed(lfs::core::SideDock::Right, ui_target_right_collapsed_);
+        panel_layout_.setSideDockCollapsed(lfs::core::SideDock::Bottom, ui_target_bottom_collapsed_);
         ui_hidden_ = ui_visibility_target_hidden_;
         if (viewer_) {
             viewer_->projectMarkSessionChapterCommitted("GUIL");
@@ -8696,9 +8686,9 @@ namespace lfs::vis::gui {
 
         const auto bottom_tabs = panel_layout_.bottomDockTabBarRect();
         if (panel_layout_.isBottomDockHoveringEdge() ||
-            (panel_layout_.isBottomDockVisible() && !panel_layout_.isBottomDockCollapsed() &&
-             mouse_x >= bottom_tabs.x && mouse_x < bottom_tabs.x + bottom_tabs.width &&
-             resizeHitZone(panel_layout_.bottomDockTopY(), current_ui_scale_).contains(mouse_y))) {
+            (panel_layout_.isBottomDockExpanded() &&
+             DockHorizontalLayout{bottom_tabs.x, bottom_tabs.width}.containsResizePointer(
+                 mouse_x, mouse_y, panel_layout_.bottomDockTopY(), current_ui_scale_))) {
             return true;
         }
 

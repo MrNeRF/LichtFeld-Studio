@@ -176,7 +176,6 @@ namespace lfs::vis::gui {
                 LOG_ERROR("RmlViewportOverlay: failed to load viewport_overlay.rml");
                 return;
             }
-            side_dock_listener_.owner = this;
             document_->AddEventListener(Rml::EventId::Click, &side_dock_listener_);
             document_->AddEventListener(Rml::EventId::Keydown, &side_dock_listener_);
             cacheBodyTemplate();
@@ -268,7 +267,6 @@ namespace lfs::vis::gui {
                 LOG_ERROR("RmlViewportOverlay: failed to reload viewport_overlay.rml");
                 return;
             }
-            side_dock_listener_.owner = this;
             document_->AddEventListener(Rml::EventId::Click, &side_dock_listener_);
             document_->AddEventListener(Rml::EventId::Keydown, &side_dock_listener_);
             cacheBodyTemplate();
@@ -408,13 +406,10 @@ namespace lfs::vis::gui {
                 (key != Rml::Input::KI_RETURN && key != Rml::Input::KI_SPACE))
                 return;
         }
-        if (target->GetId() == "bottom-dock-toggle") {
-            if (owner && owner->on_bottom_dock_toggle)
-                owner->on_bottom_dock_toggle();
-            event.StopPropagation();
-            return;
-        }
-        lfs::core::events::ui::ToggleSideDock{.side = target->GetId() == "right-side-dock-toggle" ? lfs::core::SideDock::Right : lfs::core::SideDock::Left}.emit();
+        const auto side = target->GetId() == "bottom-dock-toggle"       ? lfs::core::SideDock::Bottom
+                          : target->GetId() == "right-side-dock-toggle" ? lfs::core::SideDock::Right
+                                                                        : lfs::core::SideDock::Left;
+        lfs::core::events::ui::ToggleSideDock{.side = side}.emit();
         event.StopPropagation();
     }
 

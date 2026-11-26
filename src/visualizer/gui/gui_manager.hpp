@@ -427,9 +427,10 @@ namespace lfs::vis {
             bool last_hud_expanded_ = false;
             std::chrono::steady_clock::time_point ui_visibility_deadline_{};
             bool ui_toggle_pending_ = false;
-            std::bitset<2> side_dock_toggle_pending_;
+            std::bitset<3> side_dock_toggle_pending_;
             bool ui_target_left_collapsed_ = false;
             bool ui_target_right_collapsed_ = false;
+            bool ui_target_bottom_collapsed_ = false;
             bool ui_visibility_resize_active_ = false;
             bool ui_visibility_layout_committed_ = false;
             bool ui_visibility_target_ready_ = false;
