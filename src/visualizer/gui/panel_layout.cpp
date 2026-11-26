@@ -26,7 +26,7 @@ namespace lfs::vis::gui {
     }
 
     bool PanelLayoutManager::leftDockResizeHovered(const LeftDockLayout& layout, const PanelInputState& input,
-                                                  const float top, const float height) {
+                                                   const float top, const float height) {
         return layout.containsResizePointer(input.mouse_x, input.mouse_y, top, height) &&
                !PanelRegistry::instance().isPositionOverFloatingPanel(input.mouse_x, input.mouse_y);
     }
@@ -927,7 +927,6 @@ namespace lfs::vis::gui {
                                                     draw_ctx);
             left_dock_visible_ = preloaded_h > 0.0f || drawn_h > 0.0f;
         }
-
     }
 
     void PanelLayoutManager::renderLeftDockCached(const PanelDrawContext& draw_ctx,

@@ -148,6 +148,7 @@ For plugins registered in `BOTTOM_DOCK`, `lf.ui.set_bottom_dock_active_tab(panel
 selects the tab and preserves the dock's collapsed state.
 `lf.ui.activate_bottom_dock_tab(panel_id)` also expands the dock when collapsed.
 It applies to enabled panels currently in the bottom dock.
+`lf.ui.set_sequencer_visible(True)` also expands the dock when the Sequencer is docked there.
 Use `lf.ui.is_bottom_dock_collapsed()` to distinguish the selected tab from one
 whose contents are displayed.
 
