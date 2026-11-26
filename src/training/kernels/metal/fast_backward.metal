@@ -8,7 +8,9 @@
 // that owns one joint-bounds row.
 
 // Per-primitive gradient helper row: mean2d (0, 1), conic (2..4), opacity
-// (5), color (6..8; replaced by the SH mean gradient), depth (9).
+// (5), color (6..8; replaced by the SH mean gradient), depth (9). A row
+// starts at ulong(primitive) * kFastGradStride: in 32 bits that offset wraps
+// past 357.9M primitives.
 constant constexpr uint kFastGradStride = 12u;
 constant constexpr float kFastGradClamp = 1e4f;
 
@@ -352,7 +354,7 @@ kernel void fast_blend_backward(constant FastBlendBackwardParams& p [[buffer(0)]
             // Zero totals leave the +0-initialized accumulators unchanged.
             if ((lane & 1u) == 0u && total != 0.0f) {
                 if (component < 10u) {
-                    fast_atomic_add(p.grads + prim * kFastGradStride + component, fast_clamp_grad(total));
+                    fast_atomic_add(p.grads + ulong(prim) * kFastGradStride + component, fast_clamp_grad(total));
                 } else if (component < 13u) {
                     if (kFastNormalChannel != 0u)
                         fast_atomic_add(p.normal_grads + prim * 4u + (component - 10u), fast_clamp_grad(total));
@@ -779,7 +781,7 @@ kernel void fast_backward_sh(constant FastBackwardShParams& p [[buffer(0)]],
     float3 direction = float3(0.0f);
     float3 mean_grad = float3(0.0f);
     if (visible) {
-        device const float* g = p.grads + idx * kFastGradStride;
+        device const float* g = p.grads + ulong(idx) * kFastGradStride;
         grad_color = float3(g[6], g[7], g[8]);
         // The blend clamps colour at zero. Below it, keep only the image
         // gradients that brighten the splat; the forward never saw the rest.
@@ -840,7 +842,7 @@ kernel void fast_backward_sh(constant FastBackwardShParams& p [[buffer(0)]],
             atomic_fetch_add_explicit(p.sh_loss, total, memory_order_relaxed);
     }
     if (visible && part == 0u) {
-        device float* g = p.grads + idx * kFastGradStride;
+        device float* g = p.grads + ulong(idx) * kFastGradStride;
         g[6] = mean_grad.x;
         g[7] = mean_grad.y;
         g[8] = mean_grad.z;
@@ -982,7 +984,7 @@ kernel void fast_backward_geometry(constant FastBackwardGeometryParams& p [[buff
         fast_flatten_reg_grads(p, idx * 3u, scale_grads);
         opacity_grads[0] = fast_opacity_extra_grad(p, idx);
     } else if (visible) {
-        device const float* g = p.grads + idx * kFastGradStride;
+        device const float* g = p.grads + ulong(idx) * kFastGradStride;
         const float3 mean3d = float3(p.means[idx]);
         const float4 w1 = p.view[0], w2 = p.view[1], w3 = p.view[2];
         const float depth = w3.x * mean3d.x + w3.y * mean3d.y + w3.z * mean3d.z + w3.w;
