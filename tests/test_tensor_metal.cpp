@@ -2729,4 +2729,14 @@ namespace {
         }
     }
 
+    // The host's float4 slot index of a primitive is 64-bit: at SH 3 a primitive has 12 slots of 32 lanes, so the
+    // index passes 2^32 at 357.9M primitives. Row 400M is checked without any memory.
+    TEST(ShLayout, SwizzledIndexStaysExactPastTheThirtyTwoBitWrap) {
+        constexpr std::size_t row = 400'000'000;
+        constexpr std::size_t expected = row / 32 * (12 * 32) + 11 * 32 + row % 32;
+        static_assert(expected > std::numeric_limits<std::uint32_t>::max());
+        EXPECT_EQ(lfs::core::sh_swizzled_index(row, 11, 15), expected);
+        EXPECT_EQ(lfs::core::sh_swizzled_index(row + 31, 0), (row + 31) / 32 * (12 * 32) + (row + 31) % 32);
+    }
+
 } // namespace

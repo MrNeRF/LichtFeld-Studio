@@ -139,18 +139,19 @@ namespace lfs::core {
         return sh_swizzled_float_count(n, coeffs_rest) * element_bytes;
     }
 
-    // Host index helper. Returns the float4-slot index (multiply by 4 to get the float offset).
-    [[nodiscard]] inline std::uint32_t sh_swizzled_index(
-        std::uint32_t primitive_idx,
+    // Host index helper. Returns the float4-slot index (multiply by 4 to get the float offset). It is 64-bit: at SH 3
+    // a primitive's 12 slots put the index past 2^32 at 357.9M primitives.
+    [[nodiscard]] inline std::size_t sh_swizzled_index(
+        std::size_t primitive_idx,
         std::uint32_t float4_slot,
         std::uint32_t layout_coeffs_rest) noexcept {
-        const std::uint32_t block = primitive_idx / kShReorderSize;
-        const std::uint32_t lane = primitive_idx % kShReorderSize;
-        const std::uint32_t slots = sh_float4_slots_for_rest(layout_coeffs_rest);
-        return block * (slots * kShReorderSize) + float4_slot * kShReorderSize + lane;
+        const std::size_t block = primitive_idx / kShReorderSize;
+        const std::size_t lane = primitive_idx % kShReorderSize;
+        const std::size_t slots = sh_float4_slots_for_rest(layout_coeffs_rest);
+        return block * (slots * kShReorderSize) + std::size_t{float4_slot} * kShReorderSize + lane;
     }
 
-    [[nodiscard]] inline std::uint32_t sh_swizzled_index(std::uint32_t primitive_idx, std::uint32_t float4_slot) noexcept {
+    [[nodiscard]] inline std::size_t sh_swizzled_index(std::size_t primitive_idx, std::uint32_t float4_slot) noexcept {
         return sh_swizzled_index(primitive_idx, float4_slot, kShMaxCoeffsRest);
     }
 
