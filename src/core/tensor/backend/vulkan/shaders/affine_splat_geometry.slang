@@ -155,7 +155,9 @@ void affine(Parameters p, float log_scale[3], float quaternion[4], out float res
 void main(uint3 tid:SV_DispatchThreadID,uniform Parameters p) {
     uint3 groups=spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
     gOpaqueZero = groups.y-1u;
-    for(uint i=tid.x;i<p.count;i+=groups.x*LFS_LOCAL_SIZE_X) {
+    // Rows and their offsets in 64 bits: in 32, 9 floats a row wrap at 477.2M rows, 4 at 1.07G and 3 at 1.43G, and
+    // the grid-stride step could wrap near the 2^32 count limit.
+    for(uint64_t i=tid.x;i<p.count;i+=uint64_t(groups.x)*LFS_LOCAL_SIZE_X) {
         float s[3],q[4],os[3],oq[4];
         for(uint k=0;k<3;++k)s[k]=((Ptr<float,Access.Read>)p.scales)[i*3+k];
         for(uint k=0;k<4;++k)q[k]=((Ptr<float,Access.Read>)p.rotations)[i*4+k];
