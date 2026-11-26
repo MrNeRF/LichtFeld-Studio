@@ -156,7 +156,6 @@ void LFS_KERNEL_ENTRY(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, unif
             }
         }
     } else {
-        Ptr<uint, Access.ReadWrite> result = (Ptr<uint, Access.ReadWrite>)p.neighbors;
         for (uint row = gid.x * 256u + tid.x; row < p.n; row += groups.x * 256u) {
             const uint i = order[row];
             const float3 point = float3(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
@@ -189,7 +188,10 @@ void LFS_KERNEL_ENTRY(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, unif
                 while ((node & 1u) != 0) node >>= 1u;
                 if (node != 0) ++node;
             }
-            [ForceUnroll] for (uint a = 0; a < 16; ++a) result[i * 16u + a] = heap.ids[a];
+            // 64-bit row start: i * 16 wraps past 268.4M points, and the rows pass 4 GiB at 67.1M, past which
+            // NVIDIA's Vulkan wraps an access chain's 32-bit byte offset without VK_EXT_shader_64bit_indexing.
+            Ptr<uint, Access.ReadWrite> nearest = (Ptr<uint, Access.ReadWrite>)(p.neighbors + uint64_t(i) * 64u);
+            [ForceUnroll] for (uint a = 0; a < 16; ++a) nearest[a] = heap.ids[a];
         }
     }
 }

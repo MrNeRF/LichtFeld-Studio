@@ -156,7 +156,21 @@ Df df_det(Df s[9]) {
     return df_add(df_sub(df_mul(s[0], t0), df_mul(s[1], t1)), df_mul(s[2], t2));
 }
 
-float edge_cost(Ptr<float, Access.Read> pos, Ptr<float, Access.Read> dc, Ptr<float, Access.Read> sh, uint rest,
+// Per-point rows are addressed in 64 bits: SH rows (rest * 3 floats) pass 2^32 floats at 95.4M points at SH 3, the
+// 32-float cache rows at 134.2M and the 16 neighbours at 268.4M. The row's address is integer math because NVIDIA's
+// Vulkan computes an access chain's byte offset in 32 bits without VK_EXT_shader_64bit_indexing (SH rows pass 4 GiB
+// at 23.9M points, the cache at 33.5M, the neighbours at 67.1M); values are small indices from it.
+float sh_value(uint64_t sh, uint rest, uint i, uint c) {
+    return ((Ptr<float, Access.Read>)(sh + uint64_t(i) * (rest * 3) * 4))[c];
+}
+Ptr<float, Access.ReadWrite> cache_row(uint64_t cache, uint i) {
+    return (Ptr<float, Access.ReadWrite>)(cache + uint64_t(i) * 128);
+}
+Ptr<uint, Access.Read> neighbour_row(uint64_t neighbors, uint i) {
+    return (Ptr<uint, Access.Read>)(neighbors + uint64_t(i) * 64);
+}
+
+float edge_cost(Ptr<float, Access.Read> pos, Ptr<float, Access.Read> dc, uint64_t sh, uint rest,
                 GCache a, GCache b, uint i, uint j) {
     const Df w = df_add(df_from(a.mass), df_from(b.mass));
     Df p = df_div(df_from(a.mass), df_as(w) > 0 ? w : df_from(1));
@@ -195,16 +209,16 @@ float edge_cost(Ptr<float, Access.Read> pos, Ptr<float, Access.Read> dc, Ptr<flo
     const Df crossB = df_logadd(df_add(lp, df_logpdf(b.sample0, b.sample1, b.sample2, pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2], a)), df_add(lq, b.selfLog));
     Df cost = df_add(df_add(df_mul(p, crossA), df_mul(q, crossB)), df_mul(df_from(0.5), df_add(df_add(df_mul(df_from(3), K_LOG2PI), df_log(df_floor(df_det(s), 1e-30))), df_from(3))));
     for (uint c = 0; c < 3 + rest * 3; ++c) {
-        float left = c < 3 ? dc[i * 3 + c] : sh[i * rest * 3 + c - 3];
-        float right = c < 3 ? dc[j * 3 + c] : sh[j * rest * 3 + c - 3];
+        float left = c < 3 ? dc[i * 3 + c] : sh_value(sh, rest, i, c - 3);
+        float right = c < 3 ? dc[j * 3 + c] : sh_value(sh, rest, j, c - 3);
         const float delta = left - right;
         cost = df_add(cost, df_from(delta * delta));
     }
     return df_as(cost);
 }
 
-void store_cache(Ptr<float, Access.ReadWrite> cache, uint i, GCache c) {
-    Ptr<float, Access.ReadWrite> o = cache + i * 32;
+void store_cache(uint64_t cache, uint i, GCache c) {
+    Ptr<float, Access.ReadWrite> o = cache_row(cache, i);
     [ForceUnroll] for (uint a = 0; a < 9; ++a) o[a] = c.r[a];
     [ForceUnroll] for (uint a = 0; a < 3; ++a) o[9 + a] = c.invv[a];
     [ForceUnroll] for (uint a = 0; a < 9; ++a) o[12 + a] = c.sigma[a];
@@ -216,8 +230,8 @@ void store_cache(Ptr<float, Access.ReadWrite> cache, uint i, GCache c) {
     o[29] = c.selfLog.hi; o[30] = c.selfLog.lo;
 }
 
-void load_cache(Ptr<float, Access.ReadWrite> cache, uint i, out GCache c) {
-    Ptr<float, Access.ReadWrite> o = cache + i * 32;
+void load_cache(uint64_t cache, uint i, out GCache c) {
+    Ptr<float, Access.ReadWrite> o = cache_row(cache, i);
     [ForceUnroll] for (uint a = 0; a < 9; ++a) c.r[a] = o[a];
     [ForceUnroll] for (uint a = 0; a < 3; ++a) c.invv[a] = o[9 + a];
     [ForceUnroll] for (uint a = 0; a < 9; ++a) c.sigma[a] = o[12 + a];
@@ -242,31 +256,29 @@ void LFS_KERNEL_ENTRY(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, unif
     Ptr<float, Access.Read> scale = (Ptr<float, Access.Read>)p.scale;
     Ptr<float, Access.Read> opacity = (Ptr<float, Access.Read>)p.opacity;
     Ptr<float, Access.Read> dc = (Ptr<float, Access.Read>)p.dc;
-    Ptr<float, Access.Read> sh = (Ptr<float, Access.Read>)p.sh;
-    Ptr<uint, Access.Read> neighbors = (Ptr<uint, Access.Read>)p.neighbors;
-    Ptr<float, Access.ReadWrite> cache = (Ptr<float, Access.ReadWrite>)p.cache;
     Ptr<uint, Access.ReadWrite> idx = (Ptr<uint, Access.ReadWrite>)p.idx;
     Ptr<float, Access.ReadWrite> cost = (Ptr<float, Access.ReadWrite>)p.cost;
     if (kPhase == 0) {
         for (uint i = gid.x * 256u + tid.x; i < p.n; i += groups.x * 256u) {
             GCache built;
             cache_one(pos, rot, scale, opacity, i, built);
-            store_cache(cache, i, built);
+            store_cache(p.cache, i, built);
         }
         return;
     }
     for (uint i = gid.x * 256u + tid.x; i < p.n; i += groups.x * 256u) {
         GCache mine;
-        load_cache(cache, i, mine);
+        load_cache(p.cache, i, mine);
         const float inf = asfloat(0x7f800000u);
         float best[4] = {inf, inf, inf, inf};
         uint chosen[4] = {0xffffffffu, 0xffffffffu, 0xffffffffu, 0xffffffffu};
+        Ptr<uint, Access.Read> mine_neighbors = neighbour_row(p.neighbors, i);
         for (uint a = 0; a < 16; ++a) {
-            const uint j = neighbors[i * 16 + a];
+            const uint j = mine_neighbors[a];
             if (j == 0xffffffffu) continue;
             GCache other;
-            load_cache(cache, j, other);
-            const float value = edge_cost(pos, dc, sh, p.rest, mine, other, i, j);
+            load_cache(p.cache, j, other);
+            const float value = edge_cost(pos, dc, p.sh, p.rest, mine, other, i, j);
             if (!isfinite(value) || value > best[3] || (value == best[3] && j >= chosen[3])) continue;
             int at = 3;
             while (at > 0 && (value < best[at - 1] || (value == best[at - 1] && j < chosen[at - 1]))) {

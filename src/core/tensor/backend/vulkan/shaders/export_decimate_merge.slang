@@ -185,10 +185,15 @@ void decompose(inout Df a[9], out Df scales[3], out Df quaternion[4]) {
     quaternion[3] = df_mul(z, inv);
 }
 
+// SH rows (rest * 3 floats) start at a 64-bit byte offset: they pass 2^32 floats at 95.4M points at SH 3 (179M at
+// SH 2), and the address is integer math because NVIDIA's Vulkan computes an access chain's byte offset in 32 bits
+// without VK_EXT_shader_64bit_indexing (the rows pass 4 GiB at 23.9M points). Values are small indices from it.
+uint64_t sh_row(uint64_t sh, uint i, uint rest) { return sh + uint64_t(i) * (rest * 3) * 4; }
+
 void copy_one(Ptr<float, Access.Read> pos, Ptr<float, Access.Read> rot, Ptr<float, Access.Read> scale,
-              Ptr<float, Access.Read> opacity, Ptr<float, Access.Read> dc, Ptr<float, Access.Read> sh,
+              Ptr<float, Access.Read> opacity, Ptr<float, Access.Read> dc, uint64_t sh,
               Ptr<float, Access.ReadWrite> opos, Ptr<float, Access.ReadWrite> orot, Ptr<float, Access.ReadWrite> oscale,
-              Ptr<float, Access.ReadWrite> oopacity, Ptr<float, Access.ReadWrite> odc, Ptr<float, Access.ReadWrite> osh,
+              Ptr<float, Access.ReadWrite> oopacity, Ptr<float, Access.ReadWrite> odc, uint64_t osh,
               uint rest, uint i, uint row) {
     [ForceUnroll] for (uint a = 0; a < 3; ++a) {
         opos[row * 3 + a] = pos[i * 3 + a];
@@ -197,14 +202,16 @@ void copy_one(Ptr<float, Access.Read> pos, Ptr<float, Access.Read> rot, Ptr<floa
     }
     [ForceUnroll] for (uint a = 0; a < 4; ++a) orot[row * 4 + a] = rot[i * 4 + a];
     oopacity[row] = opacity[i];
-    for (uint a = 0; a < rest * 3; ++a) osh[row * rest * 3 + a] = sh[i * rest * 3 + a];
+    Ptr<float, Access.Read> from = (Ptr<float, Access.Read>)sh_row(sh, i, rest);
+    Ptr<float, Access.ReadWrite> to = (Ptr<float, Access.ReadWrite>)sh_row(osh, row, rest);
+    for (uint a = 0; a < rest * 3; ++a) to[a] = from[a];
 }
 
 void merge_one(Ptr<float, Access.Read> pos, Ptr<float, Access.Read> rot, Ptr<float, Access.Read> scale,
-               Ptr<float, Access.Read> opacity, Ptr<float, Access.Read> dc, Ptr<float, Access.Read> sh,
+               Ptr<float, Access.Read> opacity, Ptr<float, Access.Read> dc, uint64_t sh,
                Ptr<uint, Access.Read> members, Ptr<float, Access.ReadWrite> opos, Ptr<float, Access.ReadWrite> orot,
                Ptr<float, Access.ReadWrite> oscale, Ptr<float, Access.ReadWrite> oopacity, Ptr<float, Access.ReadWrite> odc,
-               Ptr<float, Access.ReadWrite> osh, uint rest, uint begin, uint count, uint row) {
+               uint64_t osh, uint rest, uint begin, uint count, uint row) {
     Df weights[4];
     Df massSum = df_from(0);
     for (uint m = 0; m < count; ++m) {
@@ -262,11 +269,11 @@ void merge_one(Ptr<float, Access.Read> pos, Ptr<float, Access.Read> rot, Ptr<flo
         Df acc = df_from(0);
         for (uint m = 0; m < count; ++m) {
             const uint id = members[begin + m];
-            const float value = c < 3 ? dc[id * 3 + c] : sh[id * rest * 3 + c - 3];
+            const float value = c < 3 ? dc[id * 3 + c] : ((Ptr<float, Access.Read>)sh_row(sh, id, rest))[c - 3];
             acc = df_add(acc, df_mul(weights[m], df_from(value)));
         }
         if (c < 3) odc[row * 3 + c] = df_store(acc);
-        else osh[row * rest * 3 + c - 3] = df_store(acc);
+        else ((Ptr<float, Access.ReadWrite>)sh_row(osh, row, rest))[c - 3] = df_store(acc);
     }
 }
 
@@ -279,7 +286,7 @@ void LFS_KERNEL_ENTRY(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, unif
     Ptr<float, Access.Read> scale = (Ptr<float, Access.Read>)table[2];
     Ptr<float, Access.Read> opacity = (Ptr<float, Access.Read>)table[3];
     Ptr<float, Access.Read> dc = (Ptr<float, Access.Read>)table[4];
-    Ptr<float, Access.Read> sh = (Ptr<float, Access.Read>)table[5];
+    const uint64_t sh = table[5];
     Ptr<int, Access.Read> member = (Ptr<int, Access.Read>)table[6];
     Ptr<uint, Access.Read> minimum = (Ptr<uint, Access.Read>)table[7];
     Ptr<uint, Access.Read> members = (Ptr<uint, Access.Read>)table[8];
@@ -290,7 +297,7 @@ void LFS_KERNEL_ENTRY(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, unif
     Ptr<float, Access.ReadWrite> oscale = (Ptr<float, Access.ReadWrite>)table[13];
     Ptr<float, Access.ReadWrite> oopacity = (Ptr<float, Access.ReadWrite>)table[14];
     Ptr<float, Access.ReadWrite> odc = (Ptr<float, Access.ReadWrite>)table[15];
-    Ptr<float, Access.ReadWrite> osh = (Ptr<float, Access.ReadWrite>)table[16];
+    const uint64_t osh = table[16];
     for (uint i = gid.x * 256u + tid.x; i < p.n; i += groups.x * 256u) {
         const int g = member[i];
         if (g < 0) {
