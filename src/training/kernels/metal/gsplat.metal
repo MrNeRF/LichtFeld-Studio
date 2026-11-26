@@ -12,6 +12,7 @@ constant constexpr uint kGsplatTile = 16u;
 constant constexpr uint kGsplatBatch = 64u;
 constant constexpr uint kGsplatRadixItems = 8u;
 constant constexpr uint kGsplatRadixBlock = kThreadgroupWidth * kGsplatRadixItems;
+// A row starts at ulong(g) * kGsplatGradStride: in 32 bits that offset wraps past 306.8M Gaussians.
 constant constexpr uint kGsplatGradStride = 14u; // mean 3, scale 3, quat 4, opacity 1, rgb 3
 constant constexpr float kGsplatAlphaMin = 1.0f / 255.0f;
 constant constexpr float kGsplatPi = 3.14159265358979323846f;
@@ -1133,7 +1134,7 @@ kernel void gsplat_rasterize_backward(constant GsplatRasterParams& p [[buffer(0)
             const float edge = edge_scoring ? simd_sum(grad.edge) : 0.0f;
             if (simd_is_first()) {
                 const uint g = as_type<uint>(s_rgb[t].w);
-                device float* out = p.grads + g * kGsplatGradStride;
+                device float* out = p.grads + ulong(g) * kGsplatGradStride;
                 for (uint k = 0; k < kGsplatGradStride; ++k)
                     gsplat_atomic_add(out + k, values[k]);
                 if (do_dens) {
@@ -1178,7 +1179,7 @@ struct GsplatAccumulateParams {
 kernel void gsplat_accumulate(constant GsplatAccumulateParams& p [[buffer(0)]], uint g [[thread_position_in_grid]]) {
     if (g >= p.count)
         return;
-    device const float* v = p.grads + g * kGsplatGradStride;
+    device const float* v = p.grads + ulong(g) * kGsplatGradStride;
     const float3 scale = exp(gsplat_load3(p.scales, g));
     for (uint k = 0; k < 3u; ++k) {
         p.means_grad[g * 3u + k] += v[k];
