@@ -356,14 +356,22 @@ namespace lfs::training {
             launch(push, spec, reads, writes, groups(params.count * params.source_rest * 3));
         }
 
+        // The byte fill and copy (operations 10 and 11) count bytes in 32 bits and index from the addresses they are
+        // given, so a range goes in pieces of at most 2^31 bytes, each from its own 64-bit address. That keeps the
+        // shader's index and its grid-stride step below 2^32, and every access within 4 GiB of its pointer, which
+        // NVIDIA's Vulkan needs without VK_EXT_shader_64bit_indexing.
+        constexpr size_t kBytePiece = size_t{1} << 31;
+
         void fill_bytes(Out storage, const size_t byte_count, const uint8_t value) {
             if (byte_count == 0)
                 return;
             const auto dst = ref(storage);
-            Push push{0, vk::address(dst), 0, 0, 0, 0, 0,
-                      vk::checked_u32(byte_count, "SH byte fill exceeds 32-bit indexing"), value, 0, 0};
             const std::array writes{dst};
-            launch(push, {0, 1, 0, 0, 0, 0, 10}, std::span<const StorageRef>{}, writes, groups(byte_count));
+            for (size_t done = 0; done < byte_count; done += kBytePiece) {
+                const size_t bytes = std::min(kBytePiece, byte_count - done);
+                Push push{0, vk::address(dst) + done, 0, 0, 0, 0, 0, static_cast<uint32_t>(bytes), value, 0, 0};
+                launch(push, {0, 1, 0, 0, 0, 0, 10}, std::span<const StorageRef>{}, writes, groups(bytes));
+            }
         }
 
         Tensor concatenate_into_arena(const std::span<const Tensor> parts, char* data,
@@ -377,12 +385,15 @@ namespace lfs::training {
                                    part.device() == core::Device::GPU && part.dtype() == dtype,
                                "SH arena concatenate requires contiguous Vulkan parts of one dtype");
                 const auto src = ref(part);
-                Push push{vk::address(src), vk::address(dst), 0, 0, 0,
-                          0, 0, vk::checked_u32(part.bytes(), "SH arena copy exceeds 32-bit indexing"),
-                          0, vk::checked_u32(offset, "SH arena offset exceeds 32-bit indexing"), 0};
                 const std::array reads{src};
                 const std::array writes{dst};
-                launch(push, {0, 1, 0, 0, 0, 0, 11}, reads, writes, groups(part.bytes()));
+                // The part's place in the arena goes into the destination address, not the shader's 32-bit index.
+                for (size_t done = 0; done < part.bytes(); done += kBytePiece) {
+                    const size_t bytes = std::min(kBytePiece, part.bytes() - done);
+                    Push push{vk::address(src) + done, vk::address(dst) + offset + done, 0, 0, 0,
+                              0, 0, static_cast<uint32_t>(bytes), 0, 0, 0};
+                    launch(push, {0, 1, 0, 0, 0, 0, 11}, reads, writes, groups(bytes));
+                }
                 offset += part.bytes();
             }
             LFS_ASSERT_MSG(offset == result.bytes(), "SH arena concatenate byte count mismatch");
