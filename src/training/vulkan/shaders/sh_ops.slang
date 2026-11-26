@@ -21,9 +21,9 @@ struct ReencodeParams {
     uint sortedCount, primitives, decodeRows, rest;
     uint reserved0, reserved1, reserved2, reserved3;
 };
-uint64_t q16Offset(uint row, uint cell, uint rest) {
-    return ((uint64_t(row / 32) * (rest * 3) + cell) * 32 + row % 32);
-}
+// Every SH row below is addressed from its 64-bit start (shRowAddress) with a small index (shRowIndex): NVIDIA's
+// Vulkan computes an access chain's byte offset in 32 bits without VK_EXT_shader_64bit_indexing, so a store past
+// 4 GiB must not be indexed from its own start.
 
 [numthreads(256, 1, 1)]
 void main(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex, uniform Parameters p) {
@@ -49,13 +49,15 @@ void main(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex, uniform Parameters 
             }
             float values[45];
             float lo = 1e30f, hi = -1e30f;
+            const uint64_t codeRow = shRowAddress(rp.codes, 3, rp.rest, row);
+            const uint64_t canonicalAddress = shRowAddress(rp.canonical, 0, rp.rest, canonicalRow);
             if (row < rp.primitives) {
                 for (uint cell = 0; cell < rp.rest * 3; ++cell) {
                     float value = 0.0f;
                     if (canonicalRow != 0xffffffffu)
-                        value = ((Ptr<float, Access.Read>)rp.canonical)[uint64_t(canonicalRow) * rp.rest * 3 + cell];
+                        value = ((Ptr<float, Access.Read>)canonicalAddress)[cell];
                     else if (row < rp.decodeRows) {
-                        uint code = ((Ptr<uint16_t, Access.Read>)rp.codes)[q16Offset(row, cell, rp.rest)];
+                        uint code = ((Ptr<uint16_t, Access.Read>)codeRow)[shRowIndex(3, cell)];
                         value = fma(oldBounds.y - oldBounds.x, float(code) * (1.0f / 65535.0f), oldBounds.x);
                     }
                     values[cell] = value;
@@ -79,7 +81,7 @@ void main(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex, uniform Parameters 
                 ((Ptr<float2, Access.ReadWrite>)rp.bounds)[block] = float2(lo, hi);
             if (row < rp.primitives)
                 for (uint cell = 0; cell < rp.rest * 3; ++cell)
-                    ((Ptr<uint16_t, Access.ReadWrite>)rp.codes)[q16Offset(row, cell, rp.rest)] =
+                    ((Ptr<uint16_t, Access.ReadWrite>)codeRow)[shRowIndex(3, cell)] =
                         uint16_t(q16Code(values[cell], lo, hi));
             GroupMemoryBarrierWithGroupSync();
         }
@@ -107,9 +109,10 @@ void main(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex, uniform Parameters 
         if (lo > hi) { lo = 0; hi = 0; }
         if (lane == 0) { ((Ptr<float, Access.ReadWrite>)p.destinationBounds)[gid.x * 2] = lo; ((Ptr<float, Access.ReadWrite>)p.destinationBounds)[gid.x * 2 + 1] = hi; }
         if (row < ((p.count + 31) / 32) * 32) {
+            const uint64_t address = shRowAddress(p.destination, 3, destinationRest, row);
             [unroll] for (uint c = 0; c < destinationRest * 3; ++c) {
                 uint code = row < p.count ? q16Code(values[c], lo, hi) : 0;
-                ((Ptr<uint16_t, Access.ReadWrite>)p.destination)[shOffset(row, c, destinationRest, true)] = uint16_t(code);
+                ((Ptr<uint16_t, Access.ReadWrite>)address)[shRowIndex(3, c)] = uint16_t(code);
             }
         }
         return;
@@ -121,7 +124,7 @@ void main(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex, uniform Parameters 
             uint row = uint((i / (width * 32)) * 32 + (i / 4) % 32);
             uint c = uint(((i / 128) % (width / 4)) * 4 + i % 4);
             float v = c < sourceRest * 3 ? readCell(p, row, c) : 0.0f;
-            ((Ptr<float, Access.ReadWrite>)p.destination)[i] = v;
+            ((Ptr<float, Access.ReadWrite>)(p.destination + i * 4))[0] = v;
         }
         return;
     }
@@ -159,11 +162,14 @@ void main(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex, uniform Parameters 
                     source.sourceRows = p.count;
                     value = readCell(source, row, cell);
                 }
-                else if (sourceFormat == 0) value = ((Ptr<float, Access.Read>)p.source)[uint64_t(row) * (layoutRestCount * 3) + cell];
-                else if (sourceFormat == 2) value = f16tof32(((Ptr<uint16_t, Access.Read>)p.source)[shOffset(row, cell, layoutRestCount, false)]);
-                else value = ((Ptr<float, Access.Read>)p.source)[shOffset(row, cell, layoutRestCount, false)];
+                else {
+                    const uint64_t address = shRowAddress(p.source, sourceFormat, layoutRestCount, row);
+                    const uint index = shRowIndex(sourceFormat, cell);
+                    value = sourceFormat == 2 ? f16tof32(((Ptr<uint16_t, Access.Read>)address)[index])
+                                              : ((Ptr<float, Access.Read>)address)[index];
+                }
             }
-            ((Ptr<float, Access.ReadWrite>)p.destination)[i] = value;
+            ((Ptr<float, Access.ReadWrite>)(p.destination + uint64_t(i) * 4))[0] = value;
         }
         return;
     }
@@ -171,8 +177,9 @@ void main(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex, uniform Parameters 
         uint rest = sourceRest;
         for (uint i = gid.x * 256 + lane; i < p.count; i += groups.x * 256) {
             uint row = uint(((Ptr<int, Access.Read>)p.indices)[i]);
+            const uint64_t address = shRowAddress(p.destination, 1, rest, row);
             [unroll] for (uint c = 0; c < ((rest * 3 + 3) / 4) * 4; ++c)
-                ((Ptr<float, Access.ReadWrite>)p.destination)[shOffset(row, c, rest, false)] = 0.0f;
+                ((Ptr<float, Access.ReadWrite>)address)[shRowIndex(1, c)] = 0.0f;
         }
         return;
     }
@@ -185,14 +192,15 @@ void main(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex, uniform Parameters 
             uint outRow = uint(i / dstWidth), c = uint(i % dstWidth);
             uint srcRow = uint(indexAt(p, outRow));
             uint dstRow = p.destinationOffset + outRow;
-            uint64_t srcOff = sourceFormat == 0 ? uint64_t(srcRow) * srcWidth + c : shOffset(srcRow, c, srcRest, false);
-            uint64_t dstOff = destinationFormat == 0 ? uint64_t(dstRow) * dstWidth + c : shOffset(dstRow, c, dstRest, false);
+            const uint64_t srcAddress = shRowAddress(p.source, sourceFormat, srcRest, srcRow);
+            const uint64_t dstAddress = shRowAddress(p.destination, destinationFormat, dstRest, dstRow);
+            const uint srcIndex = shRowIndex(sourceFormat, c), dstIndex = shRowIndex(destinationFormat, c);
             if (sourceFormat == 4) {
-                ((Ptr<uint8_t, Access.ReadWrite>)p.destination)[dstOff] = c < srcWidth
-                    ? ((Ptr<uint8_t, Access.Read>)p.source)[srcOff] : uint8_t(0);
+                ((Ptr<uint8_t, Access.ReadWrite>)dstAddress)[dstIndex] = c < srcWidth
+                    ? ((Ptr<uint8_t, Access.Read>)srcAddress)[srcIndex] : uint8_t(0);
             } else {
-                ((Ptr<float, Access.ReadWrite>)p.destination)[dstOff] = c < srcWidth
-                    ? ((Ptr<float, Access.Read>)p.source)[srcOff] : 0.0f;
+                ((Ptr<float, Access.ReadWrite>)dstAddress)[dstIndex] = c < srcWidth
+                    ? ((Ptr<float, Access.Read>)srcAddress)[srcIndex] : 0.0f;
             }
         }
         return;
@@ -207,10 +215,14 @@ void main(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex, uniform Parameters 
             uint srcRow = operation == 7 ? uint(((Ptr<int64_t, Access.Read>)p.indices)[row]) : row;
             uint dstRow = operation == 7 ? row : operation == 8 ? p.destinationOffset + row : uint(((Ptr<int, Access.Read>)p.indices)[row]);
             if (operation == 7) {
-                ((Ptr<float, Access.ReadWrite>)p.destination)[i] = cell < srcRest * 3
-                    ? ((Ptr<float, Access.Read>)p.source)[shOffset(srcRow, cell, srcRest, false)] : 0.0f;
+                const uint64_t source = shRowAddress(p.source, 1, srcRest, srcRow);
+                ((Ptr<float, Access.ReadWrite>)(p.destination + i * 4))[0] = cell < srcRest * 3
+                    ? ((Ptr<float, Access.Read>)source)[shRowIndex(1, cell)] : 0.0f;
             } else {
-                ((Ptr<float, Access.ReadWrite>)p.destination)[shOffset(dstRow, cell, dstRest, false)] = cell < srcRest*3 ? ((Ptr<float, Access.Read>)p.source)[uint64_t(row)*(srcRest*3)+cell] : 0.0f;
+                const uint64_t source = shRowAddress(p.source, 0, srcRest, row);
+                const uint64_t destination = shRowAddress(p.destination, 1, dstRest, dstRow);
+                ((Ptr<float, Access.ReadWrite>)destination)[shRowIndex(1, cell)] = cell < srcRest * 3
+                    ? ((Ptr<float, Access.Read>)source)[cell] : 0.0f;
             }
         }
         return;
