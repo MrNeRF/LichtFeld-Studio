@@ -233,11 +233,15 @@ namespace {
         ASSERT_NE(primary, core::NULL_NODE);
         ASSERT_NE(secondary, core::NULL_NODE);
         ASSERT_NE(primary, secondary);
+        // The four splats lie on a line, so the ellipsoid sized from their bounds has zero radii, which a project rejects.
+        auto ellipsoid = *scene.getNodeById(secondary)->ellipsoid;
+        ellipsoid.radii = glm::vec3(2.0f, 1.0f, 1.0f);
+        scene.setEllipsoidData(secondary, ellipsoid);
         const auto primary_uuid = scene.getNodeById(primary)->uuid;
         const auto secondary_uuid = scene.getNodeById(secondary)->uuid;
         const pj::ScenePayloadBindings bindings{{owner_uuid, pj::PayloadBinding{.fourcc = "DSRC", .instance_uuid = owner_uuid, .reference_uuid = std::nullopt, .source_kind = "ply"}}};
         const auto chapter = pj::capture_scene_graph(scene, bindings);
-        ASSERT_TRUE(chapter);
+        ASSERT_TRUE(chapter) << lfs::format_for_developer(chapter.error());
         const auto bytes = chapter->to_bytes();
         const std::string text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
         // Only the secondary volume stores its role, so a project without the key loads every volume as the ROI.
@@ -245,7 +249,7 @@ namespace {
         ASSERT_NE(key, std::string::npos);
         EXPECT_EQ(text.find("\"secondary_crop\"", key + 1), std::string::npos);
         const auto decoded = pj::SceneGraphChapter::from_bytes(bytes);
-        ASSERT_TRUE(decoded);
+        ASSERT_TRUE(decoded) << lfs::format_for_developer(decoded.error());
         core::Scene restored;
         pj::ScenePayloadResolver resolver{.splat = [](const pj::PayloadBinding&) -> lfs::Result<std::unique_ptr<core::SplatData>> { return fourSplats(); }};
         ASSERT_TRUE(pj::hydrate_scene_graph(*decoded, restored, resolver));

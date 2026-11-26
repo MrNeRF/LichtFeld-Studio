@@ -2390,7 +2390,7 @@ def apply_crop_tool() -> None:
     Apply the active crop tool primitive through the node-backed crop command path
     """
 
-def set_crop_polygon_outline(uuid: str, vertices: Sequence[tuple[float, float]]) -> bool:
+def set_crop_polygon_outline(uuid: str, vertices: Sequence[Sequence[float]]) -> bool:
     """Update a crop polygon outline in one undo step"""
 
 def start_crop_polygon() -> None:
