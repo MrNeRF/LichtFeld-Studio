@@ -15,8 +15,10 @@ void main(uint3 tid: SV_DispatchThreadID, uniform Parameters p) {
         uint sr=indexType!=0 && scatter==0 && localRow<p.count ? indexAt(p,localRow) : p.sourceOffset+localRow;
         uint dr=scatter!=0 ? indexAt(p,localRow) : p.destinationOffset+localRow;
         float value=localRow<p.count && !(c>=destinationRest*3 && sourceFormat!=1) ? readCell(p,sr,c) : 0;
-        uint64_t offset=destinationFormat==0 ? uint64_t(dr)*width+c : shOffset(dr,c,destinationRest,false);
-        if(destinationFormat==2) ((Ptr<uint16_t, Access.ReadWrite>)p.destination)[offset]=uint16_t(f32tof16(value));
-        else ((Ptr<float, Access.ReadWrite>)p.destination)[offset]=value;
+        // The row's 64-bit address and a small index from it (see shRowAddress).
+        const uint64_t address=shRowAddress(p.destination,destinationFormat,destinationRest,dr);
+        const uint index=shRowIndex(destinationFormat,c);
+        if(destinationFormat==2) ((Ptr<uint16_t, Access.ReadWrite>)address)[index]=uint16_t(f32tof16(value));
+        else ((Ptr<float, Access.ReadWrite>)address)[index]=value;
     }
 }

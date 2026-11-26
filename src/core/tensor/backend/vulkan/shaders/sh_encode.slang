@@ -29,6 +29,8 @@ void main(uint3 gid: SV_GroupID, uint lane: SV_GroupIndex, uniform Parameters p)
         ((Ptr<float, Access.ReadWrite>)p.destinationBounds)[gid.x*2+1]=hi;
     }
     if(row>=((p.count+31)/32)*32) return;
+    // The row's 64-bit address and a small index from it (see shRowAddress).
+    const uint64_t address=shRowAddress(p.destination,3,destinationRest,row);
     [unroll] for(uint c=0;c<destinationRest*3;++c) {
         uint code=0;
         if(row<p.count) {
@@ -38,6 +40,6 @@ void main(uint3 gid: SV_GroupID, uint lane: SV_GroupIndex, uniform Parameters p)
             float rounded=base+(scaled-base>=0.5f ? 1.0f : 0.0f);
             code=uint(minNumber(maxNumber(rounded,0.0f),65535.0f));
         }
-        ((Ptr<uint16_t, Access.ReadWrite>)p.destination)[shOffset(row,c,destinationRest,true)]=uint16_t(code);
+        ((Ptr<uint16_t, Access.ReadWrite>)address)[shRowIndex(3,c)]=uint16_t(code);
     }
 }
