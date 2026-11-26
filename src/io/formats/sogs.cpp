@@ -1472,6 +1472,15 @@ namespace lfs::io {
     } // anonymous namespace
 
     Result<void> encode_sog(const SplatData& splat_data, const SogEncodeOptions& options_in, SogSink& archive) {
+        // The SOG reader refuses more splats than MAX_SOG_SPLATS, so the export refuses them before writing anything.
+        const auto export_count = splat_data.has_deleted_mask() ? static_cast<size_t>(splat_data.visible_count())
+                                                                : splat_data.size();
+        if (export_count > MAX_SOG_SPLATS) {
+            return make_error(ErrorCode::INVALID_DATASET,
+                              std::format("SOG export supports at most {} visible splats (got {})", MAX_SOG_SPLATS,
+                                          export_count),
+                              options_in.output_path);
+        }
         if (splat_data.has_deleted_mask()) {
             const auto visible_count = static_cast<size_t>(splat_data.visible_count());
             if (visible_count == 0) {
