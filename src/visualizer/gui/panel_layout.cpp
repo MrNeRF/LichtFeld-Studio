@@ -643,8 +643,7 @@ namespace lfs::vis::gui {
 
         if (bottom_dock_collapsed_) {
             bottom_dock_visible_ = true;
-            bottom_dock_top_y_ = screen.work_pos.y + screen.work_size.y -
-                                 computeBottomDockReservedHeight(show_main_panel, ui_hidden, screen);
+            bottom_dock_top_y_ = -1.0f;
             bottom_dock_tab_bar_rect_ = {};
             return;
         }
@@ -783,8 +782,7 @@ namespace lfs::vis::gui {
 
         if (bottom_dock_collapsed_) {
             bottom_dock_visible_ = true;
-            bottom_dock_top_y_ = screen.work_pos.y + screen.work_size.y -
-                                 computeBottomDockReservedHeight(show_main_panel, ui_hidden, screen);
+            bottom_dock_top_y_ = -1.0f;
             bottom_dock_tab_bar_rect_ = {};
             return;
         }
@@ -1159,7 +1157,7 @@ namespace lfs::vis::gui {
 
         const float default_panel_h = BOTTOM_DOCK_DEFAULT_HEIGHT * dpi;
         if (bottom_dock_collapsed_)
-            return (DOCK_GRIP_H + TAB_BAR_H + 1.0f) * dpi;
+            return 0.0f;
         const float current_h = bottom_dock_height_ > 0.0f ? bottom_dock_height_ : default_panel_h;
         return std::clamp(current_h, 0.0f, max_panel_h);
     }

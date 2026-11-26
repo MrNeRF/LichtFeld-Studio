@@ -579,7 +579,7 @@ TEST_F(PanelLayoutRenderDemandTest, BottomDockCollapseKeepsActivePanelAndHeight)
     layout.renderBottomDock(draw_ctx, true, false, input, s);
     layout.renderBottomDockCached(draw_ctx, true, false, input, s);
     EXPECT_TRUE(layout.isBottomDockVisible());
-    EXPECT_LT(layout.computeBottomDockReservedHeight(true, false, s), expanded_height);
+    EXPECT_EQ(layout.computeBottomDockReservedHeight(true, false, s), 0.0f);
     EXPECT_EQ(layout.computeBottomDockReservedHeight(true, true, s), 0.0f);
     EXPECT_EQ(panel->draw_count, draws);
     EXPECT_EQ(panel->cached_draw_count, 0);

@@ -178,6 +178,7 @@ namespace lfs::vis::gui {
                 LOG_ERROR("RmlViewportOverlay: failed to load viewport_overlay.rml");
                 return;
             }
+            side_dock_listener_.owner = this;
             document_->AddEventListener(Rml::EventId::Click, &side_dock_listener_);
             document_->AddEventListener(Rml::EventId::Keydown, &side_dock_listener_);
             cacheBodyTemplate();
@@ -269,6 +270,7 @@ namespace lfs::vis::gui {
                 LOG_ERROR("RmlViewportOverlay: failed to reload viewport_overlay.rml");
                 return;
             }
+            side_dock_listener_.owner = this;
             document_->AddEventListener(Rml::EventId::Click, &side_dock_listener_);
             document_->AddEventListener(Rml::EventId::Keydown, &side_dock_listener_);
             cacheBodyTemplate();
@@ -398,7 +400,8 @@ namespace lfs::vis::gui {
 
     void RmlViewportOverlay::SideDockListener::ProcessEvent(Rml::Event& event) {
         auto* target = event.GetTargetElement();
-        while (target && target->GetId() != "left-side-dock-toggle" && target->GetId() != "right-side-dock-toggle")
+        while (target && target->GetId() != "left-side-dock-toggle" && target->GetId() != "right-side-dock-toggle" &&
+               target->GetId() != "bottom-dock-toggle")
             target = target->GetParentNode();
         if (!target)
             return;
@@ -408,19 +411,29 @@ namespace lfs::vis::gui {
                 (key != Rml::Input::KI_RETURN && key != Rml::Input::KI_SPACE))
                 return;
         }
+        if (target->GetId() == "bottom-dock-toggle") {
+            if (owner && owner->on_bottom_dock_toggle)
+                owner->on_bottom_dock_toggle();
+            event.StopPropagation();
+            return;
+        }
         lfs::core::events::ui::ToggleSideDock{.side = target->GetId() == "right-side-dock-toggle" ? lfs::core::SideDock::Right : lfs::core::SideDock::Left}.emit();
         event.StopPropagation();
     }
 
     void RmlViewportOverlay::setSideDocks(const bool left_visible, const bool left_collapsed,
-                                          const bool right_visible, const bool right_collapsed) {
+                                          const bool right_visible, const bool right_collapsed,
+                                          const bool bottom_visible, const bool bottom_collapsed) {
         if (left_dock_available_ == left_visible && left_dock_collapsed_ == left_collapsed &&
-            right_dock_available_ == right_visible && right_dock_collapsed_ == right_collapsed)
+            right_dock_available_ == right_visible && right_dock_collapsed_ == right_collapsed &&
+            bottom_dock_available_ == bottom_visible && bottom_dock_collapsed_ == bottom_collapsed)
             return;
         left_dock_available_ = left_visible;
         left_dock_collapsed_ = left_collapsed;
         right_dock_available_ = right_visible;
         right_dock_collapsed_ = right_collapsed;
+        bottom_dock_available_ = bottom_visible;
+        bottom_dock_collapsed_ = bottom_collapsed;
         applySideDocks();
         markRenderNeeded(RenderReason::ToolbarLayout);
     }
@@ -437,6 +450,7 @@ namespace lfs::vis::gui {
         };
         apply("left-side-dock-toggle", left_dock_available_, left_dock_collapsed_);
         apply("right-side-dock-toggle", right_dock_available_, right_dock_collapsed_);
+        apply("bottom-dock-toggle", bottom_dock_available_, bottom_dock_collapsed_);
     }
 
     void RmlViewportOverlay::setToolbarPanels(const float primary_x,

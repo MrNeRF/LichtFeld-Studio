@@ -12,6 +12,9 @@
     <button id="right-side-dock-toggle" data-tooltip="input_settings.action.toggle_right_dock" class="btn side-dock-toggle right hidden">
         <span class="side-dock-grip"></span><span class="dock-collapse-arrow">›</span><span class="dock-expand-arrow">‹</span>
     </button>
+    <button id="bottom-dock-toggle" data-tooltip="common.toggle_bottom_dock" class="btn side-dock-toggle bottom hidden">
+        <span class="side-dock-grip"></span><span class="dock-collapse-arrow">⌄</span><span class="dock-expand-arrow">⌃</span>
+    </button>
     <div id="gamepad-navigation-indicator" class="comparison-name gamepad-navigation-indicator hidden">
         <div class="gamepad-indicator-heading">
             <span class="gamepad-indicator-dot"></span>

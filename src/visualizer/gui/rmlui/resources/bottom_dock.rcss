@@ -20,30 +20,6 @@ body {
 }
 
 .dock-grip-bar {
-    width: 36dp;
+    width: 100%;
     height: 1dp;
-}
-
-#bottom-dock-toggle {
-    right: 2dp;
-}
-
-.dock-toggle-chevron {
-    display: inline-block;
-    width: 6dp;
-    height: 6dp;
-    border-width: 0 1dp 1dp 0;
-    transform: rotate(45deg);
-    pointer-events: none;
-}
-
-.collapsed .dock-toggle-chevron {
-    transform: rotate(225deg);
-}
-
-.collapsed #tab-strip-viewport,
-.collapsed #tab-scroll-left,
-.collapsed #tab-scroll-right,
-.collapsed #dock-grip {
-    display: none;
 }

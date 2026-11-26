@@ -26,7 +26,6 @@ namespace lfs::vis::gui {
         float grip_h = 0.0f;
         float tab_bar_h = 0.0f;
         float separator_h = 0.0f;
-        bool collapsed = false;
         bool grip_hovered = false;
         bool grip_active = false;
     };
@@ -50,7 +49,6 @@ namespace lfs::vis::gui {
         [[nodiscard]] std::string animationDemandDescription() const;
         CursorRequest getCursorRequest() const;
 
-        std::function<void()> on_toggle;
         std::function<void(const std::string&)> on_tab_changed;
         std::function<void(const std::string&)> on_tab_closed;
 

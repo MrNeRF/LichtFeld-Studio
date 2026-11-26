@@ -24,10 +24,6 @@
                         data-event-click="tab_close(tab.id)">&#215;</button>
             </div>
         </div>
-        <button id="bottom-dock-toggle" class="tab-nav" data-tooltip="common.toggle_bottom_dock"
-                aria-expanded="true" data-event-click="toggle_dock()">
-            <span class="dock-toggle-chevron"></span>
-        </button>
         <button id="tab-scroll-right" class="tab-nav"
                 data-class-hidden="!tabs_overflow"
                 data-class-disabled="!can_scroll_tabs_right"

@@ -4684,7 +4684,7 @@ namespace lfs::vis::gui {
             viewer_->projectMarkSessionChapterCommitted("GUIL");
         };
         rml_bottom_dock_.init(&rmlui_manager_);
-        rml_bottom_dock_.on_toggle = [this] {
+        rml_viewport_overlay_.on_bottom_dock_toggle = [this] {
             panel_layout_.toggleBottomDockCollapsed();
             if (viewer_) {
                 if (auto* rm = viewer_->getRenderingManager())
@@ -6753,13 +6753,12 @@ namespace lfs::vis::gui {
             bottom_dock_pointer_activity ||
             hasKeyboardActivity(sdl_input);
         const auto bottom_dock_active_before_input = panel_layout_.getBottomDockActiveTab();
-        rml_bottom_dock_.setVisible(panel_layout_.isBottomDockVisible());
-        if (panel_layout_.isBottomDockVisible()) {
+        rml_bottom_dock_.setVisible(panel_layout_.isBottomDockVisible() && !panel_layout_.isBottomDockCollapsed());
+        if (panel_layout_.isBottomDockVisible() && !panel_layout_.isBottomDockCollapsed()) {
             BottomDockLayout bottom_dock_rml_layout;
             bottom_dock_rml_layout.pos = {bottom_dock_x, bottom_dock_y};
             bottom_dock_rml_layout.size = {bottom_dock_w, bottom_dock_h};
             bottom_dock_rml_layout.grip_h = bottom_dock_grip_h;
-            bottom_dock_rml_layout.collapsed = panel_layout_.isBottomDockCollapsed();
             bottom_dock_rml_layout.tab_bar_h = PanelLayoutManager::TAB_BAR_H * current_ui_scale_;
             bottom_dock_rml_layout.separator_h = current_ui_scale_;
             if (reg.isPositionOverFloatingPanel(panel_input.mouse_x, panel_input.mouse_y))
@@ -6785,7 +6784,7 @@ namespace lfs::vis::gui {
             panel_layout_.renderBottomDock(draw_ctx, show_main_panel_, ui_hidden_,
                                            panel_input, screen);
         }
-        rml_bottom_dock_.setVisible(panel_layout_.isBottomDockVisible());
+        rml_bottom_dock_.setVisible(panel_layout_.isBottomDockVisible() && !panel_layout_.isBottomDockCollapsed());
         std::vector<TabSnapshot> bottom_dock_tab_snaps;
         const auto& bottom_dock_tabs = panel_layout_.bottomDockTabs();
         bottom_dock_tab_snaps.reserve(bottom_dock_tabs.size());
@@ -6797,12 +6796,11 @@ namespace lfs::vis::gui {
                 .closeable = true,
             });
         }
-        if (panel_layout_.isBottomDockVisible()) {
+        if (panel_layout_.isBottomDockVisible() && !panel_layout_.isBottomDockCollapsed()) {
             BottomDockLayout bottom_dock_rml_layout;
             bottom_dock_rml_layout.pos = {bottom_dock_x, bottom_dock_y};
             bottom_dock_rml_layout.size = {bottom_dock_w, bottom_dock_h};
             bottom_dock_rml_layout.grip_h = bottom_dock_grip_h;
-            bottom_dock_rml_layout.collapsed = panel_layout_.isBottomDockCollapsed();
             bottom_dock_rml_layout.tab_bar_h = PanelLayoutManager::TAB_BAR_H * current_ui_scale_;
             bottom_dock_rml_layout.separator_h = current_ui_scale_;
             const float reserved_height =
@@ -6987,7 +6985,9 @@ namespace lfs::vis::gui {
         rml_viewport_overlay_.setSideDocks(
             dock_controls_available && reg.has_panels(PanelSpace::LeftDock),
             panel_layout_.isLeftDockCollapsed(), dock_controls_available,
-            panel_layout_.isRightDockCollapsed());
+            panel_layout_.isRightDockCollapsed(),
+            dock_controls_available && panel_layout_.isBottomDockVisible(),
+            panel_layout_.isBottomDockCollapsed());
         RmlViewportOverlay::SplitDividerOverlayState split_divider_state;
         if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr;
             rendering && rendering->isSplitViewActive()) {

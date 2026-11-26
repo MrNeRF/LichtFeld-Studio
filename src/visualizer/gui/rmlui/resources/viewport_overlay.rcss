@@ -2435,3 +2435,13 @@ body {
 .side-dock-toggle:focus-visible .dock-collapse-arrow,
 .side-dock-toggle.collapsed .dock-expand-arrow { display: inline; }
 .side-dock-toggle.collapsed .dock-collapse-arrow { display: none; }
+
+.side-dock-toggle.bottom {
+    top: auto;
+    bottom: 6dp;
+    left: 50%;
+    margin: 0 0 0 -16dp;
+    width: 32dp;
+    height: 14dp;
+}
+.side-dock-toggle.bottom .side-dock-grip { width: 16dp; height: 2dp; }
