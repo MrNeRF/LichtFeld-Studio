@@ -297,6 +297,28 @@ namespace lfs::vis::cap {
             });
         }
 
+        // A point cloud holds its ROI and its Crop side by side. Replacing one role's volume records the
+        // owner's children, so undo puts the volume back in its old place and the sibling's history stays valid.
+        [[nodiscard]] vis::op::SceneGraphStateSnapshot capture_crop_volume_owner(const SceneManager& scene_manager,
+                                                                                 const core::NodeId owner_id,
+                                                                                 const std::vector<std::string>& volume_names) {
+            const auto& scene = scene_manager.getScene();
+            std::vector<core::Uuid> volume_uuids;
+            for (const auto& name : volume_names)
+                if (const auto* const node = scene.getNode(name))
+                    volume_uuids.push_back(node->uuid);
+            return vis::op::SceneGraphPatchEntry::captureStateByIds(
+                scene_manager, {owner_id},
+                vis::op::SceneGraphCaptureOptions{
+                    .mode = vis::op::SceneGraphCaptureMode::FULL,
+                    .include_selected_nodes = false,
+                    .include_scene_context = false,
+                    .preserve_node_ids = false,
+                    .scoped_topology = true,
+                    .payload_uuids = std::move(volume_uuids),
+                });
+        }
+
         void remove_crop_volumes(core::Scene& scene,
                                  RenderingManager* rendering_manager,
                                  const std::vector<std::string>& names) {
@@ -1551,13 +1573,8 @@ namespace lfs::vis::cap {
             return convert_crop_volume_in_place(scene_manager, rendering_manager, existing_ellipsoid, CropVolumeShape::Box);
         }
 
-        const vis::op::SceneGraphCaptureOptions history_options{
-            .mode = vis::op::SceneGraphCaptureMode::FULL,
-            .include_selected_nodes = false,
-            .include_scene_context = false,
-        };
         const auto replaced_polygon = replace_crop_polygon_names(scene, parent_id, role);
-        auto history_before = vis::op::SceneGraphPatchEntry::captureState(scene_manager, replaced_polygon, history_options);
+        auto history_before = capture_crop_volume_owner(scene_manager, parent_id, replaced_polygon);
         remove_crop_volumes(scene, rendering_manager, replaced_polygon);
         const std::string cropbox_name = crop_volume_name(scene, *parent, role, "_cropbox");
         const core::NodeId cropbox_id = scene.addCropBox(cropbox_name, parent_id, role);
@@ -1599,7 +1616,7 @@ namespace lfs::vis::cap {
             scene_manager,
             "Add Crop Box",
             std::move(history_before),
-            vis::op::SceneGraphPatchEntry::captureState(scene_manager, {created_cropbox_name}, history_options)));
+            capture_crop_volume_owner(scene_manager, parent_id, {created_cropbox_name})));
 
         return cropbox_id;
     }
@@ -1910,13 +1927,8 @@ namespace lfs::vis::cap {
             return convert_crop_volume_in_place(scene_manager, rendering_manager, existing_cropbox, CropVolumeShape::Ellipsoid);
         }
 
-        const vis::op::SceneGraphCaptureOptions history_options{
-            .mode = vis::op::SceneGraphCaptureMode::FULL,
-            .include_selected_nodes = false,
-            .include_scene_context = false,
-        };
         const auto replaced_polygon = replace_crop_polygon_names(scene, parent_id, role);
-        auto history_before = vis::op::SceneGraphPatchEntry::captureState(scene_manager, replaced_polygon, history_options);
+        auto history_before = capture_crop_volume_owner(scene_manager, parent_id, replaced_polygon);
         remove_crop_volumes(scene, rendering_manager, replaced_polygon);
         const std::string ellipsoid_name = crop_volume_name(scene, *parent, role, "_ellipsoid");
         const core::NodeId ellipsoid_id = scene.addEllipsoid(ellipsoid_name, parent_id, role);
@@ -1966,7 +1978,7 @@ namespace lfs::vis::cap {
             scene_manager,
             "Add Ellipsoid",
             std::move(history_before),
-            vis::op::SceneGraphPatchEntry::captureState(scene_manager, {created_ellipsoid_name}, history_options)));
+            capture_crop_volume_owner(scene_manager, parent_id, {created_ellipsoid_name})));
         return ellipsoid_id;
     }
 
@@ -2265,12 +2277,7 @@ namespace lfs::vis::cap {
                 replaced.push_back(volume->name);
         }
 
-        const vis::op::SceneGraphCaptureOptions history_options{
-            .mode = vis::op::SceneGraphCaptureMode::FULL,
-            .include_selected_nodes = false,
-            .include_scene_context = false,
-        };
-        auto history_before = vis::op::SceneGraphPatchEntry::captureState(scene_manager, replaced, history_options);
+        auto history_before = capture_crop_volume_owner(scene_manager, parent_id, replaced);
         remove_crop_volumes(scene, rendering_manager, replaced);
 
         const std::string parent_name = parent->name;
@@ -2301,7 +2308,7 @@ namespace lfs::vis::cap {
             scene_manager,
             "Add Crop Polygon",
             std::move(history_before),
-            vis::op::SceneGraphPatchEntry::captureState(scene_manager, {polygon_name}, history_options)));
+            capture_crop_volume_owner(scene_manager, parent_id, {polygon_name})));
         return polygon_id;
     }
 
