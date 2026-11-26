@@ -110,6 +110,7 @@ def _install_stub_modules(monkeypatch):
         "startup.drop_files_hint": "Or use {path}",
     }
     ui_stub = SimpleNamespace(
+        get_model_alignment_state=lambda: SimpleNamespace(active=False),
         add_hook=lambda panel, section, callback, position="append": hook_calls.append(
             (panel, section, callback, position)
         ),

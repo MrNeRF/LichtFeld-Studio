@@ -9,8 +9,8 @@
 #include "gui/rmlui/elements/scene_graph_drop_target.hpp"
 #include "gui/scene_graph_context_actions.hpp"
 #include "gui/scene_tree_session.hpp"
+#include "operator/ops/model_alignment_ops.hpp"
 
-#include "core/error_bus.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
@@ -18,10 +18,8 @@
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/splat_data_transform.hpp"
-#include "core/splat_operations.hpp"
 #include "core/tensor.hpp"
 #include "gui/async_task_manager.hpp"
-#include "gui/gizmo_manager.hpp"
 #include "gui/global_context_menu.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_manager.hpp"
@@ -34,20 +32,20 @@
 #include "gui/utils/splat_drag_selection.hpp"
 #include "gui/utils/splat_export_request.hpp"
 #include "gui/utils/splat_transfer.hpp"
-#include "input/input_controller.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/colmap.hpp"
-#include "operation/undo_history.hpp"
 #include "operator/operator_registry.hpp"
 #include "preferences.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "sequencer/sequencer_controller.hpp"
 #include "training/training_manager.hpp"
 #include "visualizer/core/editor_context.hpp"
 #include "visualizer/core/parameter_manager.hpp"
 #include "visualizer/core/services.hpp"
 #include "visualizer/gui_capabilities.hpp"
+#include "visualizer_impl.hpp"
 #include "window/window_manager.hpp"
 #include <SDL3/SDL.h>
 
@@ -328,6 +326,9 @@ namespace lfs::vis::gui {
             return type != core::NodeType::CAMERA_GROUP &&
                    type != core::NodeType::KEYFRAME &&
                    type != core::NodeType::KEYFRAME_GROUP &&
+                   type != core::NodeType::CROPBOX &&
+                   type != core::NodeType::ELLIPSOID &&
+                   type != core::NodeType::CROP_POLYGON &&
                    !parent_is_dataset;
         }
 
@@ -1055,14 +1056,6 @@ namespace lfs::vis::gui {
             vis_icon->SetClass("row-icon", true);
             vis_icon->SetAttribute("data-action", "toggle-vis");
             slot.vis_icon = visibility_slot_el->AppendChild(std::move(vis_icon));
-            auto crop_toggle = doc->CreateElement("span");
-            crop_toggle->SetClass("crop-effect-toggle", true);
-            crop_toggle->SetAttribute("data-action", "toggle-vis");
-            crop_toggle->SetAttribute("role", "switch");
-            slot.crop_toggle = visibility_slot_el->AppendChild(std::move(crop_toggle));
-            auto dot = doc->CreateElement("span");
-            dot->SetClass("crop-effect-dot", true);
-            slot.crop_toggle->AppendChild(std::move(dot));
 
             auto delete_slot = doc->CreateElement("span");
             delete_slot->SetClass("row-action-slot", true);
@@ -1080,10 +1073,6 @@ namespace lfs::vis::gui {
     }
 
     void SceneGraphElement::clear() {
-        crop_group_ids_.clear();
-        next_crop_group_id_ = -2;
-        selected_crop_group_ = core::NULL_NODE;
-        real_node_count_ = 0;
         node_snapshots_.clear();
         root_ids_.clear();
         flat_rows_.clear();
@@ -1165,7 +1154,6 @@ namespace lfs::vis::gui {
             return false;
 
         selected_ids_ = std::move(selected_ids);
-        selected_crop_group_ = core::NULL_NODE;
         if (selected_ids_.size() == 1)
             pending_reveal_node_id_ = *selected_ids_.begin();
         else
@@ -1200,19 +1188,6 @@ namespace lfs::vis::gui {
             snapshot.type = node->type;
             snapshot.name = node->name;
             snapshot.visible = static_cast<bool>(node->visible);
-            const auto* owner = scene.getNodeById(node->parent_id);
-            snapshot.roi_volume = node->cropRole() == core::CropRole::Primary &&
-                                  ((owner && owner->type == core::NodeType::POINTCLOUD) || isTrainingRoi(scene, *node));
-            if (const auto* descriptor = core::splatOperationDescriptor(node->type);
-                descriptor && descriptor->category == core::SplatOperationCategory::CropVolume) {
-                if (owner && !snapshot.roi_volume) {
-                    const auto operation = core::readSplatOperation(*owner, *node);
-                    if (operation && operation->enabled) {
-                        snapshot.crop_volume = true;
-                        snapshot.visible = *operation->enabled;
-                    }
-                }
-            }
             snapshot.locked = static_cast<bool>(node->locked);
             snapshot.has_children = !node->children.empty();
             snapshot.training_enabled = node->training_enabled;
@@ -1270,11 +1245,14 @@ namespace lfs::vis::gui {
                 snapshot.label = node->name;
                 break;
             }
-            if (const auto* descriptor = core::splatOperationDescriptor(node->type);
-                descriptor && descriptor->category == core::SplatOperationCategory::CropVolume) {
-                if ((owner && owner->type == core::NodeType::POINTCLOUD) || isTrainingRoi(scene, *node)) {
-                    snapshot.label = std::format("{} ({})", snapshot.label,
-                        LOC(node->cropRole() == core::CropRole::Primary ? "tool_defs.roi" : "tool_defs.crop"));
+            // The training ROI and a point cloud's Crop name their role, and the ROI icon takes its colour.
+            if (const auto role = node->cropRole()) {
+                const auto* owner = scene.getNodeById(node->parent_id);
+                if (isPointCloudRoi(scene, *node) || isTrainingRoi(scene, *node)) {
+                    snapshot.roi_volume = true;
+                    snapshot.label = std::format("{} ({})", snapshot.label, LOC("tool_defs.roi"));
+                } else if (*role == core::CropRole::Secondary && owner && isPreTrainingPointCloud(scene, *owner)) {
+                    snapshot.label = std::format("{} ({})", snapshot.label, LOC("tool_defs.crop"));
                 }
             }
             switch (node->payload_hydration) {
@@ -1297,63 +1275,6 @@ namespace lfs::vis::gui {
                 root_ids.push_back(node->id);
         }
 
-        real_node_count_ = nodes.size();
-        std::erase_if(crop_group_ids_, [&](const auto& entry) {
-            const auto* owner = scene.getNodeByUuid(entry.first);
-            return !owner || owner->type != core::NodeType::SPLAT;
-        });
-        // These are presentation rows, never Scene nodes or transformation parents.
-        for (const auto* owner : nodes) {
-            if (owner->type != core::NodeType::SPLAT)
-                continue;
-            std::vector<core::NodeId> crops;
-            for (const auto id : owner->children) {
-                const auto it = snapshots.find(id);
-                const auto* child = scene.getNodeById(id);
-                if (it != snapshots.end() && it->second.crop_volume && child && !isTrainingRoi(scene, *child))
-                    crops.push_back(id);
-            }
-            if (crops.empty())
-                continue;
-            auto group_it = crop_group_ids_.find(owner->uuid);
-            if (group_it == crop_group_ids_.end()) {
-                if (next_crop_group_id_ == std::numeric_limits<core::NodeId>::min())
-                    throw std::length_error("Scene crop group row identity range exhausted");
-                group_it = crop_group_ids_.emplace(owner->uuid, next_crop_group_id_--).first;
-            }
-            const auto group_id = group_it->second;
-            NodeSnapshot group;
-            group.id = group_id;
-            group.parent_id = owner->id;
-            group.children = crops;
-            group.crop_group_owner = owner->id;
-            group.type = core::NodeType::GROUP;
-            group.name = tr("splat_inspector.group");
-            group.label = std::format("{} ({})", group.name, crops.size());
-            group.visible = owner->crop_effects_enabled;
-            group.crop_volume = true;
-            group.has_children = true;
-            group.locked = scene.isNodeEffectivelyLocked(owner->id);
-            auto& children = snapshots.at(owner->id).children;
-            std::vector<core::NodeId> organized;
-            bool inserted = false;
-            for (const auto id : children) {
-                if (const auto child = snapshots.find(id); child == snapshots.end() ||
-                    std::find(crops.begin(), crops.end(), id) == crops.end())
-                    organized.push_back(id);
-                else if (!inserted) {
-                    organized.push_back(group_id);
-                    inserted = true;
-                }
-            }
-            children = std::move(organized);
-            for (const auto id : crops) {
-                snapshots.at(id).parent_id = group_id;
-                snapshots.at(id).crop_parent_enabled = owner->crop_effects_enabled;
-            }
-            snapshots.emplace(group_id, std::move(group));
-        }
-
         auto collapsed_ids = collapsed_ids_;
         collapsed_ids_.clear();
         const bool apply_session_collapse =
@@ -1372,11 +1293,6 @@ namespace lfs::vis::gui {
         }
 
         for (auto& [id, snapshot] : snapshots) {
-            if (snapshot.crop_group_owner != core::NULL_NODE) {
-                if (!previous_ids.contains(id))
-                    collapsed_ids_.insert(id);
-                continue;
-            }
             const bool read_only = scene.getNodeById(id)->isExternalPreview();
             const auto parent_it = snapshots.find(snapshot.parent_id);
             const bool parent_is_dataset =
@@ -1385,7 +1301,7 @@ namespace lfs::vis::gui {
                                  snapshot.type == core::NodeType::SPLAT || snapshot.type == core::NodeType::GROUP;
             snapshot.can_delete = isDeletable(snapshot.type, parent_is_dataset);
             snapshot.delete_enabled = snapshot.can_delete &&
-                                      !scene.isNodeEffectivelyLocked(id) &&
+                                      !snapshot.locked &&
                                       !delete_blocked_ids.contains(id);
             snapshot.can_rename = isRenamable(snapshot.type, parent_is_dataset);
             snapshot.rename_enabled = snapshot.can_rename && !read_only;
@@ -1456,6 +1372,7 @@ namespace lfs::vis::gui {
             .can_rename = snapshot.can_rename,
             .rename_enabled = snapshot.rename_enabled,
             .camera_loss_icon_color = snapshot.camera_loss_icon_color,
+            .roi_volume = snapshot.roi_volume,
         });
         if (snapshot.has_children && !collapsed_ids_.contains(snapshot.id))
             rows.insert(rows.end(), child_rows.begin(), child_rows.end());
@@ -1474,8 +1391,6 @@ namespace lfs::vis::gui {
         captureSceneSnapshot(scene, snapshots, root_ids);
 
         node_snapshots_ = std::move(snapshots);
-        if (!node_snapshots_.contains(selected_crop_group_))
-            selected_crop_group_ = core::NULL_NODE;
         root_ids_ = std::move(root_ids);
         root_count_ = root_ids_.size();
         model_count_ = std::ranges::count_if(node_snapshots_, [](const auto& item) {
@@ -1799,13 +1714,7 @@ namespace lfs::vis::gui {
         setCachedClass(slot.root, "even", absolute_index % 2 == 0);
         setCachedClass(slot.root, "odd", absolute_index % 2 == 1);
         const auto [checkbox_checked, checkbox_mixed] = checkboxState(row.id);
-        const bool crop_group = snapshot.crop_group_owner != core::NULL_NODE;
-        setCachedClass(slot.root, "crop-group", crop_group);
-        setCachedAttribute(slot.root, "data-crop-group", crop_group ? "true" : "false");
-        setCachedAttribute(slot.root, "data-crop-owner", std::to_string(snapshot.crop_group_owner));
-        setCachedClass(slot.root, "crop-effect-suspended", !snapshot.crop_parent_enabled);
-        setCachedProperty(slot.selection_checkbox, "display", crop_group ? "none" : "inline-block");
-        setCachedClass(slot.root, "selected", crop_group ? selected_crop_group_ == row.id : selected_ids_.contains(row.id) || checkbox_checked);
+        setCachedClass(slot.root, "selected", selected_ids_.contains(row.id) || checkbox_checked);
         setCachedClass(slot.root, "selection-partial", checkbox_mixed);
         setCachedClass(slot.root, "keyboard-cursor", keyboard_cursor_id_ == row.id);
         setCachedClass(slot.root, "drop-target", drop_into_group_id_ == row.id);
@@ -1813,12 +1722,6 @@ namespace lfs::vis::gui {
                        std::ranges::find(drag_node_ids_, row.id) != drag_node_ids_.end());
         setCachedClass(slot.root, "just-moved", just_moved_ids_.contains(row.id));
 
-        setCachedProperty(slot.vis_icon, "display", snapshot.crop_volume ? "none" : "inline-block");
-        setCachedProperty(slot.crop_toggle, "display", snapshot.crop_volume ? "inline-block" : "none");
-        setCachedAttribute(slot.crop_toggle, "data-node-id", row.node_id_text);
-        setCachedAttribute(slot.crop_toggle, "aria-checked", row.visible ? "true" : "false");
-        setCachedAttribute(slot.crop_toggle, "data-tooltip", row.visible ? "splat_inspector.disable" : "splat_inspector.enabled");
-        setCachedClass(slot.crop_toggle, "active", row.visible);
         setCachedAttribute(slot.vis_icon, "data-node-id", row.node_id_text);
         setCachedAttribute(slot.vis_icon, "sprite", row.visible ? "icon-visible" : "icon-hidden");
         setCachedClass(slot.vis_icon, "icon-vis-on", row.visible);
@@ -1831,9 +1734,11 @@ namespace lfs::vis::gui {
         setCachedClass(slot.selection_checkbox, "mixed", checkbox_mixed);
         setCachedInnerRml(slot.selection_checkbox, checkbox_mixed ? "\u2212" : "");
 
+        const bool keyframe = row.type == core::NodeType::KEYFRAME;
         setCachedAttribute(slot.delete_icon, "data-node-id", row.node_id_text);
-        setCachedProperty(slot.delete_icon, "display", row.can_delete ? "inline" : "none");
-        setCachedClass(slot.delete_icon, "trash-disabled", row.can_delete && !row.delete_enabled);
+        setCachedProperty(slot.delete_icon, "display", row.can_delete || keyframe ? "inline" : "none");
+        setCachedClass(slot.delete_icon, "trash-disabled",
+                       keyframe ? snapshot.locked : row.can_delete && !row.delete_enabled);
 
         setCachedAttribute(slot.training_toggle_icon, "data-node-id", row.node_id_text);
         setCachedProperty(slot.training_toggle_icon, "display", row.can_toggle_training ? "inline" : "none");
@@ -1858,9 +1763,9 @@ namespace lfs::vis::gui {
 
         if (!icon_sprite.empty()) {
             setCachedAttribute(slot.type_icon, "sprite", std::string(icon_sprite));
-            setCachedOptionalProperty(slot.type_icon, "image-color", snapshot.roi_volume
-                                          ? std::optional<std::string>{"rgba(179, 77, 255, 255)"}
-                                          : row.camera_loss_icon_color);
+            setCachedOptionalProperty(slot.type_icon, "image-color",
+                                      row.roi_volume ? std::optional<std::string>{"rgba(179, 77, 255, 255)"}
+                                                     : row.camera_loss_icon_color);
             setCachedProperty(slot.type_icon, "display", "inline");
             setCachedProperty(slot.unicode_icon, "display", "none");
         } else if (!unicode.empty()) {
@@ -2165,17 +2070,6 @@ namespace lfs::vis::gui {
 
     void SceneGraphElement::handleInlineAction(const std::string& action, const core::NodeId node_id) {
         auto* scene_manager = services().sceneOrNull();
-        const auto group_owner = cropGroupOwner(node_id);
-        if (group_owner != core::NULL_NODE) {
-            const auto* owner = scene_manager ? scene_manager->getScene().getNodeById(group_owner) : nullptr;
-            if (owner && action == "toggle-vis") {
-                if (auto result = scene_manager->setSplatCropGroupEnabled(owner->uuid, !owner->crop_effects_enabled); !result)
-                    lfs::ErrorBus::instance().publish({.error = result.error(), .surface = lfs::ErrorSurface::Toast});
-                tree_rebuild_needed_ = true;
-                markStateDirty();
-            }
-            return;
-        }
         auto* scene = scene_manager ? &scene_manager->getScene() : nullptr;
         if (!scene)
             return;
@@ -2187,26 +2081,6 @@ namespace lfs::vis::gui {
         if (action == "toggle-select") {
             toggleCheckboxSelection(node_id);
         } else if (action == "toggle-vis") {
-            if (const auto* descriptor = core::splatOperationDescriptor(node->type);
-                descriptor && descriptor->category == core::SplatOperationCategory::CropVolume &&
-                !isTrainingRoi(*scene, *node) && scene->getNodeById(node->parent_id) &&
-                scene->getNodeById(node->parent_id)->type == core::NodeType::SPLAT) {
-                const auto* owner = scene->getNodeById(node->parent_id);
-                const auto* editor = services().editorOrNull();
-                if (!owner || scene->isNodeEffectivelyLocked(node_id) ||
-                    (editor && editor->isToolsDisabled()) || op::operators().hasModalOperator())
-                    return;
-                const auto operation = core::readSplatOperation(*owner, *node);
-                if (!operation || !operation->enabled)
-                    return;
-                op::OperatorProperties props;
-                props.set("node_uuid", node->uuid.to_string());
-                props.set("enabled", !*operation->enabled);
-                (void)op::operators().invoke(std::string(descriptor->set_operator), &props);
-                tree_rebuild_needed_ = true;
-                markStateDirty();
-                return;
-            }
             if (const auto snapshot_it = node_snapshots_.find(node_id);
                 snapshot_it != node_snapshots_.end() && snapshot_it->second.camera_frustum_container) {
                 if (auto* rendering = services().renderingOrNull()) {
@@ -2229,9 +2103,11 @@ namespace lfs::vis::gui {
                 .visible = !static_cast<bool>(node->visible)}
                 .emit();
         } else if (action == "delete") {
-            const auto snapshot_it = node_snapshots_.find(node_id);
-            if (snapshot_it == node_snapshots_.end() || !snapshot_it->second.delete_enabled)
-                return;
+            if (node->type != core::NodeType::KEYFRAME) {
+                const auto snapshot_it = node_snapshots_.find(node_id);
+                if (snapshot_it == node_snapshots_.end() || !snapshot_it->second.delete_enabled)
+                    return;
+            }
             requestDeleteNodes({node_id});
         } else if (action == "toggle-training") {
             if (node->type == core::NodeType::CAMERA) {
@@ -2304,9 +2180,7 @@ namespace lfs::vis::gui {
         const core::NodeId node_id,
         std::unordered_set<core::NodeId>& ids) const {
         const auto it = node_snapshots_.find(node_id);
-        if (it == node_snapshots_.end())
-            return;
-        if (it->second.crop_group_owner == core::NULL_NODE && !ids.insert(node_id).second)
+        if (it == node_snapshots_.end() || !ids.insert(node_id).second)
             return;
         for (const core::NodeId child_id : it->second.children)
             collectHierarchyIds(child_id, ids);
@@ -2355,11 +2229,9 @@ namespace lfs::vis::gui {
         auto* scene_manager = services().sceneOrNull();
         if (!scene_manager || node_snapshots_.empty())
             return false;
-        selected_crop_group_ = core::NULL_NODE;
         selected_ids_.clear();
-        for (const auto& [id, snapshot] : node_snapshots_)
-            if (snapshot.crop_group_owner == core::NULL_NODE)
-                selected_ids_.insert(id);
+        for (const auto& [id, _] : node_snapshots_)
+            selected_ids_.insert(id);
         scene_manager->selectNodesById(
             std::vector<core::NodeId>(selected_ids_.begin(), selected_ids_.end()));
         markStateDirty();
@@ -2398,16 +2270,6 @@ namespace lfs::vis::gui {
         if (!scene || !node_snapshots_.contains(node_id))
             return;
 
-        if (cropGroupOwner(node_id) != core::NULL_NODE) {
-            scene_manager->clearSelection();
-            selected_ids_.clear();
-            selected_crop_group_ = node_id;
-            keyboard_cursor_id_ = node_id;
-            click_anchor_id_ = core::NULL_NODE;
-            markStateDirty();
-            return;
-        }
-        selected_crop_group_ = core::NULL_NODE;
         const bool ctrl = ctrlDown();
         const bool shift = shiftDown();
         keyboard_cursor_id_ = node_id;
@@ -2431,27 +2293,26 @@ namespace lfs::vis::gui {
             }
             click_anchor_id_ = node_id;
         } else {
-            const auto activate_point_crop = [&] {
-                const auto* node = scene->getNodeById(node_id);
-                const auto* owner = node ? scene->getNodeById(node->parent_id) : nullptr;
-                const auto* descriptor = node ? core::splatOperationDescriptor(node->type) : nullptr;
-                if (!node || !owner || owner->type != core::NodeType::POINTCLOUD || !descriptor ||
-                    descriptor->category != core::SplatOperationCategory::CropVolume)
-                    return;
-                if (auto* gui = services().guiOrNull())
-                    gui->gizmo().editCropTool(node->uuid, true);
-            };
-            if (selected_ids_.size() == 1 && selected_ids_.contains(node_id)) {
-                activate_point_crop();
+            if (selected_ids_.size() == 1 && selected_ids_.contains(node_id))
                 return;
-            }
             scene_manager->selectNode(node_id);
             selected_ids_.clear();
             selected_ids_.insert(node_id);
             click_anchor_id_ = node_id;
-            activate_point_crop();
         }
         markStateDirty();
+    }
+
+    bool SceneGraphElement::selectionContainsOnlyCamerasInGroup(const core::NodeId node_id) const {
+        const auto group = node_snapshots_.find(node_id);
+        if (group == node_snapshots_.end() || group->second.type != core::NodeType::CAMERA_GROUP || selected_ids_.empty())
+            return false;
+
+        return std::ranges::all_of(selected_ids_, [this, node_id](const core::NodeId id) {
+            const auto selected = node_snapshots_.find(id);
+            return selected != node_snapshots_.end() && selected->second.type == core::NodeType::CAMERA &&
+                   selected->second.parent_id == node_id;
+        });
     }
 
     void SceneGraphElement::handleSecondaryClick(const core::NodeId node_id,
@@ -2462,12 +2323,7 @@ namespace lfs::vis::gui {
             return;
 
         focusTree();
-        if (cropGroupOwner(node_id) != core::NULL_NODE) {
-            handlePrimaryClick(node_id);
-            showContextMenu(node_id, mouse_x, mouse_y);
-            return;
-        }
-        if (!selected_ids_.contains(node_id)) {
+        if (!selected_ids_.contains(node_id) && !selectionContainsOnlyCamerasInGroup(node_id)) {
             scene_manager->selectNode(node_id);
             selected_ids_.clear();
             selected_ids_.insert(node_id);
@@ -2478,10 +2334,6 @@ namespace lfs::vis::gui {
     }
 
     bool SceneGraphElement::activateNode(const core::NodeId node_id) {
-        if (cropGroupOwner(node_id) != core::NULL_NODE) {
-            toggleExpand(node_id);
-            return true;
-        }
         auto* scene_manager = services().sceneOrNull();
         const auto* scene = scene_manager ? &scene_manager->getScene() : nullptr;
         if (!scene)
@@ -2491,12 +2343,6 @@ namespace lfs::vis::gui {
         if (!node)
             return false;
 
-        if (const auto* descriptor = core::splatOperationDescriptor(node->type);
-            descriptor && descriptor->category == core::SplatOperationCategory::CropVolume) {
-            if (auto* gui = services().guiOrNull())
-                gui->gizmo().editCropTool(node->uuid);
-            return true;
-        }
         if (node->type == core::NodeType::CAMERA) {
             camera_preview_navigation_active_ = true;
             cmd::OpenCameraPreview{.cam_id = node->camera_uid}.emit();
@@ -2525,7 +2371,7 @@ namespace lfs::vis::gui {
         ids.reserve(hi - lo + 1);
         for (size_t i = lo; i <= hi; ++i) {
             const core::NodeId id = flat_rows_[i].id;
-            if (node_snapshots_.contains(id) && cropGroupOwner(id) == core::NULL_NODE)
+            if (node_snapshots_.contains(id))
                 ids.push_back(id);
         }
         return ids;
@@ -2572,15 +2418,6 @@ namespace lfs::vis::gui {
 
         const core::NodeId current = selectionCursor();
         const core::NodeId target = flat_rows_[target_index].id;
-        if (cropGroupOwner(target) != core::NULL_NODE) {
-            if (!extend)
-                handlePrimaryClick(target);
-            keyboard_cursor_id_ = target;
-            scrollNodeIntoView(target);
-            markStateDirty();
-            return true;
-        }
-        selected_crop_group_ = core::NULL_NODE;
 
         if (extend) {
             const core::NodeId anchor = click_anchor_id_ != core::NULL_NODE
@@ -2595,8 +2432,7 @@ namespace lfs::vis::gui {
                 const size_t start = std::min(lo->second, hi->second);
                 const size_t end = std::max(lo->second, hi->second);
                 for (size_t i = start; i <= end; ++i)
-                    if (cropGroupOwner(flat_rows_[i].id) == core::NULL_NODE)
-                        selected_ids_.insert(flat_rows_[i].id);
+                    selected_ids_.insert(flat_rows_[i].id);
             } else {
                 selected_ids_.insert(target);
             }
@@ -2688,7 +2524,7 @@ namespace lfs::vis::gui {
             return false;
         if (container_id != core::NULL_NODE) {
             const auto it = node_snapshots_.find(container_id);
-            if (it == node_snapshots_.end() || it->second.type != core::NodeType::GROUP || it->second.crop_group_owner != core::NULL_NODE)
+            if (it == node_snapshots_.end() || it->second.type != core::NodeType::GROUP)
                 return false;
         }
         for (const core::NodeId source_id : drag_node_ids_) {
@@ -2998,7 +2834,7 @@ namespace lfs::vis::gui {
             return;
         }
         const auto it = node_snapshots_.find(hovered_id);
-        if (it == node_snapshots_.end() || it->second.type != core::NodeType::GROUP || it->second.crop_group_owner != core::NULL_NODE ||
+        if (it == node_snapshots_.end() || it->second.type != core::NodeType::GROUP ||
             !it->second.has_children || !collapsed_ids_.contains(hovered_id)) {
             if (auto_expand_hovered_group_id_ != auto_expanded_group_id_)
                 auto_expand_hovered_group_id_ = core::NULL_NODE;
@@ -3076,6 +2912,7 @@ namespace lfs::vis::gui {
         state.all_training_compatible = true;
         state.all_training_enabled = true;
         state.all_delete_enabled = true;
+        bool all_keyframes = true;
         for (const core::NodeId id : selected_ids_) {
             const auto it = node_snapshots_.find(id);
             if (it == node_snapshots_.end()) {
@@ -3083,10 +2920,11 @@ namespace lfs::vis::gui {
                 state.all_training_compatible = false;
                 state.all_training_enabled = false;
                 state.all_delete_enabled = false;
+                all_keyframes = false;
                 continue;
             }
             const NodeSnapshot& node = it->second;
-            state.has_crop_volume |= node.crop_volume;
+            all_keyframes = all_keyframes && node.type == core::NodeType::KEYFRAME && !node.locked;
             state.all_visible = state.all_visible && node.visible;
             state.any_visible = state.any_visible || node.visible;
             state.all_training_compatible = state.all_training_compatible && node.can_toggle_training;
@@ -3097,6 +2935,7 @@ namespace lfs::vis::gui {
                                           (node.training_enabled || node.training_mixed));
             state.all_delete_enabled = state.all_delete_enabled && node.delete_enabled;
         }
+        state.all_delete_enabled = state.all_delete_enabled || all_keyframes;
         return state;
     }
 
@@ -3110,18 +2949,7 @@ namespace lfs::vis::gui {
             const auto snapshot_it = node_snapshots_.find(id);
             if (snapshot_it == node_snapshots_.end())
                 continue;
-            if (snapshot_it->second.crop_volume) {
-                const auto* node = scene_manager->getScene().getNodeById(id);
-                if (node && snapshot_it->second.visible != visible) {
-                    const auto* descriptor = core::splatOperationDescriptor(node->type);
-                    if (!scene_manager->getScene().isNodeEffectivelyLocked(id) && descriptor && !op::operators().hasModalOperator()) {
-                        op::OperatorProperties props;
-                        props.set("node_uuid", node->uuid.to_string());
-                        props.set("enabled", visible);
-                        (void)op::operators().invoke(std::string(descriptor->set_operator), &props);
-                    }
-                }
-            } else if (snapshot_it->second.camera_frustum_container) {
+            if (snapshot_it->second.camera_frustum_container) {
                 update_frustums = true;
             } else if (snapshot_it->second.visible != visible) {
                 scene_manager->setNodeVisibility(id, visible);
@@ -3179,10 +3007,6 @@ namespace lfs::vis::gui {
     }
 
     void SceneGraphElement::clearSelectedNodes() {
-        if (selected_crop_group_ != core::NULL_NODE) {
-            selected_crop_group_ = core::NULL_NODE;
-            markStateDirty();
-        }
         if (selected_ids_.empty())
             return;
         if (auto* scene_manager = services().sceneOrNull())
@@ -3199,6 +3023,28 @@ namespace lfs::vis::gui {
             return;
 
         const auto& scene = scene_manager->getScene();
+        const auto* first_node = scene.getNodeById(node_ids.front());
+        if (first_node && first_node->type == core::NodeType::KEYFRAME) {
+            auto& controller = gui->sequencer();
+            std::vector<sequencer::KeyframeId> keyframe_ids;
+            keyframe_ids.reserve(node_ids.size());
+            for (const auto id : node_ids) {
+                const auto* node = scene.getNodeById(id);
+                if (node && static_cast<bool>(node->locked)) {
+                    LOG_WARN("Scene node deletion request aborted: node is locked");
+                    return;
+                }
+                if (!node || node->type != core::NodeType::KEYFRAME || !node->keyframe)
+                    return;
+                const auto* keyframe = controller.timeline().getKeyframe(node->keyframe->keyframe_index);
+                if (!keyframe)
+                    return;
+                keyframe_ids.push_back(keyframe->id);
+            }
+            // Resolve stable IDs before deletion shifts indices and rebuilds scene nodes.
+            controller.removeKeyframesById(keyframe_ids);
+            return;
+        }
         std::vector<core::Uuid> node_uuids;
         node_uuids.reserve(node_ids.size());
         std::string single_name;
@@ -3328,36 +3174,6 @@ namespace lfs::vis::gui {
             return;
 
         std::vector<ContextMenuItem> items;
-        if (const auto owner_id = cropGroupOwner(node_id); owner_id != core::NULL_NODE) {
-            const auto* owner = scene->getNodeById(owner_id);
-            if (!owner || owner->type != core::NodeType::SPLAT)
-                return;
-            const auto* editor = services().editorOrNull();
-            const bool editable = !scene->isNodeEffectivelyLocked(owner_id) && !(editor && editor->isToolsDisabled()) && !op::operators().hasModalOperator();
-            bool active = false, locked = false, active_locked = false;
-            for (const auto id : owner->children) {
-                const auto* child = scene->getNodeById(id);
-                const auto* desc = child ? core::splatOperationDescriptor(child->type) : nullptr;
-                if (!desc || desc->category != core::SplatOperationCategory::CropVolume)
-                    continue;
-                locked |= scene->isNodeEffectivelyLocked(id);
-                const bool enabled = child->cropbox ? child->cropbox->enabled : child->ellipsoid ? child->ellipsoid->enabled
-                                                                                                 : child->crop_polygon && child->crop_polygon->enabled;
-                active |= enabled;
-                active_locked |= enabled && scene->isNodeEffectivelyLocked(id);
-            }
-            const auto add = [&](const char* label, const char* action, bool enabled) {
-                auto item = makeAction(tr(label), prefixedAction(std::format("crop_group:{}:{}", action, owner->uuid.to_string())));
-                item.is_label = !enabled;
-                items.push_back(std::move(item));
-            };
-            add(owner->crop_effects_enabled ? "splat_inspector.group_disable" : "splat_inspector.group_enable", "toggle", editable);
-            add("splat_inspector.group_bake", "bake", editable && !active_locked && owner->model && owner->crop_effects_enabled && active && scene_manager->canApplyCropToNode(owner_id));
-            add("splat_inspector.group_delete", "delete", editable && !locked);
-            context_menu_node_id_ = node_id;
-            gui->globalContextMenu().request(std::move(items), panel_screen_x_ + mouse_x, panel_screen_y_ + mouse_y);
-            return;
-        }
         const auto* node = scene->getNodeById(node_id);
         if (!node)
             return;
@@ -3372,21 +3188,20 @@ namespace lfs::vis::gui {
                    });
         };
 
-        const auto* crop_owner = scene->getNodeById(node->parent_id);
-        const auto* crop_desc = core::splatOperationDescriptor(node->type);
-        if (selected_ids_.size() <= 1 && crop_owner && crop_desc &&
-            crop_desc->category == core::SplatOperationCategory::CropVolume && !isTrainingRoi(*scene, *node) &&
-            core::validateSplatOperation(*crop_owner, *node)) {
-            for (const auto& [action, key] : {std::pair{"edit", "splat_inspector.edit"}, {"duplicate", "splat_inspector.duplicate"}, {"bake", "splat_inspector.bake"}})
-                items.push_back(makeAction(tr(key), prefixedAction(std::format("crop_action:{}:{}", action, node->uuid.to_string()))));
-        }
         if (node->collision)
             items.push_back(makeAction(tr("export.export"), prefixedAction(std::format("export_collision:{}", node_id))));
         if (node->type == core::NodeType::SPLAT) {
             items.push_back(makeAction(tr("export.export") + "...",
                                        prefixedAction(std::format("export_splat:{}", node_id)), !items.empty()));
         }
-        if (selected_ids_.size() > 1) {
+        if (selected_ids_.size() == 2 && selected_ids_.contains(node_id)) {
+            const auto other = std::ranges::find_if(selected_ids_, [node_id](const auto id) { return id != node_id; });
+            const auto* mobile = scene->getNodeById(*other);
+            if (mobile && op::ModelAlignmentOperator::canBegin(*scene, *node, *mobile))
+                items.push_back(makeAction(tr("align.models"), prefixedAction("align_models")));
+        }
+        const bool selected_cameras_in_group = selectionContainsOnlyCamerasInGroup(node_id);
+        if (selected_ids_.size() > 1 && !selected_cameras_in_group) {
             items.push_back(makeAction(tr("scene.select_hierarchy"),
                                        prefixedAction("select_hierarchy")));
             const auto groupable_selection = selectedDraggableNodeIds();
@@ -3480,12 +3295,10 @@ namespace lfs::vis::gui {
                             prefixedAction(std::format("set_easing:{}:{}", node->keyframe->keyframe_index, i)),
                             false, true, node->keyframe->easing == i));
                     }
-                    if (node->keyframe->keyframe_index > 0) {
-                        items.push_back(makeAction(
-                            tr(string_keys::Scene::DELETE_ITEM),
-                            prefixedAction(std::format("delete_kf:{}", node->keyframe->keyframe_index)),
-                            true));
-                    }
+                    items.push_back(makeAction(
+                        tr(string_keys::Scene::DELETE_ITEM),
+                        prefixedAction(std::format("delete:{}", node->id)),
+                        true, false, false, static_cast<bool>(node->locked)));
                 }
                 break;
             case core::NodeType::KEYFRAME_GROUP:
@@ -3495,12 +3308,12 @@ namespace lfs::vis::gui {
                 break;
             case core::NodeType::CAMERA_GROUP:
                 if (has_camera_target(*node)) {
-                    items.push_back(makeAction(
-                        tr(string_keys::Scene::ENABLE_ALL_TRAINING),
-                        prefixedAction(std::format("enable_all_train:{}", node_id))));
-                    items.push_back(makeAction(
-                        tr(string_keys::Scene::DISABLE_ALL_TRAINING),
-                        prefixedAction(std::format("disable_all_train:{}", node_id))));
+                    if (selected_cameras_in_group) {
+                        items.push_back(makeAction(tr(string_keys::Scene::ENABLE_ALL_TRAINING),
+                                                   prefixedAction("enable_all_selected_train")));
+                        items.push_back(makeAction(tr(string_keys::Scene::DISABLE_ALL_TRAINING),
+                                                   prefixedAction("disable_all_selected_train")));
+                    }
                     items.push_back(makeAction(tr("scene.invert_camera_selection"),
                                                prefixedAction(std::format("invert_group_train:{}", node_id)), true));
                     items.push_back(makeAction(tr("scene.enable_all_cameras"),
@@ -3518,6 +3331,8 @@ namespace lfs::vis::gui {
                                                prefixedAction(std::format("camera_selection:every_n:{}", node_id))));
                     items.push_back(makeAction(tr("scene.select_distinct_cameras") + "...",
                                                prefixedAction(std::format("camera_selection:distinct:{}", node_id))));
+                    items.push_back(makeAction(tr("scene.select_blurry_cameras") + "...",
+                                               prefixedAction(std::format("camera_selection:blurry:{}", node_id))));
                     items.push_back(makeAction(tr("scene.select_cropbox_cameras") + "...",
                                                prefixedAction(std::format("camera_selection:cropbox_visibility:{}", node_id))));
                 }
@@ -3576,7 +3391,7 @@ namespace lfs::vis::gui {
             if (node_snapshots_.at(node_id).draggable) {
                 std::vector<std::pair<core::NodeId, std::string>> groups;
                 for (const auto& [candidate_id, snapshot] : node_snapshots_) {
-                    if (candidate_id != node_id && snapshot.type == core::NodeType::GROUP && snapshot.crop_group_owner == core::NULL_NODE)
+                    if (candidate_id != node_id && snapshot.type == core::NodeType::GROUP)
                         groups.emplace_back(candidate_id, snapshot.name);
                 }
                 if (!groups.empty()) {
@@ -3676,122 +3491,31 @@ namespace lfs::vis::gui {
             return;
 
         const std::string& kind = parts[0];
-        if (kind == "crop_group" && parts.size() == 3) {
-            const auto uuid = core::Uuid::from_string(parts[2]);
-            const auto* owner = uuid ? scene->getNodeByUuid(*uuid) : nullptr;
+        if (kind == "align_models") {
             auto* gui = services().guiOrNull();
-            if (!owner || owner->type != core::NodeType::SPLAT || !gui)
+            auto* renderer = services().renderingOrNull();
+            if (!gui || !gui->getViewer() || !renderer || op::modelAlignmentSession() ||
+                selected_ids_.size() != 2 || !selected_ids_.contains(context_menu_node_id_))
                 return;
-            if (parts[1] == "toggle") {
-                if (auto result = scene_manager->setSplatCropGroupEnabled(owner->uuid, !owner->crop_effects_enabled); !result)
-                    lfs::ErrorBus::instance().publish({.error = result.error(), .surface = lfs::ErrorSurface::Toast});
+            const auto other = std::ranges::find_if(selected_ids_, [&](const auto id) {
+                return id != context_menu_node_id_;
+            });
+            const auto* reference = scene->getNodeById(context_menu_node_id_);
+            const auto* mobile = scene->getNodeById(*other);
+            if (!reference || !mobile || !op::ModelAlignmentOperator::canBegin(*scene, *reference, *mobile))
                 return;
-            }
-            if (parts[1] != "delete" && parts[1] != "bake")
-                return;
-            const bool bake = parts[1] == "bake";
-            std::vector<core::Uuid> members;
-            for (const auto id : owner->children) {
-                const auto* child = scene->getNodeById(id);
-                const auto* desc = child ? core::splatOperationDescriptor(child->type) : nullptr;
-                if (desc && desc->category == core::SplatOperationCategory::CropVolume)
-                    members.push_back(child->uuid);
-            }
-            const auto label = tr(bake ? "splat_inspector.group_bake" : "splat_inspector.group_delete");
-            core::ModalRequest request;
-            request.title = label + " - " + owner->name;
-            request.style = core::ModalStyle::Warning;
-            request.body_rml = encode(tr(bake ? "splat_inspector.group_bake_note" : "splat_inspector.group_delete_note"));
-            request.buttons = {{tr("common.cancel"), "secondary"}, {label, "warning"}};
-            request.on_result = [uuid = *uuid, members = std::move(members), bake, label = label,
-                                 expected_history = op::undoHistory().generation(), expected_source = scene->collisionSourceIdentity(owner->id),
-                                 changed_message = tr("splat_inspector.group_changed")](const core::ModalResult& result) {
-                if (result.button_label != label)
-                    return;
-                auto* manager = services().sceneOrNull();
-                if (!manager)
-                    return;
-                const auto& current = manager->getScene();
-                const auto* owner = current.getNodeByUuid(uuid);
-                if (!owner || owner->type != core::NodeType::SPLAT)
-                    return;
-                std::vector<core::Uuid> current_members;
-                for (const auto id : owner->children) {
-                    const auto* child = current.getNodeById(id);
-                    const auto* desc = child ? core::splatOperationDescriptor(child->type) : nullptr;
-                    if (desc && desc->category == core::SplatOperationCategory::CropVolume)
-                        current_members.push_back(child->uuid);
-                }
-                if (current_members != members || op::undoHistory().generation() != expected_history ||
-                    current.collisionSourceIdentity(owner->id) != expected_source) {
-                    lfs::ErrorBus::instance().publish({.error = lfs::make_error({.code = lfs::ErrorCode::FailedPrecondition, .domain = lfs::ErrorDomain::Core, .user_message = changed_message, .detail = "Crop group confirmation scope changed", .detection = LFS_SOURCE_SITE_CURRENT()}), .surface = lfs::ErrorSurface::Toast});
-                    return;
-                }
-                auto applied = bake ? manager->bakeSplatCropGroup(uuid) : manager->deleteSplatCropGroup(uuid);
-                if (!applied)
-                    lfs::ErrorBus::instance().publish({.error = applied.error(), .surface = lfs::ErrorSurface::Toast});
-            };
-            gui->enqueueModal(std::move(request));
-            return;
-        }
-        if (kind == "crop_action" && parts.size() == 3) {
-            const auto uuid = core::Uuid::from_string(parts[2]);
-            const auto* node = uuid ? scene->getNodeByUuid(*uuid) : nullptr;
-            auto* gui = services().guiOrNull();
-            const auto* editor = services().editorOrNull();
-            if (!node || !gui || scene->isNodeEffectivelyLocked(node->id) ||
-                (editor && editor->isToolsDisabled()) || op::operators().hasModalOperator())
-                return;
-            const auto* owner = scene->getNodeById(node->parent_id);
-            if (!owner)
-                return;
-            const auto snapshot = core::readSplatOperation(*owner, *node);
-            const auto* descriptor = core::splatOperationDescriptor(node->type);
-            if (!owner || !descriptor || descriptor->category != core::SplatOperationCategory::CropVolume || !snapshot)
-                return;
-            if (parts[1] == "bake") {
-                const auto apply_label = tr("splat_inspector.bake");
-                core::ModalRequest request;
-                request.title = apply_label + " — " + node->name;
-                request.style = core::ModalStyle::Warning;
-                request.body_rml = encode(tr("splat_inspector.bake_note"));
-                request.buttons = {{tr("common.cancel"), "secondary"}, {apply_label, "warning"}};
-                request.on_result = [element_uuid = node->uuid, owner_uuid = owner->uuid, apply_label = apply_label,
-                                     expected_history = op::undoHistory().generation(), expected_source = scene->collisionSourceIdentity(owner->id)](const core::ModalResult& result) {
-                    if (result.button_label != apply_label)
-                        return;
-                    auto* sm = services().sceneOrNull();
-                    auto* gm = services().guiOrNull();
-                    auto* ed = services().editorOrNull();
-                    if (!sm || !gm || (ed && ed->isToolsDisabled()) || op::operators().hasModalOperator())
-                        return;
-                    const auto& current_scene = sm->getScene();
-                    if (op::undoHistory().generation() != expected_history)
-                        return;
-                    const auto* target = current_scene.getNodeByUuid(element_uuid);
-                    const auto* parent = current_scene.getNodeByUuid(owner_uuid);
-                    if (!target || !parent || !core::validateSplatOperation(*parent, *target) || current_scene.isNodeEffectivelyLocked(target->id) ||
-                        current_scene.collisionSourceIdentity(parent->id) != expected_source)
-                        return;
-                    sm->selectNode(target->id);
-                    gm->gizmo().editCropTool(target->uuid);
-                    gm->gizmo().applyActiveCropTool();
-                };
-                gui->enqueueModal(std::move(request));
-            } else if (parts[1] == "edit") {
-                scene_manager->selectNode(node->id);
-                gui->gizmo().editCropTool(node->uuid);
-            } else {
-                op::OperatorProperties props;
-                props.set("node_uuid", node->uuid.to_string());
-                if (parts[1] == "duplicate") {
-                    (void)op::operators().invoke(std::string(descriptor->duplicate_operator), &props);
-                }
-            }
+            op::OperatorProperties props;
+            props.set("reference", reference->name);
+            props.set("moving", mobile->name);
+            op::operators().cancelModalOperator();
+            op::operators().invoke(op::BuiltinOp::ModelAlignment, &props);
             return;
         }
         if (kind == "select_hierarchy") {
-            selectHierarchyFromSelection();
+            if (selectionContainsOnlyCamerasInGroup(context_menu_node_id_))
+                selectHierarchy(context_menu_node_id_);
+            else
+                selectHierarchyFromSelection();
             return;
         }
         if (kind == "group_selected") {
@@ -3849,14 +3573,8 @@ namespace lfs::vis::gui {
             cmd::SequencerUpdateKeyframe{}.emit();
         } else if (kind == "select_kf" && parts.size() >= 2) {
             cmd::SequencerSelectKeyframe{.keyframe_index = static_cast<size_t>(std::stoul(parts[1]))}.emit();
-        } else if (kind == "delete_kf" && parts.size() >= 2) {
-            cmd::SequencerDeleteKeyframe{.keyframe_index = static_cast<size_t>(std::stoul(parts[1]))}.emit();
         } else if (kind == "add_kf") {
             cmd::SequencerAddKeyframe{}.emit();
-        } else if ((kind == "enable_all_train" || kind == "disable_all_train") && parts.size() >= 2) {
-            core::NodeId group_id = core::NULL_NODE;
-            if (parseNodeId(parts[1], group_id))
-                toggleChildrenTraining(group_id, kind == "enable_all_train");
         } else if ((kind == "enable_group_train" || kind == "disable_group_train" || kind == "invert_group_train") && parts.size() >= 2) {
             core::NodeId group_id = core::NULL_NODE;
             if (auto* gui = services().guiOrNull(); gui && parseNodeId(parts[1], group_id)) {
@@ -3886,12 +3604,8 @@ namespace lfs::vis::gui {
             panels.bring_panel_to_front("lfs.camera_selection");
         } else if (kind == "delete" && parts.size() >= 2) {
             core::NodeId node_id = core::NULL_NODE;
-            if (parseNodeId(parts[1], node_id)) {
-                const auto snapshot_it = node_snapshots_.find(node_id);
-                if (snapshot_it == node_snapshots_.end() || !snapshot_it->second.delete_enabled)
-                    return;
+            if (parseNodeId(parts[1], node_id))
                 requestDeleteNodes({node_id});
-            }
         } else if (kind == "rename" && parts.size() >= 2) {
             core::NodeId node_id = core::NULL_NODE;
             if (parseNodeId(parts[1], node_id)) {
@@ -4068,14 +3782,9 @@ namespace lfs::vis::gui {
                 return;
             }
 
-            auto* action_target = target;
-            while (action_target && action_target != this && !action_target->HasAttribute("data-action"))
-                action_target = action_target->GetParentNode();
-            const std::string action = action_target && action_target != this
-                                           ? action_target->GetAttribute<Rml::String>("data-action", "")
-                                           : "";
+            const std::string action = target->GetAttribute<Rml::String>("data-action", "");
             if (!action.empty()) {
-                const core::NodeId node_id = nodeIdFromTarget(action_target);
+                const core::NodeId node_id = nodeIdFromTarget(target);
                 if (node_id != core::NULL_NODE) {
                     handleInlineAction(action, node_id);
                     event.StopPropagation();
@@ -4177,23 +3886,6 @@ namespace lfs::vis::gui {
                     event.StopPropagation();
                 break;
             case Rml::Input::KI_RETURN: {
-                if (const auto* editor = services().editorOrNull();
-                    editor && (editor->getActiveOperator() == "builtin.cropbox" ||
-                               editor->getActiveOperator() == "builtin.crop" || editor->getActiveOperator() == "builtin.roi")) {
-                    const auto* controller = InputController::instance();
-                    const bool event_alt = event.GetParameter<int>("alt_key", 0) != 0;
-                    const bool event_meta = event.GetParameter<int>("meta_key", 0) != 0;
-                    const int modifiers = (event_ctrl ? input::KEYMOD_CTRL : 0) |
-                                          (event_shift ? input::KEYMOD_SHIFT : 0) |
-                                          (event_alt ? input::KEYMOD_ALT : 0) |
-                                          (event_meta ? input::KEYMOD_SUPER : 0);
-                    if (controller && controller->getBindings().getActionForKey(input::ToolMode::CROP_BOX, input::KEY_ENTER, modifiers) == input::Action::APPLY_CROP_BOX) {
-                        if (auto* gui = services().guiOrNull())
-                            gui->gizmo().finishCropTool();
-                        event.StopPropagation();
-                    }
-                    break;
-                }
                 const core::NodeId node_id = selectionCursor();
                 if (node_id != core::NULL_NODE && activateNode(node_id))
                     event.StopPropagation();

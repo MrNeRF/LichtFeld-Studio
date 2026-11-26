@@ -18,6 +18,7 @@
 #include "imgproc/device_buffer.h"
 #include "imgproc/device_guard.h"
 #include "imgproc/exception.h"
+#include "imgproc/exit_guard.h"
 #include "imgproc/stream_device.h"
 #include <cassert>
 
@@ -29,26 +30,34 @@ namespace nvimgcodec {
             std::shared_ptr<DeleterStrategy> strategy;
 
             void operator()(void* ptr) const noexcept {
-                if (strategy && strategy->fn) {
+                // Once the process is exiting, CUDA/the backing allocator may already
+                // be torn down (see imgproc/exit_guard.h); skip `fn` and intentionally
+                // leak `ptr` rather than risk calling into it.
+                if (strategy && strategy->fn && !IsProcessExiting()) {
                     strategy->fn(ptr);
                 }
             }
         };
 
-        std::shared_ptr<void> MakeBufferOwner(void* data, const std::shared_ptr<DeleterStrategy>& strategy) {
-            // The unique_ptr `rollback` provides exception-safety while constructing the shared_ptr:
-            // if the shared_ptr's control-block allocation throws, ~rollback frees `data` via the
-            // strategy. Once `owner` is constructed, both wrappers point at the same `data`, so we
-            // must detach `rollback` to prevent a double-free. Coverity flags release() as a leak
-            // because it cannot see the alias already held by `owner`.
-            std::unique_ptr<void, StrategyDeleter> rollback(data, StrategyDeleter{strategy});
-            std::shared_ptr<void> owner(rollback.get(), StrategyDeleter{strategy});
-            // coverity[leaked_storage : FALSE]
-            rollback.release();
-            return owner;
-        }
-
     } // namespace
+
+    std::shared_ptr<void> MakeBufferOwner(void* data, const std::shared_ptr<DeleterStrategy>& strategy) {
+        // Arm the process-exit guard here, on the normal (non-exiting) allocation
+        // path: the deleter below is often only reached during process teardown, and
+        // by then a first call to IsProcessExiting() would register its atexit handler
+        // too late to ever observe `true`.
+        (void)IsProcessExiting();
+        // The unique_ptr `rollback` provides exception-safety while constructing the shared_ptr:
+        // if the shared_ptr's control-block allocation throws, ~rollback frees `data` via the
+        // strategy. Once `owner` is constructed, both wrappers point at the same `data`, so we
+        // must detach `rollback` to prevent a double-free. Coverity flags release() as a leak
+        // because it cannot see the alias already held by `owner`.
+        std::unique_ptr<void, StrategyDeleter> rollback(data, StrategyDeleter{strategy});
+        std::shared_ptr<void> owner(rollback.get(), StrategyDeleter{strategy});
+        // coverity[leaked_storage : FALSE]
+        rollback.release();
+        return owner;
+    }
 
     DeviceBuffer::DeviceBuffer(nvimgcodecDeviceAllocator_t* device_allocator)
         : allocator(device_allocator) {

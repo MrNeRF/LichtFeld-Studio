@@ -20,6 +20,7 @@
 #include "error_handling.h"
 #include "imgproc/convert_kernel_gpu.h"
 #include "imgproc/device_buffer.h"
+#include "imgproc/exit_guard.h"
 #include "imgproc/image_info_checks.h"
 #include "imgproc/out_of_bound_roi_fill.h"
 #include "imgproc/region_orientation.h"
@@ -68,6 +69,13 @@ namespace nvjpeg2k {
         }
 
         ~PerThreadResources() {
+            // See imgproc/exit_guard.h: at process exit, the CUDA driver or the
+            // nvJPEG2000 library may already be tearing down, so skip the
+            // teardown calls below and intentionally leak instead of risking a
+            // segfault.
+            if (nvimgcodec::IsProcessExiting()) {
+                return;
+            }
             if (event_) {
                 XM_CUDA_LOG_DESTROY(cudaEventDestroy(event_));
             }
@@ -123,7 +131,7 @@ namespace nvjpeg2k {
                 XM_CHECK_NULL(decoder);
                 auto handle = reinterpret_cast<DecoderImpl*>(decoder);
                 return handle->getMetadata(code_stream, metadata, metadata_count);
-            } catch (const std::runtime_error& e) {
+            } catch (const std::exception& e) {
                 return NVIMGCODEC_STATUS_EXTENSION_INTERNAL_ERROR;
             }
         }
@@ -133,7 +141,7 @@ namespace nvjpeg2k {
                 XM_CHECK_NULL(decoder);
                 auto handle = reinterpret_cast<DecoderImpl*>(decoder);
                 return handle->canDecode(image, code_stream, params, thread_idx);
-            } catch (const std::runtime_error& e) {
+            } catch (const std::exception& e) {
                 return NVIMGCODEC_PROCESSING_STATUS_FAIL;
             }
         }
@@ -150,7 +158,7 @@ namespace nvjpeg2k {
                 XM_CHECK_NULL(decoder);
                 auto handle = reinterpret_cast<DecoderImpl*>(decoder);
                 return handle->decode(image, code_stream, params, thread_idx);
-            } catch (const std::runtime_error& e) {
+            } catch (const std::exception& e) {
                 return NVIMGCODEC_STATUS_EXECUTION_FAILED;
                 ;
             }
@@ -340,6 +348,7 @@ namespace nvjpeg2k {
     DecoderImpl::DecoderImpl(
         const char* id, const nvimgcodecFrameworkDesc_t* framework, const nvimgcodecExecutionParams_t* exec_params, const char* options)
         : plugin_id_(id), device_allocator_{nullptr, nullptr, nullptr}, pinned_allocator_{nullptr, nullptr, nullptr}, framework_(framework), exec_params_(exec_params), nvjpeg2k_version_(get_nvjpeg2k_version()) {
+        (void)nvimgcodec::IsProcessExiting(); // ensure atexit handler is registered before any decoder lives
         if (!nvjpeg2k_version_) {
             throw NvJpeg2kException(NVIMGCODEC_STATUS_EXTENSION_EXECUTION_FAILED, "Failed to get nvJPEG2000 version");
         }
@@ -427,6 +436,16 @@ namespace nvjpeg2k {
     DecoderImpl::~DecoderImpl() {
         try {
             NVIMGCODEC_LOG_TRACE(framework_, plugin_id_, "jpeg2k_destroy");
+
+            // See imgproc/exit_guard.h: at process exit, the CUDA driver or the
+            // nvJPEG2000 library may already be tearing down, so skip the
+            // teardown calls below and intentionally leak instead of risking a
+            // segfault. per_thread_.clear() remains safe: PerThreadResources's
+            // own destructor (above) self-guards.
+            if (nvimgcodec::IsProcessExiting()) {
+                per_thread_.clear();
+                return;
+            }
 
             for (auto& tile_res : per_tile_res_.res_) {
                 if (tile_res.event_) {
@@ -798,6 +817,16 @@ namespace nvjpeg2k {
                     nvjpeg2kDecodeImage(handle_, jpeg2k_state, t.nvjpeg2k_stream_, decode_params_raii.get(), &output_image, image_info.cuda_stream));
             } else {
                 std::vector<uint8_t*> tile_decode_output(jpeg2k_info.num_components, nullptr);
+
+                // Tile streams write into decode_buffer, which may have been allocated/resized on
+                // image_info.cuda_stream (see t.device_buffer_.resize() above). Establish that
+                // ordering once, for every tile stream in the pool, before submitting any tile -
+                // not per tile, which would serialize the pool one tile at a time (see below).
+                XM_CHECK_CUDA(cudaEventRecord(t.event_, image_info.cuda_stream));
+                for (auto& tile_res : per_tile_res.res_)
+                    XM_CHECK_CUDA(cudaStreamWaitEvent(tile_res.stream_, t.event_));
+
+                std::set<cudaEvent_t> tile_events;
                 for (uint32_t tile_y = 0; tile_y < jpeg2k_info.num_tiles_y; tile_y++) {
                     for (uint32_t tile_x = 0; tile_x < jpeg2k_info.num_tiles_x; tile_x++) {
                         int tile_y_begin = tile_y * jpeg2k_info.tile_height;
@@ -858,25 +887,27 @@ namespace nvjpeg2k {
 
                         // Acquire tile resources
                         PerTileResources* tile_res = per_tile_res.Acquire();
-                        // sync with previous tile work
+                        // sync with previous tile work using this resource (host wait, only blocks
+                        // when cycling back to a stream/state that is still in flight)
                         XM_CHECK_CUDA(cudaEventSynchronize(tile_res->event_));
-
-                        // sync tile stream with user stream
-                        XM_CHECK_CUDA(cudaEventRecord(tile_res->event_, image_info.cuda_stream));
-                        XM_CHECK_CUDA(cudaStreamWaitEvent(tile_res->stream_, tile_res->event_));
                         {
                             auto tile_idx = tile_y * jpeg2k_info.num_tiles_x + tile_x;
                             nvtx3::scoped_range marker{"nvjpeg2kDecodeTile #" + std::to_string(tile_idx) + " @" + std::to_string((uint64_t)tile_res)};
                             XM_CHECK_NVJPEG2K(nvjpeg2kDecodeTile(handle_, tile_res->state_, t.nvjpeg2k_stream_, decode_params_raii.get(),
                                                                  tile_idx, 0, &output_tile, tile_res->stream_));
                         }
-                        // sync thread stream with tile stream
                         XM_CHECK_CUDA(cudaEventRecord(tile_res->event_, tile_res->stream_));
-                        XM_CHECK_CUDA(cudaStreamWaitEvent(image_info.cuda_stream, tile_res->event_));
+                        tile_events.insert(tile_res->event_);
                         // Release tile resources
                         per_tile_res.Release(tile_res);
                     }
                 }
+                // Join all tile streams into the user stream once, after every tile has been
+                // submitted, instead of round-tripping through image_info.cuda_stream after each
+                // tile - the latter forces every subsequent tile to wait for the previous one to
+                // finish, serializing the whole pool.
+                for (auto event : tile_events)
+                    XM_CHECK_CUDA(cudaStreamWaitEvent(image_info.cuda_stream, event));
             }
 
             if (needs_convert) {

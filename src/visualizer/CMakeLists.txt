@@ -25,7 +25,10 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         core/job_registry.cpp
         core/parameter_manager.cpp
         core/services.cpp
+        vr/openxr_runtimes.cpp
         vr/openxr_service.cpp
+        vr/vr_hand_renderer.cpp
+        vr/vr_tracked_hands.cpp
 
         # Project session chapters
         project/session_state.cpp
@@ -180,6 +183,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         operator/operator_registry.cpp
         operator/ops/point_pick_operator.cpp
         operator/ops/align_ops.cpp
+        operator/ops/model_alignment_ops.cpp
         operator/ops/scale_distance_ops.cpp
         operator/ops/crop_polygon_ops.cpp
         operator/ops/edit_ops.cpp
@@ -357,6 +361,8 @@ compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/vksplat_compose
     "${CMAKE_SOURCE_DIR}/src/rendering/rasterizer/vulkan/shader/src/slang/display_color.inc")
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/point_cloud.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/point_cloud.vert.spv.h" kPointCloudVertSpv "${LFS_EQUIRECT_PROJECTION_SHADER}")
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/point_cloud.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/point_cloud.frag.spv.h" kPointCloudFragSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/vr_hand.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/vr_hand.vert.spv.h" kVrHandVertSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/vr_hand.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/vr_hand.frag.spv.h" kVrHandFragSpv)
 
 target_link_libraries(lfs_visualizer
         PRIVATE

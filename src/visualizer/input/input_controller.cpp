@@ -4,6 +4,7 @@
 
 #include "input/input_controller.hpp"
 #include "core/collision.hpp"
+#include "core/editor_context.hpp"
 #include "core/error_bus.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
@@ -32,6 +33,7 @@
 #include "operator/operator_context.hpp"
 #include "operator/operator_id.hpp"
 #include "operator/operator_registry.hpp"
+#include "operator/ops/model_alignment_ops.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
@@ -75,7 +77,8 @@ namespace lfs::vis {
         // and other geometry fall back to the full node bounds.
         void expandNodeWorldBounds(const core::Scene& scene, const core::SceneNode& node,
                                    glm::vec3& world_min, glm::vec3& world_max,
-                                   bool use_percentile = false) {
+                                   bool use_percentile = false,
+                                   const glm::mat4& preview_transform = glm::mat4(1.0f)) {
             glm::vec3 local_min{0.0f}, local_max{0.0f};
             bool have_local = false;
             if (use_percentile) {
@@ -87,7 +90,7 @@ namespace lfs::vis {
             if (!have_local && !scene.getNodeBounds(node.id, local_min, local_max))
                 return;
 
-            const glm::mat4 world_xform = scene_coords::nodeVisualizerWorldTransform(scene, node.id);
+            const glm::mat4 world_xform = preview_transform * scene_coords::nodeVisualizerWorldTransform(scene, node.id);
             for (int i = 0; i < 8; ++i) {
                 const glm::vec3 corner(
                     (i & 1) ? local_max.x : local_min.x,
@@ -173,9 +176,13 @@ namespace lfs::vis {
                 ((modal_id == op::to_string(op::BuiltinOp::SelectionStroke) ||
                   modal_id == op::to_string(op::BuiltinOp::CropPolygonDraw)) &&
                  isSelectionModalAction(action)) ||
-                ((modal_id == op::to_string(op::BuiltinOp::AlignPickPoint) ||
+                (((modal_id == op::to_string(op::BuiltinOp::AlignPickPoint) || modal_id == op::to_string(op::BuiltinOp::ModelAlignment)) ||
                   modal_id == op::to_string(op::BuiltinOp::ScaleDistancePickPoint)) &&
-                 isAlignModalAction(action));
+                 isAlignModalAction(action)) ||
+                (modal_id == op::to_string(op::BuiltinOp::ModelAlignment) &&
+                 (action == input::Action::UNDO || action == input::Action::REDO)) ||
+                (modal_id == op::to_string(op::BuiltinOp::ModelAlignment) &&
+                 op::ModelAlignmentOperator::blocksSceneAction(action));
             if (!accepted) {
                 return false;
             }
@@ -392,6 +399,8 @@ namespace lfs::vis {
                 return false;
             }
 
+            if (op::operators().isModal(op::BuiltinOp::ModelAlignment))
+                return true;
             lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(*tool)}.emit();
             (void)applySelectionModeShortcut(action, gui);
             if (auto* const viewer = lfs::python::get_visualizer()) {
@@ -2552,18 +2561,21 @@ namespace lfs::vis {
                 return;
 
             case input::Action::APPLY_CROP_BOX: {
-                if (gui) {
-                    const auto* manager = services().sceneOrNull();
-                    const auto* node = manager ? manager->getScene().getNodeById(gui->gizmo().cropToolVolumeNodeId()) : nullptr;
-                    const auto* owner = node ? manager->getScene().getNodeById(node->parent_id) : nullptr;
-                    const bool apply_point_crop = UnifiedToolRegistry::instance().getActiveTool() == "builtin.crop" &&
-                                                  owner && owner->type == core::NodeType::POINTCLOUD &&
-                                                  node->cropRole() == core::CropRole::Secondary;
-                    if (apply_point_crop)
-                        gui->gizmo().applyActiveCropTool();
-                    else
-                        gui->gizmo().finishCropTool();
+                // Apply the selected polygon or ellipsoid, otherwise the cropbox
+                if (tool_context_) {
+                    if (auto* sm = tool_context_->getSceneManager()) {
+                        if (sm->getSelectedNodeCropPolygonId() != core::NULL_NODE) {
+                            cmd::ApplyCropPolygon{}.emit();
+                            return;
+                        }
+                        const auto ellipsoid_id = sm->getSelectedNodeEllipsoidId();
+                        if (ellipsoid_id != core::NULL_NODE) {
+                            cmd::ApplyEllipsoid{}.emit();
+                            return;
+                        }
+                    }
                 }
+                cmd::ApplyCropBox{}.emit();
                 return;
             }
 
@@ -3663,6 +3675,19 @@ namespace lfs::vis {
         }
     }
 
+    bool InputController::frameVisibleNode(Viewport& viewport, const core::Scene& scene,
+                                           const core::SceneNode& node, const glm::mat4& preview_transform) {
+        if (!scene.isNodeEffectivelyVisible(node.id))
+            return false;
+        glm::vec3 minimum(std::numeric_limits<float>::max());
+        glm::vec3 maximum(std::numeric_limits<float>::lowest());
+        expandNodeWorldBounds(scene, node, minimum, maximum, true, preview_transform);
+        if (minimum.x > maximum.x)
+            return false;
+        viewport.camera.focusOnBounds(minimum, maximum);
+        return true;
+    }
+
     bool InputController::handleFocusSelection(Viewport& target_viewport) {
         if (!tool_context_)
             return false;
@@ -3671,6 +3696,16 @@ namespace lfs::vis {
             return false;
 
         const auto& scene = sm->getScene();
+        if (auto* renderer = services().renderingOrNull(); renderer && op::modelAlignmentSession()) {
+            const auto& alignment = *op::modelAlignmentSession();
+            const bool right = &target_viewport == &renderer->projectSecondaryViewport();
+            const auto* node = scene.getNodeByUuid(alignment.nodes[right ? 1 : 0]);
+            if (!node || !frameVisibleNode(target_viewport, scene, *node,
+                                           right ? alignment.preview.value_or(glm::mat4(1.0f)) : glm::mat4(1.0f)))
+                return false;
+            publishCameraMove(&target_viewport);
+            return true;
+        }
         const auto& selected = sm->getSelectedNodeNames();
 
         glm::vec3 total_min(std::numeric_limits<float>::max());
@@ -4321,6 +4356,8 @@ namespace lfs::vis {
         }
 
         if (auto* const rendering = services().renderingOrNull()) {
+            if (auto* alignment = op::ModelAlignmentOperator::active())
+                alignment->syncCamera(*active_viewport);
             rendering->markCameraPoseChanged();
         }
 
@@ -4466,9 +4503,9 @@ namespace lfs::vis {
     input::ToolMode InputController::getCurrentToolMode() const {
         if (vr_viewing_)
             return input::ToolMode::VR;
-        if (UnifiedToolRegistry::instance().getActiveTool() == "builtin.cropbox" ||
-            UnifiedToolRegistry::instance().getActiveTool() == "builtin.crop" ||
-            UnifiedToolRegistry::instance().getActiveTool() == "builtin.roi")
+        if (op::operators().isModal(op::BuiltinOp::ModelAlignment))
+            return input::ToolMode::ALIGN;
+        if (isCropToolId(UnifiedToolRegistry::instance().getActiveTool()))
             return input::ToolMode::CROP_BOX;
         if (selection_tool_ && selection_tool_->isEnabled())
             return input::ToolMode::SELECTION;

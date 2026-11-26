@@ -2,7 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#include "core/crop_polygon.hpp"
 #include "core/event_bridge/event_bridge.hpp"
+#include "core/point_cloud.hpp"
 #include "core/services.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_manager.hpp"
@@ -13,8 +15,8 @@
 #include "rendering/render_pass.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
-#include "visualizer/visualizer_impl.hpp"
 #include "visualizer/gui_capabilities.hpp"
+#include "visualizer/visualizer_impl.hpp"
 #include <cmath>
 #include <cstdlib>
 #include <gtest/gtest.h>
@@ -288,43 +290,57 @@ namespace lfs::vis {
             rendering->updateSettings(settings);
             auto* manager = viewer.getSceneManager();
             auto& scene = manager->getScene();
-            core::Scene::RestoreNodeDesc owner;
-            owner.uuid = core::generate_uuid_v4();
-            owner.name = "Cloud";
-            owner.type = core::NodeType::POINTCLOUD;
-            const auto cloud = scene.restoreNodeWithUuid(std::move(owner));
+            // The dataset point cloud that training starts from owns the ROI and the Crop.
+            const auto cloud = scene.addPointCloud(
+                "Cloud",
+                std::make_shared<core::PointCloud>(
+                    core::Tensor::from_vector({-1.f, 0.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f}, {3, 3}, core::Device::CPU),
+                    core::Tensor::ones({3, 3}, core::Device::CPU)),
+                scene.addDataset("Dataset"));
             ASSERT_NE(cloud, core::NULL_NODE);
-            const auto owner_uuid = scene.getNodeById(cloud)->uuid;
-            const auto make_crop = [&](core::CropRole role) {
-                return cap::createSplatCrop(*manager, rendering, owner_uuid, core::NodeType::CROPBOX, role);
+            const auto make = [&](const core::CropRole role, const core::NodeType shape) -> core::NodeId {
+                if (shape == core::NodeType::CROPBOX)
+                    return cap::ensureCropBox(*manager, rendering, cloud, role).value_or(core::NULL_NODE);
+                if (shape == core::NodeType::ELLIPSOID)
+                    return cap::ensureEllipsoid(*manager, rendering, cloud, role).value_or(core::NULL_NODE);
+                core::CropPolygonData data;
+                data.vertices = {{-1.f, -1.f}, {1.f, -1.f}, {0.f, 1.f}};
+                data.half_depth = 1.f;
+                data.role = role;
+                const auto polygon = cap::createCropPolygon(*manager, rendering, cloud, data, glm::mat4(1.0f));
+                return polygon ? *polygon : core::NULL_NODE;
             };
-            const auto first = make_crop(reverse ? core::CropRole::Secondary : core::CropRole::Primary);
-            const auto second = make_crop(reverse ? core::CropRole::Primary : core::CropRole::Secondary);
-            ASSERT_TRUE(first);
-            ASSERT_TRUE(second);
-            for (const auto shape : {core::NodeType::CROPBOX, core::NodeType::ELLIPSOID, core::NodeType::CROP_POLYGON}) {
-                SCOPED_TRACE(static_cast<int>(shape));
-                for (const auto id : {*first, *second}) {
-                    const auto uuid = scene.getNodeById(id)->uuid;
-                    if (scene.getNodeById(id)->type != shape)
-                        ASSERT_TRUE(cap::convertSplatCrop(*manager, rendering, uuid, shape));
-                }
-                for (const auto selected : {*first, *second}) {
-                    manager->selectNode(selected);
-                    const auto result = overlays(viewer);
-                    bool purple = false;
-                    bool yellow = false;
-                    for (const auto& vertex : result.shape_overlay_triangles) {
-                        const auto& c = vertex.color;
-                        purple |= c.r > 0.4f && c.b > 0.6f && c.g < 0.7f;
-                        yellow |= c.r > 0.8f && c.g > 0.8f && c.b < 0.2f;
+            const auto first_role = reverse ? core::CropRole::Secondary : core::CropRole::Primary;
+            const auto second_role = reverse ? core::CropRole::Primary : core::CropRole::Secondary;
+            ASSERT_NE(make(first_role, core::NodeType::CROPBOX), core::NULL_NODE);
+            ASSERT_NE(make(second_role, core::NodeType::CROPBOX), core::NULL_NODE);
+            // The ROI is a box or a polygon; the Crop also takes an ellipsoid.
+            for (const auto roi_shape : {core::NodeType::CROPBOX, core::NodeType::CROP_POLYGON}) {
+                for (const auto crop_shape : {core::NodeType::CROPBOX, core::NodeType::ELLIPSOID, core::NodeType::CROP_POLYGON}) {
+                    SCOPED_TRACE(std::to_string(static_cast<int>(roi_shape)) + "/" + std::to_string(static_cast<int>(crop_shape)));
+                    const auto roi = make(core::CropRole::Primary, roi_shape);
+                    const auto crop = make(core::CropRole::Secondary, crop_shape);
+                    ASSERT_NE(roi, core::NULL_NODE);
+                    ASSERT_NE(crop, core::NULL_NODE);
+                    ASSERT_NE(roi, crop);
+                    for (const auto selected : {roi, crop}) {
+                        manager->selectNode(selected);
+                        const auto result = overlays(viewer);
+                        bool purple = false;
+                        bool yellow = false;
+                        for (const auto& vertex : result.shape_overlay_triangles) {
+                            const auto& c = vertex.color;
+                            purple |= c.r > 0.4f && c.b > 0.6f && c.g < 0.7f;
+                            yellow |= c.r > 0.8f && c.g > 0.8f && c.b < 0.2f;
+                        }
+                        EXPECT_TRUE(purple) << "ROI outline missing";
+                        EXPECT_TRUE(yellow) << "Crop outline missing";
                     }
-                    EXPECT_TRUE(purple) << "primary crop outline missing";
-                    EXPECT_TRUE(yellow) << "secondary crop outline missing";
                 }
             }
         }
     }
+
     TEST_F(OrthographicZoomTest, FrustumCacheAndGridRespectViewportScale) {
         // core::Camera keeps its transforms on the device; the CPU-only CI runners have none.
         if (int devices = 0; cudaGetDeviceCount(&devices) != cudaSuccess || devices == 0)

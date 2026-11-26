@@ -162,6 +162,16 @@ def _toggle_bottom_dock_panel(panel_id, visible, set_visible):
         set_visible(False)
 
 
+def _point_cloud_forced():
+    import lichtfeld as lf
+
+    getter = getattr(lf.ui, "is_point_cloud_forced", None)
+    try:
+        return bool(getter()) if callable(getter) else False
+    except Exception:
+        return False
+
+
 def _crop_roi_param_state():
     """Return (available, LR scale, loss weight, growth inside, crop at end) from the live parameter owner."""
     try:
@@ -204,9 +214,8 @@ def _button_record(button_id, action, value, icon_src, *,
         "selected": selected,
         "enabled": enabled,
         "opacity": "1" if enabled else "0.25",
+        "separator_before": bool(separator_before),
     }
-    if separator_before:
-        record["separator_before"] = True
     return record
 
 class _GizmoToolbarController:
@@ -280,7 +289,10 @@ class _GizmoToolbarController:
     _ALIGN_TOOL_ID = "builtin.align"
     _SCALE_DISTANCE_TOOL_ID = "builtin.scale_distance"
     _CROP_TOOL_ID = "builtin.cropbox"
-    _CROP_TOOL_IDS = {"builtin.cropbox", "builtin.crop", "builtin.roi"}
+    # Before training, the dataset point cloud has an ROI tool (builtin.cropbox resolves to it) and a Crop tool.
+    _ROI_TOOL_ID = "builtin.roi"
+    _POINT_CROP_TOOL_ID = "builtin.crop"
+    _CROP_TOOL_IDS = {_CROP_TOOL_ID, _ROI_TOOL_ID, _POINT_CROP_TOOL_ID}
     _HORIZONTAL_TOOL_IDS = {"builtin.select", _MIRROR_TOOL_ID, _ALIGN_TOOL_ID, _SCALE_DISTANCE_TOOL_ID, *_CROP_TOOL_IDS, *_TRANSFORM_TOOL_IDS}
     _TRANSFORM_SPACE_IDS = {"local": 0, "world": 1}
     _MULTI_TRANSFORM_MODE_IDS = {"selection": 0, "individual": 1}
@@ -391,8 +403,8 @@ class _GizmoToolbarController:
         tool_def = ToolRegistry.get(active_tool_id) if active_tool_id else None
         select_tool_def = ToolRegistry.get("builtin.select")
         mirror_tool_def = ToolRegistry.get(self._MIRROR_TOOL_ID)
-        pre_training = getattr(lf.ui, "is_point_cloud_forced", lambda: False)()
-        crop_tool_def = ToolRegistry.get("builtin.roi" if pre_training else self._CROP_TOOL_ID)
+        pre_training = _point_cloud_forced()
+        crop_tool_def = ToolRegistry.get(self._ROI_TOOL_ID if pre_training else self._CROP_TOOL_ID)
 
         transform_tool_defs = [
             tool_def_item
@@ -405,8 +417,8 @@ class _GizmoToolbarController:
             if (
                 tool_def_item.id != "builtin.select" and
                 tool_def_item.id != self._MIRROR_TOOL_ID and
-                tool_def_item.id not in {self._CROP_TOOL_ID, "builtin.roi"} and
-                (tool_def_item.id != "builtin.crop" or pre_training) and
+                tool_def_item.id not in {self._CROP_TOOL_ID, self._ROI_TOOL_ID} and
+                (tool_def_item.id != self._POINT_CROP_TOOL_ID or pre_training) and
                 tool_def_item.id not in self._TRANSFORM_TOOL_IDS
             )
         ]
@@ -428,15 +440,19 @@ class _GizmoToolbarController:
         crop_object_buttons = self._build_crop_object_records(active_tool_id) if crop_tool_active else []
         crop_transform_buttons = self._build_crop_transform_records(active_tool_id) if crop_tool_active else []
         crop_action_buttons = self._build_crop_action_records(active_tool_id) if crop_tool_active else []
-        align_tool_active = active_tool_id == self._ALIGN_TOOL_ID
-        align_action_buttons = self._build_align_action_records(active_tool_id) if align_tool_active else []
+        alignment = lf.ui.get_model_alignment_state()
+        model_alignment = alignment.active
+        align_tool_active = model_alignment or active_tool_id == self._ALIGN_TOOL_ID
+        align_action_buttons = self._build_model_alignment_records(alignment) if model_alignment else (
+            self._build_align_action_records(active_tool_id) if align_tool_active else []
+        )
         scale_distance_tool_active = active_tool_id == self._SCALE_DISTANCE_TOOL_ID
         selection_volume_gizmo_buttons = self._build_selection_volume_gizmo_records(active_tool_id)
         multi_transform_selection = active_tool_id in self._TRANSFORM_TOOL_IDS and len(selected_nodes) > 1
         submode_buttons = self._build_submode_records(active_tool_id, tool_def, multi_transform_selection)
         pivot_buttons = self._build_pivot_records(tool_def)
 
-        return {
+        state = {
             "show_transform_toolbar": (
                 active_tool_id in self._TRANSFORM_TOOL_IDS and
                 not selected_nodes and
@@ -470,6 +486,14 @@ class _GizmoToolbarController:
             "submode_buttons": submode_buttons,
             "pivot_buttons": pivot_buttons,
         }
+        if model_alignment:
+            return {
+                **{key: [] if isinstance(value, list) else False for key, value in state.items()},
+                "show_align_toolbar": True,
+                "show_model_alignment_toolbar": True,
+                "align_action_buttons": align_action_buttons,
+            }
+        return state
 
     def _tool_button_record(self, tool_def, active_tool_id, context):
         tooltip_key = self._TOOL_LOCALE_KEYS.get(tool_def.id, "")
@@ -617,10 +641,7 @@ class _GizmoToolbarController:
         return node is not None and self._node_type_name(node) == expected_type
 
     def _build_crop_object_records(self, active_tool_id):
-        import lichtfeld as lf
-
         active = active_tool_id in self._CROP_TOOL_IDS
-        shape_locked = active and lf.ui.is_crop_tool_shape_locked()
         active_shape = self._active_crop_shape() if active else "box"
         records = [
             _button_record(
@@ -631,7 +652,7 @@ class _GizmoToolbarController:
                 tooltip_key="toolbar.crop_box",
                 tooltip_text="Crop Box",
                 selected=active and active_shape == "box",
-                enabled=active and (not shape_locked or active_shape == "box"),
+                enabled=active,
             ),
             _button_record(
                 "crop-object-ellipsoid",
@@ -641,7 +662,7 @@ class _GizmoToolbarController:
                 tooltip_key="toolbar.ellipsoid",
                 tooltip_text="Ellipsoid",
                 selected=active and active_shape == "ellipsoid",
-                enabled=active and (not shape_locked or active_shape == "ellipsoid"),
+                enabled=active,
             ),
             _button_record(
                 "crop-object-polygon",
@@ -651,22 +672,21 @@ class _GizmoToolbarController:
                 tooltip_key="toolbar.crop_polygon",
                 tooltip_text="Crop Polygon",
                 selected=active and active_shape == "polygon",
-                enabled=active and (not shape_locked or active_shape == "polygon"),
+                enabled=active,
             ),
         ]
-        return [record for record in records if active_tool_id != "builtin.roi" or record["value"] != "ellipsoid"]
+        # Training uses a box or polygon ROI only.
+        if active_tool_id == self._ROI_TOOL_ID:
+            records = [record for record in records if record["value"] != "ellipsoid"]
+        return records
 
     def _build_crop_transform_records(self, active_tool_id):
         import lichtfeld as lf
 
         active = active_tool_id in self._CROP_TOOL_IDS
-        active_gizmo = ""
-        if active:
-            getter = getattr(lf.ui, "get_crop_tool_operation", None)
-            if not callable(getter):
-                getter = getattr(lf.ui, "get_gizmo_type", None)
-            active_gizmo = getter() if callable(getter) else ""
-            active_gizmo = active_gizmo or "translate"
+        active_gizmo = lf.ui.get_gizmo_type() if active and hasattr(lf.ui, "get_gizmo_type") else ""
+        if active and not active_gizmo:
+            active_gizmo = "translate"
         return self._build_gizmo_operation_records(active, active_gizmo)
 
     def _build_gizmo_operation_records(self, active, active_gizmo):
@@ -734,7 +754,7 @@ class _GizmoToolbarController:
                         return None
                     visited.add(node_id)
 
-                # The training region is the model's crop box or crop polygon.
+                # The training region is the model's crop box or crop polygon; roi_only skips a point cloud's Crop.
                 accessor = self._CROP_ROI_ACCESSORS.get(self._node_type_name(node))
                 if accessor:
                     get_volume = getattr(node, accessor, None)
@@ -797,14 +817,64 @@ class _GizmoToolbarController:
             )
         ]
 
+    def _build_model_alignment_records(self, alignment):
+        import lichtfeld as lf
+
+        linked = alignment.linked
+        can_swap = alignment.can_swap_roles
+        can_delete = alignment.can_delete_pair
+        preview = alignment.preview
+        cancel = ("cancel", "align.cancel_session", "Cancel", "scene/x", "", False, True)
+        if preview:
+            exit_preview = _ui_label("align.edit_points", "Exit preview")
+            records = [
+                _button_record("align-preview", "model_alignment_preview", "", _icon_src("scene/hidden"),
+                               tooltip_key="align.edit_points", tooltip_text=exit_preview,
+                               selected=True, enabled=True),
+                _button_record("align-apply", "model_alignment_apply", "", _icon_src("check"),
+                               tooltip_key="align.apply_preview", tooltip_text="Apply alignment and exit.",
+                               enabled=True),
+            ]
+            link_tooltip = "align.unlink_cameras" if linked else "align.link_cameras_help"
+            controls = (
+                ("separate", "align.separate", "Separate", "layout-columns", "",
+                 alignment.display_mode == lf.ui.ModelAlignmentDisplayMode.SEPARATE, True),
+                ("left", "align.composite_left", "Overlay left", "alignment-overlay-left", "",
+                 alignment.display_mode == lf.ui.ModelAlignmentDisplayMode.OVERLAY_LEFT, True),
+                ("right", "align.composite_right", "Overlay right", "alignment-overlay-right", "",
+                 alignment.display_mode == lf.ui.ModelAlignmentDisplayMode.OVERLAY_RIGHT, True),
+                ("link", link_tooltip, "Link cameras", "link", "",
+                 linked, True),
+                cancel,
+            )
+        else:
+            records = [
+                _button_record("align-preview", "model_alignment_preview", "", _icon_src("scene/visible"),
+                               tooltip_key="align.preview", tooltip_text="Preview alignment",
+                               enabled=alignment.can_apply),
+                _button_record("align-clear", "model_alignment_clear", "", _icon_src("reset"),
+                               tooltip_key="align.clear", tooltip_text="Clear", enabled=True, separator_before=True),
+            ]
+            controls = (
+                ("swap", "align.swap_roles" if can_swap else "align.swap_unavailable", "Swap roles", "",
+                 "⇄", False, can_swap),
+                ("delete", "align.delete_pair", "Delete selected pair", "scene/trash", "", False, can_delete),
+                cancel,
+            )
+        return records + [
+            _button_record(f"model-alignment-{action}", "model_alignment_control", action,
+                           _icon_src(icon) if icon else "", tooltip_key=key, tooltip_text=fallback,
+                           label=label, selected=selected, enabled=enabled,
+                           separator_before=action == "cancel" or (preview and action in ("separate", "link")))
+            for action, key, fallback, icon, label, selected, enabled in controls
+        ]
+
     def _build_align_action_records(self, active_tool_id):
         import lichtfeld as lf
 
         active = active_tool_id == self._ALIGN_TOOL_ID
         can_apply = active and lf.ui.can_apply_align()
-        snap_on = lf.ui.get_align_axis_snap()
-        edge_to_axis_on = lf.ui.get_align_edge_to_axis()
-        return [
+        records = [
             _button_record(
                 "align-preview", "align_toggle_preview", "", _icon_src("scene/visible"),
                 tooltip_key="align.preview", tooltip_text="Preview alignment",
@@ -829,6 +899,9 @@ class _GizmoToolbarController:
                 tooltip_text="Clear",
                 enabled=active,
             ),
+        ]
+
+        return records + [
             _button_record(
                 "align-snap",
                 "align_toggle_snap",
@@ -837,7 +910,7 @@ class _GizmoToolbarController:
                 tooltip_key="align.snap",
                 tooltip_text="Axis snap",
                 label=_ui_label("align.snap", "Axis snap"),
-                selected=snap_on,
+                selected=lf.ui.get_align_axis_snap(),
                 enabled=active,
             ),
             _button_record(
@@ -848,7 +921,7 @@ class _GizmoToolbarController:
                 tooltip_key="align.edge_to_axis",
                 tooltip_text="Levels the plane, then turns edge 1 to 2 toward the red X arrow. Use Preview to compare.",
                 label=_ui_label("align.edge_label", "1 → 2 along X"),
-                selected=edge_to_axis_on,
+                selected=lf.ui.get_align_edge_to_axis(),
                 enabled=active,
             ),
         ]
@@ -857,7 +930,8 @@ class _GizmoToolbarController:
         import lichtfeld as lf
 
         active = active_tool_id in self._CROP_TOOL_IDS
-        apply_point_crop = active_tool_id == "builtin.crop" and getattr(lf.ui, "is_point_cloud_forced", lambda: False)()
+        # The ROI only bounds training: its check commits the edit instead of removing points.
+        roi = active_tool_id == self._ROI_TOOL_ID
         get_inverse = getattr(lf.ui, "get_crop_tool_inverse", None)
         inverse = get_inverse() if active and callable(get_inverse) else None
         return [
@@ -899,12 +973,12 @@ class _GizmoToolbarController:
                 enabled=inverse is not None,
             ),
             _button_record(
-                "crop-finish",
-                "crop_finish",
+                "crop-apply",
+                "crop_apply",
                 "",
                 _icon_src("check"),
-                tooltip_key="common.apply" if apply_point_crop else "splat_inspector.finish",
-                tooltip_text="Apply" if apply_point_crop else "Finish crop editing",
+                tooltip_key="context_menu.confirm" if roi else "common.apply",
+                tooltip_text="Confirm" if roi else "Apply",
                 action_id="APPLY_CROP_BOX",
                 enabled=active,
             ),
@@ -996,24 +1070,16 @@ class _GizmoToolbarController:
     def _activate_crop_tool(self, gizmo_type="translate", infer_selection_shape=True):
         import lichtfeld as lf
 
-        selected_getter = getattr(lf, "get_selected_node_names", None)
-        selected = (selected_getter() or []) if callable(selected_getter) else []
-        scene_getter = getattr(lf, "get_scene", None)
-        scene = scene_getter() if callable(scene_getter) else None
-        get_node = getattr(scene, "get_node", None)
-        node = get_node(selected[0]) if len(selected) == 1 and callable(get_node) else None
-        if callable(get_node) and any(self._node_type_name(get_node(name)) == "GROUP" for name in selected):
-            return
-        shape = self._active_crop_shape(infer_selection_shape and self._node_type_name(node) != "SPLAT")
+        # Shape and gizmo changes keep the active role's tool; the volume add commands read it.
+        active_tool_id = lf.ui.get_active_tool()
+        tool_id = active_tool_id if active_tool_id in self._CROP_TOOL_IDS else self._CROP_TOOL_ID
+        shape = self._active_crop_shape(infer_selection_shape)
         if infer_selection_shape:
             set_shape = getattr(lf.ui, "set_crop_tool_shape", None)
             if callable(set_shape):
                 set_shape(shape)
-        if self._node_type_name(node) == "SPLAT" or (
-            infer_selection_shape and self._node_type_name(node) in ("CROPBOX", "ELLIPSOID", "CROP_POLYGON")
-        ):
-            lf.ui.new_crop_tool(shape)
-            return
+        selected_getter = getattr(lf, "get_selected_node_names", None)
+        selected = (selected_getter() or []) if callable(selected_getter) else []
         if shape == "box" and selected:
             add_cropbox = getattr(lf.ui, "add_cropbox", None)
             if callable(add_cropbox):
@@ -1028,7 +1094,7 @@ class _GizmoToolbarController:
             if callable(start_crop_polygon):
                 start_crop_polygon()
 
-        lf.ui.set_active_operator(self._CROP_TOOL_ID, gizmo_type)
+        lf.ui.set_active_operator(tool_id, gizmo_type)
 
     def _build_submode_records(self, active_tool_id, tool_def, multi_transform_selection=False):
         import lichtfeld as lf
@@ -1141,8 +1207,8 @@ class _GizmoToolbarController:
             return
 
         if action == "tool":
-            if value == self._CROP_TOOL_ID and getattr(lf.ui, "is_point_cloud_forced", lambda: False)():
-                value = "builtin.roi"
+            if value == self._CROP_TOOL_ID and _point_cloud_forced():
+                value = self._ROI_TOOL_ID
             tool_def = ToolRegistry.get(value)
             if tool_def is None or not tool_def.can_activate(get_context()):
                 return
@@ -1152,9 +1218,8 @@ class _GizmoToolbarController:
                 if not selector_was_open:
                     ToolRegistry.clear_active()
             else:
-                if value in self._CROP_TOOL_IDS and getattr(lf.ui, "is_point_cloud_forced", lambda: False)():
-                    if ToolRegistry.set_active(value):
-                        lf.ui.new_crop_tool("box")
+                if value in (self._ROI_TOOL_ID, self._POINT_CROP_TOOL_ID):
+                    lf.ui.activate_crop_tool(value.removeprefix("builtin."))
                 elif value == self._CROP_TOOL_ID:
                     self._activate_crop_tool("translate")
                 else:
@@ -1163,12 +1228,21 @@ class _GizmoToolbarController:
 
         if action == "crop_object":
             if value in self._CROP_OBJECT_SHAPES:
-                lf.ui.change_crop_tool_shape(value)
+                current_gizmo = lf.ui.get_gizmo_type() if hasattr(lf.ui, "get_gizmo_type") else ""
+                set_shape = getattr(lf.ui, "set_crop_tool_shape", None)
+                if callable(set_shape):
+                    set_shape(value)
+                self._activate_crop_tool(current_gizmo or "translate", infer_selection_shape=False)
             return
 
         if action == "crop_transform":
             if value in self._CROP_TRANSFORM_GIZMOS:
-                lf.ui.set_crop_tool_operation(value)
+                if self._selection_volume_active(lf.ui.get_active_tool()):
+                    set_operation = getattr(lf.ui, "set_crop_tool_operation", None)
+                    if callable(set_operation):
+                        set_operation(value)
+                    return
+                self._activate_crop_tool(value, infer_selection_shape=False)
             return
 
         if action == "crop_fit":
@@ -1189,11 +1263,35 @@ class _GizmoToolbarController:
                 reset_crop_tool()
             return
 
-        if action == "crop_finish":
-            if lf.ui.get_active_tool() == "builtin.crop" and getattr(lf.ui, "is_point_cloud_forced", lambda: False)():
-                lf.ui.apply_crop_tool()
+        if action == "crop_apply":
+            apply_crop_tool = getattr(lf.ui, "apply_crop_tool", None)
+            if callable(apply_crop_tool):
+                apply_crop_tool()
+            return
+
+        if action == "model_alignment_preview":
+            lf.ui.toggle_model_alignment_preview()
+            return
+        if action == "model_alignment_apply":
+            lf.ui.apply_model_alignment()
+            return
+        if action == "model_alignment_clear":
+            lf.ui.clear_model_alignment_points()
+            return
+
+        if action == "model_alignment_control":
+            if value == "swap":
+                lf.ui.swap_model_alignment_roles()
+            elif value == "delete":
+                lf.ui.delete_model_alignment_pair()
+            elif value == "cancel":
+                lf.ui.cancel_model_alignment()
+            elif value == "link":
+                lf.ui.set_model_alignment_camera_link(not lf.ui.get_model_alignment_state().linked)
             else:
-                lf.ui.finish_crop_tool()
+                mode = lf.ui.ModelAlignmentDisplayMode
+                lf.ui.set_model_alignment_display({"separate": mode.SEPARATE, "left": mode.OVERLAY_LEFT,
+                                                   "right": mode.OVERLAY_RIGHT}[value])
             return
 
         if action == "align_toggle_preview":
@@ -1502,6 +1600,7 @@ class _ViewportToolbarController:
         "show_transform_toolbar",
         "show_mirror_toolbar",
         "show_align_toolbar",
+        "show_model_alignment_toolbar",
         "show_scale_distance_toolbar",
         "scale_distance_can_apply",
         "scale_distance_can_reset",
@@ -1560,6 +1659,7 @@ class _ViewportToolbarController:
         self._show_transform_toolbar = False
         self._show_mirror_toolbar = False
         self._show_align_toolbar = False
+        self._show_model_alignment_toolbar = False
         self._show_scale_distance_toolbar = False
         self._scale_distance_can_apply = False
         self._scale_distance_can_reset = False
@@ -1788,28 +1888,29 @@ class _ViewportToolbarController:
         signature = self._toolbar_signature((cropbox_toolbar_signature, roi_toolbar_signature))
         if signature == self._last_toolbar_signature:
             return False
-        self._last_toolbar_signature = signature
 
         utility_state = self._utility.snapshot()
+        gt_compare_active = self._gt_compare_controls._gt_compare_active()
         gizmo_state = self._gizmo.snapshot(
             self._crop_roi_settings_open,
             numeric_overlay_available=not (
                 self._viewport_export_controls.visible
-                or self._gt_compare_controls._gt_compare_active()
+                or gt_compare_active
                 or self._depth_view_controls._render_mode_selector_open()
             ),
         )
 
         dirty = False
-        if not gizmo_state["crop_settings_buttons"]:
+        if not gizmo_state["crop_settings_buttons"] or gt_compare_active:
             dirty |= self._sync_flag("crop_roi_settings_open", False)
         dirty |= self._sync_crop_roi_params(roi_toolbar_signature)
         dirty |= self._sync_flag("show_transform_toolbar", gizmo_state["show_transform_toolbar"])
         dirty |= self._sync_flag("show_mirror_toolbar", gizmo_state["show_mirror_toolbar"])
         dirty |= self._sync_flag("show_align_toolbar", gizmo_state["show_align_toolbar"])
+        dirty |= self._sync_flag("show_model_alignment_toolbar", gizmo_state.get("show_model_alignment_toolbar", False))
         dirty |= self._sync_flag("show_scale_distance_toolbar", gizmo_state["show_scale_distance_toolbar"])
         dirty |= self._sync_scale_distance()
-        dirty |= self._sync_flag("show_crop_toolbar", gizmo_state["show_crop_toolbar"])
+        dirty |= self._sync_flag("show_crop_toolbar", gizmo_state["show_crop_toolbar"] and not gt_compare_active)
         dirty |= self._sync_flag("show_crop_edit_controls", gizmo_state["show_crop_edit_controls"])
         dirty |= self._sync_flag("show_crop_numeric_controls", gizmo_state["show_crop_numeric_controls"])
         dirty |= self._sync_flag("show_crop_enable_separator", gizmo_state["show_crop_enable_separator"])
@@ -1837,6 +1938,7 @@ class _ViewportToolbarController:
         dirty |= self._sync_records("gizmo_buttons", gizmo_state["gizmo_buttons"])
         dirty |= self._sync_records("submode_buttons", gizmo_state["submode_buttons"])
         dirty |= self._sync_records("pivot_buttons", gizmo_state["pivot_buttons"])
+        self._last_toolbar_signature = signature
         return dirty
 
     def _sync_crop_roi_params(self, cropbox_toolbar_signature):
@@ -2154,12 +2256,19 @@ class _ViewportToolbarController:
                 _UtilityToolbarController._PLUGIN_MARKETPLACE_PANEL_ID,
             )
         )
-        if active_tool == "builtin.align":
-            align_can_apply = bool(call(False, getattr(lf.ui, "can_apply_align", None)))
+        split_mode = call("", getattr(lf.ui, "get_split_view_mode", None))
+        alignment = lf.ui.get_model_alignment_state()
+        if active_tool == "builtin.align" or alignment.active:
+            align_split_mode = split_mode
+            if alignment.active:
+                align_split_mode = (split_mode, alignment.linked, alignment.display_mode,
+                                    alignment.can_swap_roles, alignment.can_delete_pair, alignment.can_undo)
+            align_can_apply = alignment.can_apply if alignment.active else bool(call(False, getattr(lf.ui, "can_apply_align", None)))
             align_axis_snap = bool(call(True, getattr(lf.ui, "get_align_axis_snap", None)))
             align_edge_to_axis = lf.ui.get_align_edge_to_axis()
-            align_preview = lf.ui.get_align_preview()
+            align_preview = alignment.preview if alignment.active else lf.ui.get_align_preview()
         else:
+            align_split_mode = None
             align_can_apply = False
             align_axis_snap = True
             align_edge_to_axis = False
@@ -2225,6 +2334,7 @@ class _ViewportToolbarController:
             scale_distance_points,
             self._scale_distance_target_str,
             align_preview,
+            align_split_mode,
             align_can_apply,
             align_axis_snap,
             align_edge_to_axis,
@@ -2286,9 +2396,13 @@ class _ViewportToolbarController:
             "crop_trim",
             "crop_reset",
             "crop_toggle_inverse",
-            "crop_finish",
+            "crop_apply",
             "crop_delete",
             "crop_toggle_enabled",
+            "model_alignment_control",
+            "model_alignment_preview",
+            "model_alignment_apply",
+            "model_alignment_clear",
             "align_toggle_preview",
             "align_apply",
             "align_clear",

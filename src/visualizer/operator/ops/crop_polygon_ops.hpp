@@ -46,9 +46,13 @@ namespace lfs::vis::op {
         [[nodiscard]] bool finish(OperatorContext& ctx);
         void publishDraft() const;
         void clearDraft() const;
+        // secondary_crop draws a point cloud's Crop instead of its ROI or a splat's polygon.
+        [[nodiscard]] core::CropRole role() const {
+            return secondary_crop_ ? core::CropRole::Secondary : core::CropRole::Primary;
+        }
+        [[nodiscard]] const char* cropToolId() const;
 
         core::NodeId target_node_id_ = core::NULL_NODE;
-        bool new_instance_ = false;
         bool secondary_crop_ = false;
         std::optional<core::crop_polygon::Plane> plane_;
         glm::vec3 camera_right_{1.0f, 0.0f, 0.0f};
@@ -73,7 +77,7 @@ namespace lfs::vis::op {
         return core::isSceneNodeParentCompatible(type, core::NodeType::CROP_POLYGON);
     }
 
-    LFS_VIS_API void registerCropPolygonOperators();
-    LFS_VIS_API void unregisterCropPolygonOperators();
+    void registerCropPolygonOperators();
+    void unregisterCropPolygonOperators();
 
 } // namespace lfs::vis::op

@@ -50,7 +50,7 @@ def confirm_apply_defaults(on_applied=None):
             if on_applied:
                 on_applied()
 
-    lf.ui.confirm_dialog(tr("rendering_panel.apply_defaults"),
+    lf.ui.confirm_dialog(tr("preferences.apply_viewport_defaults"),
                          tr("rendering_panel.apply_defaults_confirm"),
                          [apply_label, tr("common.cancel")], apply_if_confirmed)
 
@@ -78,7 +78,7 @@ class RenderingDefaultsSection:
     def __init__(self):
         self._values = read_defaults()
         self._handle = None
-        self._error = ""
+        self._invalid_props = set()
         # Text typed into a field; it is validated and saved only on Enter or blur.
         self._text = {}
         # Colour whose picker is open; a drag previews as text and saves on release.
@@ -87,6 +87,10 @@ class RenderingDefaultsSection:
         self._doc = None
         self._escape_revert = w.EscapeRevertController()
         self._default_reset = LabelDefaultReset(lambda prop: DEFAULTS.get(prop), self._apply_reset)
+
+    @property
+    def _error(self):
+        return lf.ui.tr("preferences.viewport_defaults_invalid") if self._invalid_props else ""
 
     def bind(self, model):
         for prop, default in DEFAULTS.items():
@@ -172,11 +176,13 @@ class RenderingDefaultsSection:
     def _discard(self, prop):
         if self._text.pop(prop, None) is not None:
             self._dirty_value(prop)
+        if prop in self._invalid_props:
+            self._invalid_props.remove(prop)
+            if self._handle:
+                self._handle.dirty("rendering_defaults_error")
 
     def _commit(self, prop):
-        text = self._text.pop(prop, None)
-        if text is not None:
-            self._set(prop, text)
+        return prop not in self._text or self._set(prop, self._text[prop])
 
     def _commit_text(self, prop):
         self._commit(prop)
@@ -185,8 +191,7 @@ class RenderingDefaultsSection:
 
     def _apply_reset(self, prop, value):
         self._discard(prop)
-        self._set(prop, value)
-        return not self._error
+        return self._set(prop, value)
 
     def unmount(self):
         self._default_reset.unmount()
@@ -214,12 +219,19 @@ class RenderingDefaultsSection:
             # Persist a patch, preserving other defaults and future fields.
             lf.ui.set_rendering_defaults_json(json.dumps({prop: value}))
             self._values = read_defaults()
-            self._error = ""
+            self._text.pop(prop, None)
+            self._invalid_props.discard(prop)
+            if prop == "selection_outline" and not value:
+                # Apply must not be blocked by drafts whose inputs are now hidden.
+                for draft in tuple(self._text):
+                    if draft.startswith("selection_outline_"):
+                        self._discard(draft)
         except (ValueError, TypeError, OverflowError):
-            self._error = lf.ui.tr("preferences.viewport_defaults_invalid")
+            self._invalid_props.add(prop)
         self._dirty_value(prop)
         if self._handle:
             self._handle.dirty("rendering_defaults_error")
+        return prop not in self._invalid_props
 
     def sync(self):
         values = read_defaults()
@@ -236,15 +248,16 @@ class RenderingDefaultsSection:
     def _confirm_apply(self, *_):
         # A click can arrive before the focused field's blur listener commits.
         for prop in tuple(self._text):
-            self._commit(prop)
-            if self._error:
+            if not self._commit(prop):
                 return
-        if not self._error:
+        if not self._invalid_props:
             confirm_apply_defaults()
 
     def reset(self):
         lf.ui.set_rendering_defaults_json(json.dumps(DEFAULTS))
-        self._error = ""
+        for prop in tuple(self._text):
+            self._discard(prop)
+        self._invalid_props.clear()
         if self._handle:
             self._handle.dirty("rendering_defaults_error")
         self.sync()

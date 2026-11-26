@@ -88,7 +88,8 @@ namespace lfs::core {
         PointCloud = 2,
     };
 
-    enum class CropRole : uint8_t { Primary, Secondary };
+    enum class CropRole : uint8_t { Primary,
+                                    Secondary };
 
     struct CropBoxData {
         glm::vec3 min{-1.0f, -1.0f, -1.0f};
@@ -205,7 +206,6 @@ namespace lfs::core {
         std::shared_ptr<lfs::core::Camera> camera;
         int camera_uid = -1;
         bool training_enabled = true;
-        bool crop_effects_enabled = true;
         // In-memory payload no longer matches the source file (edited, generated,
         // pasted, ...); drives the embed-vs-reference decision on project save.
         bool payload_diverged = false;
@@ -229,9 +229,12 @@ namespace lfs::core {
         lfs::core::prop::AnimatableProperty<bool> locked{false};
 
         [[nodiscard]] std::optional<CropRole> cropRole() const {
-            if (cropbox) return cropbox->role;
-            if (ellipsoid) return ellipsoid->role;
-            if (crop_polygon) return crop_polygon->role;
+            if (cropbox)
+                return cropbox->role;
+            if (ellipsoid)
+                return ellipsoid->role;
+            if (crop_polygon)
+                return crop_polygon->role;
             return std::nullopt;
         }
 
@@ -291,7 +294,6 @@ namespace lfs::core {
             bool visible = true;
             bool locked = false;
             bool training_enabled = true;
-            bool crop_effects_enabled = true;
             bool payload_diverged = false;
             bool point_cloud_source = false;
             PayloadHydrationState payload_hydration =
@@ -428,9 +430,10 @@ namespace lfs::core {
         // Scene-owner thread only. Render/visibility invalidation is not a content edit.
         [[nodiscard]] std::optional<CollisionSourceIdentity> collisionSourceIdentity(NodeId id) const;
         [[nodiscard]] struct CollisionSource captureCollisionSource(NodeId id, CollisionSourceIdentity* identity = nullptr) const;
-        NodeId addCropBox(const std::string& name, NodeId parent_id);
-        NodeId addEllipsoid(const std::string& name, NodeId parent_id);
-        // Returns the existing polygon of parent_id, or NULL_NODE for an invalid outline.
+        // Each returns the parent's existing volume of the same role and shape instead of a second one.
+        NodeId addCropBox(const std::string& name, NodeId parent_id, CropRole role = CropRole::Primary);
+        NodeId addEllipsoid(const std::string& name, NodeId parent_id, CropRole role = CropRole::Primary);
+        // Returns the existing polygon of parent_id with data.role, or NULL_NODE for an invalid outline.
         NodeId addCropPolygon(const std::string& name, NodeId parent_id, CropPolygonData data,
                               const glm::mat4& local_transform = glm::mat4(1.0f));
         NodeId addDataset(const std::string& name);
@@ -484,6 +487,7 @@ namespace lfs::core {
         [[nodiscard]] bool getNodeRevealBounds(NodeId id, glm::vec3& out_min, glm::vec3& out_max) const;
 
         [[nodiscard]] NodeId getCropForRole(NodeId owner_id, CropRole role, NodeType type) const;
+        // The *ForSplat lookups return the primary volume: the splat's crop or the training ROI.
         [[nodiscard]] NodeId getCropBoxForSplat(NodeId splat_id) const;
         [[nodiscard]] NodeId getOrCreateCropBoxForSplat(NodeId splat_id);
         [[nodiscard]] CropBoxData* getCropBoxData(NodeId cropbox_id);
@@ -499,7 +503,6 @@ namespace lfs::core {
             glm::mat4 local_transform{1.0f};
             bool effectively_visible = false;
             bool parent_effectively_visible = false;
-            bool crop_effects_enabled = true;
         };
         [[nodiscard]] std::vector<RenderableCropBox> getRenderableCropBoxes() const;
 
@@ -517,7 +520,6 @@ namespace lfs::core {
             glm::mat4 local_transform{1.0f};
             bool effectively_visible = false;
             bool parent_effectively_visible = false;
-            bool crop_effects_enabled = true;
         };
         [[nodiscard]] std::vector<RenderableEllipsoid> getRenderableEllipsoids() const;
 
@@ -536,7 +538,6 @@ namespace lfs::core {
             glm::mat4 local_transform{1.0f};
             bool effectively_visible = false;
             bool parent_effectively_visible = false;
-            bool crop_effects_enabled = true;
         };
         [[nodiscard]] std::vector<RenderableCropPolygon> getRenderableCropPolygons() const;
 

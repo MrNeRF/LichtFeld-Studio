@@ -2,47 +2,19 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Exercise role-specific Python and MCP crop control in the real application."""
 import json
-import os
-from pathlib import Path
-import socket
-import subprocess
-import tempfile
 import time
 
 import pytest
 
+from crop_role_runtime import pretraining_app
+from test_render_on_demand_idle import _call, _tool
+
 pytestmark = [pytest.mark.gpu, pytest.mark.integration]
-from test_render_on_demand_idle import _call, _initialize, _tool
 
 
 @pytest.mark.parametrize("order", [("roi", "crop"), ("crop", "roi")])
-def test_role_discovery_activation_and_independent_manipulation(order):
-    dataset = os.environ.get("LFS_REAL_CROP_DATASET")
-    if not dataset:
-        pytest.skip("Set LFS_REAL_CROP_DATASET to an existing COLMAP dataset")
-    root = Path(__file__).resolve().parents[2]
-    executable = Path(os.environ.get("LFS_EXECUTABLE", root / "build" / "LichtFeld-Studio.exe"))
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-    endpoint = f"http://127.0.0.1:{port}/mcp"
-    app = subprocess.Popen([str(executable), "--no-download", "--mcp-port", str(port)],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
-    try:
-        deadline = time.monotonic() + 90
-        while True:
-            assert app.poll() is None
-            try:
-                _initialize(endpoint)
-                break
-            except OSError:
-                assert time.monotonic() < deadline
-                time.sleep(.1)
-        out = str(Path(tempfile.mkdtemp(prefix="lfs-role-api-")).resolve())
-        assert _tool(endpoint, "scene_load_dataset", {"path": dataset, "output_path": out, "min_track_length": 0})["success"]
-        assert _tool(endpoint, "runtime_job_wait", {"job_id": "import.dataset", "until": "inactive", "timeout_ms": 90000})["success"]
-        assert _tool(endpoint, "scene_select_node", {"name": "PointCloud"})["success"]
+def test_role_discovery_activation_and_independent_manipulation(tmp_path, order):
+    with pretraining_app(tmp_path) as endpoint:
         catalog = {item["name"]: item for item in _call(endpoint, "tools/list", {})["tools"]}
         available = set(catalog)
         assert {"crop_volume_get", "crop_volume_set"} <= available
@@ -122,11 +94,12 @@ def test_role_discovery_activation_and_independent_manipulation(order):
         assert _tool(endpoint, "history_undo")["success"]
         assert _tool(endpoint, "crop_volume_get", {"owner": "PointCloud", "role": "crop"})["volume"]["uuid"] == volumes["crop"]["uuid"]
         python = _tool(endpoint, "editor_run", {"code": "import json,lichtfeld as lf\n"
-            "ok=lf.ui.activate_crop_tool('crop')\nchanged=lf.ui.change_crop_tool_shape('box')\n"
-            "print(json.dumps({'activated':ok,'changed':changed,'roles':[(n.uuid,n.crop_role) for n in lf.get_scene().get_nodes() if n.crop_role],'discoverable':all('crop_role' in dir(n) for n in lf.get_scene().get_nodes() if n.crop_role)}))",
+            "ok=lf.ui.activate_crop_tool('crop')\nlf.ui.set_crop_tool_shape('box')\nlf.ui.add_cropbox('PointCloud')\n"
+            "print(json.dumps({'activated':ok,'roles':[(n.uuid,n.crop_role) for n in lf.get_scene().get_nodes() if n.crop_role],'discoverable':all('crop_role' in dir(n) for n in lf.get_scene().get_nodes() if n.crop_role)}))",
             "wait_for_completion": True, "timeout_ms": 30000, "show_console": False})
         state = json.loads(python["output"]["text"])
-        assert state["activated"] and state["changed"] and state["discoverable"], state
+        assert state["activated"] and state["discoverable"], state
+        assert _tool(endpoint, "crop_volume_get", {"owner": "PointCloud", "role": "crop"})["volume"]["shape"] == "box"
         assert catalog["crop_volume_action"]["annotations"]["destructiveHint"] is True
         assert {tuple(item) for item in state["roles"]} == {(volumes["roi"]["uuid"], "roi"), (volumes["crop"]["uuid"], "crop")}
         assert _tool(endpoint, "crop_volume_get", {"owner": "PointCloud", "role": "roi"})["volume"] == roi_poly
@@ -142,7 +115,7 @@ def test_role_discovery_activation_and_independent_manipulation(order):
         assert json.loads(invalid["output"]["text"]) is False
         assert _tool(endpoint, "history_undo")["success"]
         assert _tool(endpoint, "crop_volume_get", {"owner": "PointCloud", "role": "roi"})["volume"] == roi_poly
-        saved = Path(out) / "role-api.licht"
+        saved = tmp_path / "role-api.licht"
         assert _tool(endpoint, "project_save_as", {"path": str(saved)}).get("success", True)
         assert _tool(endpoint, "project_open", {"path": str(saved), "discard_changes": True}).get("success", True)
         deadline = time.monotonic() + 30
@@ -155,45 +128,13 @@ def test_role_discovery_activation_and_independent_manipulation(order):
         for role, shape in (("roi", "polygon"), ("crop", "box")):
             restored = _tool(endpoint, "crop_volume_get", {"owner": "PointCloud", "role": role})["volume"]
             assert restored["uuid"] == volumes[role]["uuid"] and restored["shape"] == shape, restored
-    finally:
-        app.terminate()
-        try:
-            app.wait(timeout=15)
-        except subprocess.TimeoutExpired:
-            app.kill()
-            app.wait(timeout=15)
 
 
 @pytest.mark.parametrize("order", [("roi", "crop"), ("crop", "roi")])
 @pytest.mark.parametrize("roi_shape", ["box", "polygon"])
 @pytest.mark.parametrize("target_shape", ["box", "ellipsoid"])
-def test_legacy_shape_command_changes_only_active_crop(order, roi_shape, target_shape):
-    dataset = os.environ.get("LFS_REAL_CROP_DATASET")
-    if not dataset:
-        pytest.skip("Set LFS_REAL_CROP_DATASET to an existing COLMAP dataset")
-    root = Path(__file__).resolve().parents[2]
-    executable = Path(os.environ.get("LFS_EXECUTABLE", root / "build-tests-release" / "LichtFeld-Studio.exe"))
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-    endpoint = f"http://127.0.0.1:{port}/mcp"
-    output = Path(tempfile.mkdtemp(prefix="lfs-legacy-role-")).resolve()
-    app = subprocess.Popen([str(executable), "--no-download", "--mcp-port", str(port)],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
-    try:
-        deadline = time.monotonic() + 90
-        while True:
-            assert app.poll() is None
-            try:
-                _initialize(endpoint)
-                break
-            except OSError:
-                assert time.monotonic() < deadline
-                time.sleep(.1)
-        assert _tool(endpoint, "scene_load_dataset", {"path": dataset, "output_path": str(output), "min_track_length": 0})["success"]
-        assert _tool(endpoint, "runtime_job_wait", {"job_id": "import.dataset", "until": "inactive", "timeout_ms": 90000})["success"]
-        assert _tool(endpoint, "scene_select_node", {"name": "PointCloud"})["success"]
+def test_legacy_shape_command_changes_only_active_crop(tmp_path, order, roi_shape, target_shape):
+    with pretraining_app(tmp_path) as endpoint:
         for role in order:
             assert _tool(endpoint, "ui_tool_invoke", {"tool_id": "builtin." + role})["success"]
         if roi_shape == "polygon":
@@ -215,11 +156,3 @@ def test_legacy_shape_command_changes_only_active_crop(order, roi_shape, target_
         assert after_crop["uuid"] == crop["uuid"] and after_crop["shape"] == target_shape
         ui = _call(endpoint, "resources/read", {"uri": "lichtfeld://ui/state"})
         assert json.loads(ui["contents"][0]["text"])["registry_active_tool_id"] == "builtin.crop"
-    finally:
-        if app.poll() is None:
-            app.terminate()
-        try:
-            app.wait(timeout=15)
-        except subprocess.TimeoutExpired:
-            app.kill()
-            app.wait(timeout=15)

@@ -2,67 +2,21 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Exercise crop role editing restrictions through the deployed application."""
 import json
-import os
-from pathlib import Path
-import socket
-import subprocess
-import time
 
 import pytest
 
-from test_render_on_demand_idle import _call, _initialize, _tool
+from crop_role_runtime import pretraining_app, set_volume, volume
+from test_render_on_demand_idle import _tool
 
 pytestmark = [pytest.mark.gpu, pytest.mark.integration]
 
 
 @pytest.fixture
 def crop_endpoint(tmp_path):
-    dataset = os.environ.get("LFS_REAL_CROP_DATASET")
-    if not dataset:
-        pytest.skip("Set LFS_REAL_CROP_DATASET to an existing COLMAP dataset")
-    root = Path(__file__).resolve().parents[2]
-    executable = Path(os.environ.get("LFS_EXECUTABLE", root / "build-tests-release" / "LichtFeld-Studio.exe"))
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-    endpoint = f"http://127.0.0.1:{port}/mcp"
-    app = subprocess.Popen([str(executable), "--no-download", "--mcp-port", str(port)],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
-    try:
-        deadline = time.monotonic() + 90
-        while True:
-            assert app.poll() is None
-            try:
-                _initialize(endpoint)
-                break
-            except OSError:
-                assert time.monotonic() < deadline
-                time.sleep(.1)
-        assert _tool(endpoint, "scene_load_dataset", {"path": dataset, "output_path": str(tmp_path / "output"),
-                                                       "min_track_length": 0})["success"]
-        assert _tool(endpoint, "runtime_job_wait", {"job_id": "import.dataset", "until": "inactive", "timeout_ms": 90000})["success"]
-        assert _tool(endpoint, "scene_select_node", {"name": "PointCloud"})["success"]
+    with pretraining_app(tmp_path) as endpoint:
         for role in ("roi", "crop"):
             assert _tool(endpoint, "ui_tool_invoke", {"tool_id": "builtin." + role})["success"]
         yield endpoint
-    finally:
-        if app.poll() is None:
-            app.terminate()
-        try:
-            app.wait(timeout=15)
-        except subprocess.TimeoutExpired:
-            app.kill()
-            app.wait(timeout=15)
-
-
-def volume(endpoint, role):
-    return _tool(endpoint, "crop_volume_get", {"owner": "PointCloud", "role": role})["volume"]
-
-
-def set_volume(endpoint, role, **changes):
-    return _call(endpoint, "tools/call", {"name": "crop_volume_set",
-                 "arguments": {"owner": "PointCloud", "role": role, **changes}})
 
 
 @pytest.mark.parametrize("role,shape", [("roi", "box"), ("roi", "polygon"),

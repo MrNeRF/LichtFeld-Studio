@@ -138,6 +138,11 @@ add_library(lfs_video STATIC
         video/video_metadata.cpp
         video_frame_extractor.hpp
         video_frame_extractor.cpp
+        sharpness_score.hpp
+        sharpness_score.cpp
+        sharpness_edge.hpp
+        cuda/sharpness_score.cpp
+        cuda/sharpness_score.cu
         hdr_tonemap.hpp
         hdr_tonemap.cpp
         hdr_libplacebo.hpp
@@ -167,6 +172,7 @@ target_link_libraries(lfs_video
         spdlog::spdlog
         CUDA::cudart
         CUDA::cuda_driver
+        TBB::tbb
 )
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -317,6 +323,7 @@ add_library(lfs_io STATIC
         loaders/checkpoint_loader.cpp
         loaders/mesh_loader.hpp
         loaders/mesh_loader.cpp
+        loaders/skinned_mesh_loader.cpp
         mesh/openmesh_bridge.hpp
         mesh/openmesh_bridge.cpp
         mesh/texture_loader.hpp

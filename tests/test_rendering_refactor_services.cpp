@@ -13,7 +13,6 @@
 #include "core/services.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
-#include "gui/video_export_utils.hpp"
 #include "gui/volume_guide_visibility.hpp"
 #include "io/cache_image_loader.hpp"
 #include "io/loader.hpp"
@@ -553,6 +552,24 @@ namespace lfs::vis {
             lfs::event::EventBridge::instance().clear_all();
         }
     };
+
+    TEST_F(RenderingManagerEventsTest, GTContentBoundsFollowDisplayedLetterboxAtReducedScale) {
+        RenderingManager manager;
+        auto settings = manager.getSettings();
+        settings.split_view_mode = SplitViewMode::GTComparison;
+        manager.updateSettings(settings);
+        RenderingManager::VulkanMeshFrame frame;
+        frame.split_view.enabled = true;
+        frame.split_view.coordinate_extent = {320, 180};
+        frame.split_view.content_rect = {20, 0, 279, 180};
+        manager.setVulkanMeshFrame(std::move(frame));
+
+        const auto bounds = manager.getContentBounds({1281, 721});
+        EXPECT_EQ(bounds.x, 80);
+        EXPECT_EQ(bounds.x + bounds.width, 1197);
+        EXPECT_EQ(bounds.y, 0);
+        EXPECT_EQ(bounds.height, 721);
+    }
 
     TEST(SplitViewServiceTest, ToggleGtComparisonRestoresPreviousProjectionMode) {
         SplitViewService service;
@@ -2077,11 +2094,10 @@ namespace lfs::vis {
         ASSERT_NE(roi_polygon, core::NULL_NODE);
         Viewport viewport(640, 480);
         const auto state = manager.buildRenderState();
-        FrameContext ctx{.viewport = viewport, .scene_manager = &manager, .scene_state = state,
-                         .settings = RenderSettings{}, .render_size = {640, 480}, .training_active = true};
+        FrameContext ctx{.viewport = viewport, .scene_manager = &manager, .scene_state = state, .settings = RenderSettings{}, .render_size = {640, 480}, .training_active = true};
         const auto request = buildViewportRenderRequest(ctx, {640, 480});
         ASSERT_EQ(request.filters.crop_regions.size(), 1u);
-        EXPECT_EQ(request.filters.crop_regions.front().source_node_id, other_box);
+        EXPECT_EQ(request.filters.crop_regions.front().parent_node_index, scene.getVisibleNodeIndex(other));
         EXPECT_TRUE(request.filters.crop_polygon_regions.empty());
         EXPECT_TRUE(scene.getCropBoxData(roi_box)->enabled);
         EXPECT_TRUE(scene.getCropPolygonData(roi_polygon)->enabled);
@@ -2818,7 +2834,6 @@ namespace lfs::vis {
         auto* ellipsoid_node = scene.getNodeById(*ellipsoid_result);
         ASSERT_NE(ellipsoid_node, nullptr);
         ASSERT_TRUE(ellipsoid_node->ellipsoid);
-        ellipsoid_node->ellipsoid->role = core::CropRole::Secondary;
         ellipsoid_node->ellipsoid->enabled = true;
         ellipsoid_node->ellipsoid->inverse = true;
         ellipsoid_node->ellipsoid->radii = {2.0f, 3.0f, 4.0f};
@@ -2861,7 +2876,6 @@ namespace lfs::vis {
         auto* ellipsoid_node = scene.getNodeById(*ellipsoid_result);
         ASSERT_NE(ellipsoid_node, nullptr);
         ASSERT_TRUE(ellipsoid_node->ellipsoid);
-        ellipsoid_node->ellipsoid->role = core::CropRole::Secondary;
         ellipsoid_node->ellipsoid->enabled = false;
         manager.selectNode(ellipsoid_node->name);
 
@@ -2934,15 +2948,11 @@ namespace lfs::vis {
         ASSERT_EQ(renderables.size(), 1u);
         EXPECT_EQ(renderables.front().parent_splat_id, splat);
 
-        // Crop instances retain their local plane and payload on a duplicated splat.
+        // Drawn for one splat in one camera plane: duplicates start without it.
         const auto copy = scene.duplicateNode("Model");
         ASSERT_FALSE(copy.empty());
-        const auto copied_polygon = scene.getCropPolygonForSplat(scene.getNodeIdByName(copy));
-        ASSERT_NE(copied_polygon, core::NULL_NODE);
-        EXPECT_NE(scene.getNodeById(copied_polygon)->uuid, scene.getNodeById(polygon)->uuid);
-        EXPECT_EQ(scene.getNodeById(copied_polygon)->crop_polygon->vertices, changed.vertices);
-        EXPECT_EQ(scene.getNodeById(copied_polygon)->local_transform.get(), far_away);
-        EXPECT_FALSE(scene.duplicateNode("Model_crop_polygon").empty());
+        EXPECT_EQ(scene.getCropPolygonForSplat(scene.getNodeIdByName(copy)), core::NULL_NODE);
+        EXPECT_TRUE(scene.duplicateNode("Model_crop_polygon").empty());
         EXPECT_EQ(scene.getCropPolygonForSplat(splat), polygon);
 
         scene.removeNode("Model_crop_polygon", false);
@@ -2962,51 +2972,6 @@ namespace lfs::vis {
         ASSERT_NE(restored, core::NULL_NODE);
         EXPECT_FLOAT_EQ(scene.getCropPolygonData(restored)->half_depth, 2.0f);
         EXPECT_TRUE(scene.getCropPolygonData(restored)->inverse);
-    }
-
-    TEST_F(SceneManagerRenderStateTest, VideoExportSnapshotRetainsAllRepeatedEllipsoids) {
-        SceneManager manager;
-        auto& scene = manager.getScene();
-        const auto owner = scene.addSplat("Stack", makeTwoPointTestSplat(0.0f, 2.0f));
-        const auto ellipsoid = scene.addEllipsoid("Ellipsoid", owner);
-        scene.getNodeById(ellipsoid)->ellipsoid->enabled = true;
-        const auto copy = cap::duplicateSplatCrop(manager, nullptr, scene.getNodeById(ellipsoid)->uuid);
-        ASSERT_TRUE(copy);
-        manager.selectNode(*copy);
-        const auto snapshot = gui::captureVideoExportSceneSnapshot(manager, gui::VideoExportCapture::ImmediateRender);
-        ASSERT_TRUE(snapshot);
-        ASSERT_EQ(snapshot->ellipsoids.size(), 2u);
-        const auto state = gui::makeVideoExportGaussianSceneState(*snapshot, std::nullopt, nullptr, 0.0f);
-        ASSERT_EQ(state.ellipsoids.size(), 2u);
-        EXPECT_NE(state.ellipsoids[0].node_id, state.ellipsoids[1].node_id);
-    }
-
-    TEST_F(SceneManagerRenderStateTest, CopyPasteRetainsRepeatedCropChildren) {
-        SceneManager manager;
-        auto& scene = manager.getScene();
-        const auto owner = scene.addSplat("Stack", makeTwoPointTestSplat(0.0f, 2.0f));
-        const auto box = scene.addCropBox("Box", owner);
-        const auto ellipsoid = scene.addEllipsoid("Ellipsoid", owner);
-        const auto polygon = scene.addCropPolygon("Polygon", owner, makeCropPolygonData());
-        for (const auto id : {box, ellipsoid, polygon})
-            ASSERT_FALSE(scene.duplicateNode(scene.getNodeById(id)->name).empty());
-        const auto duplicated = scene.duplicateNode("Stack");
-        ASSERT_FALSE(duplicated.empty());
-        ASSERT_EQ(scene.getNode(duplicated)->children.size(), 6u);
-        manager.selectNode(owner);
-        ASSERT_TRUE(manager.copySelectedNodes());
-        const auto pasted = manager.pasteNodes();
-        ASSERT_EQ(pasted.size(), 1u);
-        const auto* copy = scene.getNode(pasted.front());
-        ASSERT_NE(copy, nullptr);
-        ASSERT_EQ(copy->children.size(), 6);
-        for (const auto type : {core::NodeType::CROPBOX, core::NodeType::ELLIPSOID, core::NodeType::CROP_POLYGON}) {
-            size_t count = 0;
-            for (const auto id : copy->children)
-                if (scene.getNodeById(id)->type == type)
-                    ++count;
-            EXPECT_EQ(count, 2u);
-        }
     }
 
     TEST_F(SceneManagerRenderStateTest, CropPolygonReplacesTheOtherVolumesInOneUndoStep) {
@@ -3062,7 +3027,6 @@ namespace lfs::vis {
         const auto cloud = scene.addPointCloud("Cloud", makeTestPointCloud());
         auto data = makeCropPolygonData();
         data.inverse = true;
-        data.role = core::CropRole::Secondary;
         const auto polygon = cap::createCropPolygon(manager, nullptr, cloud, data,
                                                     glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 2.0f, 3.0f)));
         ASSERT_TRUE(polygon) << polygon.error().user_message();
@@ -3406,20 +3370,58 @@ namespace lfs::vis {
                         .filters.crop_polygon_regions.empty());
     }
 
-    TEST(VksplatOverlayParamsTest, PolygonDirectoryKeepsEveryValidVolumeBeyondSixteen) {
+    TEST(VksplatOverlayParamsTest, CropPolygonSlotsPackDenselyAfterTheEllipsoids) {
         namespace ov = vksplat_overlay;
+        static_assert(ov::CropPolygonBase == ov::EllipsoidExtraBase + ov::EllipsoidParamStride * ov::EllipsoidExtraCount);
+        static_assert(ov::CropPolygonParamStride == ov::CropPolygonVertices + core::kMaxCropPolygonVertices / 2);
+        static_assert(ov::RevealParams == ov::CropPolygonBase + ov::CropPolygonParamStride * ov::CropPolygonCount);
+
+        const glm::mat4 transform =
+            glm::scale(glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, -2.0f, 3.0f)), glm::vec3(2.0f, 3.0f, 4.0f));
+        const auto region = [&](std::vector<glm::vec2> vertices, const bool inverse, const int parent) {
+            return lfs::rendering::GaussianScopedCropPolygonFilter{
+                .bounds = {.vertices = std::move(vertices), .half_depth = 0.5f, .transform = transform},
+                .inverse = inverse,
+                .desaturate = inverse,
+                .parent_node_index = parent};
+        };
+        std::vector<glm::vec2> full(core::kMaxCropPolygonVertices);
+        for (size_t i = 0; i < full.size(); ++i)
+            full[i] = {std::cos(0.1f * static_cast<float>(i)), std::sin(0.1f * static_cast<float>(i))};
+
         lfs::rendering::ViewportRenderRequest request{};
-        for (int i = 0; i < 40; ++i)
-            request.filters.crop_polygon_regions.push_back({.bounds = {.vertices = {{0, 0}, {1, 0}, {1, 1}, {0, 1}}, .half_depth = 0.5f, .transform = glm::mat4(1.0f)},
-                                                            .inverse = i == 39,
-                                                            .parent_node_index = 7});
-        const auto params = ov::buildParams(request, false, false, false, 0, false);
-        ASSERT_EQ(params.size(), (ov::ParamCount + ov::CropDirectoryStride + 40 * ov::CropPolygonParamStride) * 4u);
-        const auto directory = static_cast<size_t>(params[ov::CropDirectory * 4]);
-        EXPECT_EQ(params[(directory + 1) * 4 + 2], 40.0f);
-        const auto first = static_cast<size_t>(params[(directory + 1) * 4 + 1]);
-        EXPECT_EQ(params[(first + 39 * ov::CropPolygonParamStride) * 4 + 1], 1.0f);
-        EXPECT_EQ(params[(first + ov::CropPolygonParams) * 4], 0.5f);
+        request.filters.crop_polygon_regions = {
+            region({{0.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 1.0f}, {0.5f, 2.0f}, {0.0f, 1.0f}}, true, 3),
+            region({{0.0f, 0.0f}, {1.0f, 0.0f}}, false, 1), // Degenerate: skipped without a gap.
+            region(full, false, 2),
+        };
+        auto params = ov::buildParams(request, false, false, false, 0, false);
+        ASSERT_EQ(params.size(), std::size_t{ov::ParamCount} * 4u);
+        const auto slot = [&](const std::size_t index) {
+            return glm::vec4(params[index * 4], params[index * 4 + 1], params[index * 4 + 2], params[index * 4 + 3]);
+        };
+
+        const std::size_t first = ov::CropPolygonBase;
+        EXPECT_EQ(slot(first), glm::vec4(1.0f, 1.0f, 1.0f, 3.0f));
+        EXPECT_EQ(slot(first + ov::CropPolygonParams), glm::vec4(0.5f, 5.0f, 0.0f, 0.0f));
+        for (int row = 0; row < 4; ++row)
+            EXPECT_EQ(slot(first + ov::CropPolygonTransform + row),
+                      glm::vec4(transform[0][row], transform[1][row], transform[2][row], transform[3][row]));
+        EXPECT_EQ(slot(first + ov::CropPolygonVertices), glm::vec4(0.0f, 0.0f, 1.0f, 0.0f));
+        EXPECT_EQ(slot(first + ov::CropPolygonVertices + 1), glm::vec4(1.0f, 1.0f, 0.5f, 2.0f));
+        EXPECT_EQ(slot(first + ov::CropPolygonVertices + 2), glm::vec4(0.0f, 1.0f, 0.0f, 0.0f));
+
+        const std::size_t second = first + ov::CropPolygonParamStride;
+        EXPECT_EQ(slot(second), glm::vec4(1.0f, 0.0f, 0.0f, 2.0f));
+        EXPECT_EQ(slot(second + ov::CropPolygonParams).y, static_cast<float>(core::kMaxCropPolygonVertices));
+        EXPECT_EQ(slot(second + ov::CropPolygonParamStride - 1), glm::vec4(full[62], full[63]));
+        EXPECT_EQ(slot(second + ov::CropPolygonParamStride), glm::vec4(0.0f));
+
+        // More polygons than slots: the table keeps its size and the last slot holds the 16th.
+        request.filters.crop_polygon_regions.assign(ov::CropPolygonCount + 4, region(full, false, 7));
+        params = ov::buildParams(request, false, false, false, 0, false);
+        ASSERT_EQ(params.size(), std::size_t{ov::ParamCount} * 4u);
+        EXPECT_EQ(slot(first + (ov::CropPolygonCount - 1) * ov::CropPolygonParamStride).w, 7.0f);
     }
 
     TEST(VksplatOverlayParamsTest, RevealParametersArePackedForProjection) {
@@ -3491,10 +3493,12 @@ namespace lfs::vis {
             };
             for (const bool selected : {true, false}) {
                 SCOPED_TRACE(selected);
-                if (selected) manager.selectNode(crop); else manager.clearSelection();
+                if (selected)
+                    manager.selectNode(crop);
+                else
+                    manager.clearSelection();
                 const auto state = manager.buildRenderState();
-                FrameContext ctx{.viewport = viewport, .scene_manager = &manager, .scene_state = state,
-                                 .settings = settings, .render_size = {640, 480}};
+                FrameContext ctx{.viewport = viewport, .scene_manager = &manager, .scene_state = state, .settings = settings, .render_size = {640, 480}};
                 check(buildPointCloudRenderRequest(ctx, {640, 480}, state.model_transforms));
                 check(buildPointCloudNodeRenderRequest(ctx, scene, *scene.getNodeById(owner),
                                                        {640, 480}, state.model_transforms));
@@ -3541,13 +3545,13 @@ namespace lfs::vis {
         Viewport viewport(640, 480);
         RenderSettings settings;
         settings.point_cloud_mode = true;
-        FrameContext ctx{.viewport = viewport, .scene_manager = &manager, .scene_state = state,
-                         .settings = settings, .render_size = {640, 480}};
+        FrameContext ctx{.viewport = viewport, .scene_manager = &manager, .scene_state = state, .settings = settings, .render_size = {640, 480}};
         ctx.gizmo.cropbox_active = ctx.gizmo.cropbox_affects_render = true;
         ctx.gizmo.cropbox_parent_node_index = state.cropboxes.front().parent_node_index;
         EXPECT_FALSE(buildPointCloudRenderRequest(ctx, {640, 480}, state.model_transforms).filters.crop_box);
         EXPECT_FALSE(buildPointCloudNodeRenderRequest(ctx, scene, *scene.getNodeById(owner),
-                                                      {640, 480}, state.model_transforms).filters.crop_box);
+                                                      {640, 480}, state.model_transforms)
+                         .filters.crop_box);
     }
 
     TEST_F(SceneManagerRenderStateTest, PointCloudRoiNeverFiltersAndCropKeepsFilteringWhileRoiIsEdited) {
@@ -3555,11 +3559,11 @@ namespace lfs::vis {
             SCOPED_TRACE(secondary_first);
             SceneManager manager;
             auto& scene = manager.getScene();
-            const auto cloud = scene.addPointCloud("Role Cloud", makeTestPointCloud());
+            // The ROI belongs to the dataset point cloud that training starts from.
+            const auto cloud = scene.addPointCloud("Role Cloud", makeTestPointCloud(), scene.addDataset("Dataset"));
             ASSERT_NE(cloud, core::NULL_NODE);
-            const auto owner = scene.getNodeById(cloud)->uuid;
             const auto make = [&](const core::CropRole role) {
-                return cap::createSplatCrop(manager, nullptr, owner, core::NodeType::CROPBOX, role);
+                return cap::ensureCropBox(manager, nullptr, cloud, role);
             };
             const auto first = make(secondary_first ? core::CropRole::Secondary : core::CropRole::Primary);
             const auto second = make(secondary_first ? core::CropRole::Primary : core::CropRole::Secondary);
@@ -3591,7 +3595,7 @@ namespace lfs::vis {
             EXPECT_EQ(req.filters.crop_box->min, (glm::vec3{-0.25f, -0.5f, -0.75f}));
             EXPECT_EQ(req.filters.crop_box->max, (glm::vec3{0.25f, 0.5f, 0.75f}));
             const auto node_req = buildPointCloudNodeRenderRequest(ctx, scene, *scene.getNodeById(cloud),
-                                                                  {640, 480}, scene_state.model_transforms);
+                                                                   {640, 480}, scene_state.model_transforms);
             ASSERT_TRUE(node_req.filters.crop_box);
             EXPECT_EQ(node_req.filters.crop_box->min, (glm::vec3{-0.25f, -0.5f, -0.75f}));
             scene.getNodeById(crop)->cropbox->enabled = false;
@@ -3608,30 +3612,33 @@ namespace lfs::vis {
     TEST_F(SceneManagerRenderStateTest, PointCloudCropShapeRemainsActiveWhenRoiIsSelected) {
         SceneManager manager;
         auto& scene = manager.getScene();
-        const auto cloud = scene.addPointCloud("Shape Cloud", makeTestPointCloud());
+        const auto cloud = scene.addPointCloud("Shape Cloud", makeTestPointCloud(), scene.addDataset("Dataset"));
         ASSERT_NE(cloud, core::NULL_NODE);
-        const auto owner = scene.getNodeById(cloud)->uuid;
-        const auto roi = cap::createSplatCrop(manager, nullptr, owner, core::NodeType::CROPBOX, core::CropRole::Primary);
-        const auto crop = cap::createSplatCrop(manager, nullptr, owner, core::NodeType::CROPBOX, core::CropRole::Secondary);
+        const auto roi = cap::ensureCropBox(manager, nullptr, cloud, core::CropRole::Primary);
         ASSERT_TRUE(roi);
-        ASSERT_TRUE(crop);
-        const auto crop_uuid = scene.getNodeById(*crop)->uuid;
+        ASSERT_TRUE(cap::ensureCropBox(manager, nullptr, cloud, core::CropRole::Secondary));
         Viewport viewport(640, 480);
         RenderSettings settings;
         for (const auto shape : {core::NodeType::CROPBOX, core::NodeType::ELLIPSOID, core::NodeType::CROP_POLYGON}) {
             SCOPED_TRACE(static_cast<int>(shape));
-            if (scene.getNodeByUuid(crop_uuid)->type != shape)
-                ASSERT_TRUE(cap::convertSplatCrop(manager, nullptr, crop_uuid, shape));
+            if (shape == core::NodeType::ELLIPSOID) {
+                ASSERT_TRUE(cap::ensureEllipsoid(manager, nullptr, cloud, core::CropRole::Secondary));
+            } else if (shape == core::NodeType::CROP_POLYGON) {
+                auto data = makeCropPolygonData();
+                data.role = core::CropRole::Secondary;
+                ASSERT_TRUE(cap::createCropPolygon(manager, nullptr, cloud, data, glm::mat4(1.0f)));
+            }
+            ASSERT_NE(scene.getCropForRole(cloud, core::CropRole::Secondary, shape), core::NULL_NODE);
+            ASSERT_EQ(scene.getCropForRole(cloud, core::CropRole::Primary, core::NodeType::CROPBOX), *roi);
             manager.selectNode(*roi);
             auto state = manager.buildRenderState();
-            FrameContext ctx{.viewport = viewport, .scene_manager = &manager, .scene_state = state,
-                             .settings = settings, .render_size = {640, 480}};
+            FrameContext ctx{.viewport = viewport, .scene_manager = &manager, .scene_state = state, .settings = settings, .render_size = {640, 480}};
             const auto req = buildPointCloudRenderRequest(ctx, {640, 480}, state.model_transforms);
             EXPECT_EQ(req.filters.crop_box.has_value(), shape == core::NodeType::CROPBOX);
             EXPECT_EQ(req.filters.crop_ellipsoid.has_value(), shape == core::NodeType::ELLIPSOID);
             EXPECT_EQ(req.filters.crop_polygon.has_value(), shape == core::NodeType::CROP_POLYGON);
             const auto node_req = buildPointCloudNodeRenderRequest(ctx, scene, *scene.getNodeById(cloud),
-                                                                  {640, 480}, state.model_transforms);
+                                                                   {640, 480}, state.model_transforms);
             EXPECT_EQ(node_req.filters.crop_box.has_value(), shape == core::NodeType::CROPBOX);
             EXPECT_EQ(node_req.filters.crop_ellipsoid.has_value(), shape == core::NodeType::ELLIPSOID);
             EXPECT_EQ(node_req.filters.crop_polygon.has_value(), shape == core::NodeType::CROP_POLYGON);
@@ -3648,7 +3655,6 @@ namespace lfs::vis {
         auto* cropbox_node = scene.getNodeById(*cropbox_result);
         ASSERT_NE(cropbox_node, nullptr);
         ASSERT_TRUE(cropbox_node->cropbox);
-        cropbox_node->cropbox->role = core::CropRole::Secondary;
         cropbox_node->cropbox->enabled = true;
         cropbox_node->cropbox->inverse = true;
         cropbox_node->cropbox->min = {-1.0f, -2.0f, -3.0f};
@@ -3734,7 +3740,6 @@ namespace lfs::vis {
         auto* ellipsoid_node = scene.getNodeById(*ellipsoid_result);
         ASSERT_NE(ellipsoid_node, nullptr);
         ASSERT_TRUE(ellipsoid_node->ellipsoid);
-        ellipsoid_node->ellipsoid->role = core::CropRole::Secondary;
         ellipsoid_node->ellipsoid->enabled = true;
         ellipsoid_node->ellipsoid->inverse = true;
         ellipsoid_node->ellipsoid->radii = {2.0f, 3.0f, 4.0f};

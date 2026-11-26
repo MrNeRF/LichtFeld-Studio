@@ -104,7 +104,7 @@ body.floating-panel {
     flex: 1 1 180dp;
     min-width: 0;
     font-size: 16dp;
-    font-weight: bold;
+    font-weight: 600;
     white-space: normal;
 }
 
@@ -122,7 +122,7 @@ body.floating-panel {
     display: block;
     margin-top: 8dp;
     margin-bottom: 4dp;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .preferences-metric-row {
@@ -371,6 +371,27 @@ body.floating-panel {
     cursor: default;
 }
 
+.preferences-mcp-switch-track {
+    display: block;
+    position: relative;
+    width: 22dp;
+    height: 10dp;
+    border-width: 1dp;
+}
+
+.preferences-mcp-switch-knob {
+    display: block;
+    position: absolute;
+    left: 1dp;
+    top: 1dp;
+    width: 6dp;
+    height: 6dp;
+}
+
+.preferences-mcp-toggle.is-on .preferences-mcp-switch-knob {
+    left: 13dp;
+}
+
 .preferences-checkbox-row input {
     margin-left: auto;
 }
@@ -416,7 +437,7 @@ body.floating-panel {
 .preferences-binding-section {
     display: block;
     font-size: 12dp;
-    font-weight: bold;
+    font-weight: 600;
     padding: 3dp 4dp;
     margin-top: 4dp;
 }
@@ -476,7 +497,7 @@ body.floating-panel {
 
 .preferences-conflict-dialog {
     border-width: 1dp;
-    border-radius: 6dp;
+
     padding: 14dp;
     min-width: 280dp;
     max-width: 380dp;
@@ -485,7 +506,7 @@ body.floating-panel {
 .preferences-conflict-title {
     display: block;
     font-size: 12dp;
-    font-weight: bold;
+    font-weight: 600;
     margin-bottom: 6dp;
 }
 
@@ -563,4 +584,4 @@ body.floating-panel {
 .preferences-model-status > span { margin: 0; }
 .preferences-model-actions > .btn:first-child,
 .preferences-model-actions > .btn:nth-child(2) { min-width: 130dp; }
-.preferences-model-dot { width: 8dp; height: 8dp; border-radius: 4dp; }
+.preferences-model-dot { width: 8dp; height: 8dp; }

@@ -70,4 +70,16 @@ namespace lfs::core {
     Tensor resize_normal_prior(const Tensor& input, int output_h, int output_w,
                                cudaStream_t cuda_stream = nullptr);
 
+    // Fits a prior that travelled at its own size (depth [H,W], normals [3,H,W])
+    // to a render of render_h x render_w: the prior resize to the size the loader
+    // would have resized it to (request_h x request_w; 0 means the render's size),
+    // then Lanczos if the render differs from that size. The prior resize runs on
+    // cuda_stream without waiting for it; read the result on that stream.
+    Tensor fit_depth_prior(const Tensor& input, int request_h, int request_w,
+                           int render_h, int render_w,
+                           cudaStream_t cuda_stream = nullptr);
+    Tensor fit_normal_prior(const Tensor& input, int request_h, int request_w,
+                            int render_h, int render_w,
+                            cudaStream_t cuda_stream = nullptr);
+
 } // namespace lfs::core

@@ -19,6 +19,7 @@ add_library(nvimgcodec_imgproc_static OBJECT
     pinned_buffer.cpp
     device_buffer.cpp
     exception.cpp
+    exit_guard.cpp
     out_of_bound_roi_fill.cpp
     stream_device.cpp
     color_space_conversion_impl.h
@@ -29,6 +30,7 @@ add_library(nvimgcodec_imgproc_static OBJECT
     device_buffer.h
     device_guard.h
     exception.h
+    exit_guard.h
     force_inline.h
     host_dev.h
     image_info_checks.h

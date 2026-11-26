@@ -8,7 +8,6 @@ bin/*
 .vimrc
 .DS_Store
 .*.swp
-.dockerignore
 nvimgcodec_version.h
 *__pycache__*
 .venv/

@@ -25,6 +25,7 @@
 #include "gui/viewport_gizmo_geometry.hpp"
 #include "gui/volume_guide_visibility.hpp"
 #include "gui/vram_hud_sample_policy.hpp"
+#include "operator/ops/model_alignment_ops.hpp"
 #include "preferences.hpp"
 #include "window/vulkan_result.hpp"
 #include <ft2build.h>
@@ -91,8 +92,8 @@
 #include "tools/selection_tool.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
-#include "visualizer/core/editor_context.hpp"
 #include "visualizer/app_store.hpp"
+#include "visualizer/core/editor_context.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer_impl.hpp"
 #include "window/vulkan_context.hpp"
@@ -410,6 +411,7 @@ namespace lfs::vis::gui {
             glm::vec2 pos{0.0f};
             glm::vec2 size{0.0f};
             glm::ivec2 render_size{0};
+            std::optional<GTRenderCamera> camera_override{};
 
             [[nodiscard]] bool valid() const {
                 return viewport != nullptr && size.x > 0.0f && size.y > 0.0f &&
@@ -1220,10 +1222,11 @@ namespace lfs::vis::gui {
             const glm::vec3& world_a,
             const glm::vec3& world_b) {
             const float ortho_scale = panel.viewport->ortho_scale_override.value_or(settings.ortho_scale);
-            if (settings.equirectangular) {
-                const glm::mat3 rotation = panel.viewport->getRotationMatrix();
-                const glm::vec3 translation = panel.viewport->getTranslation();
-
+            const auto& camera = panel.camera_override;
+            const bool orthographic = !camera && settings.orthographic;
+            const glm::mat3 rotation = camera ? camera->rotation : panel.viewport->getRotationMatrix();
+            const glm::vec3 translation = camera ? camera->translation : panel.viewport->getTranslation();
+            if (camera ? camera->equirectangular : settings.equirectangular) {
                 struct EquirectProjected {
                     glm::vec2 screen;
                     float depth;
@@ -1258,21 +1261,22 @@ namespace lfs::vis::gui {
             }
 
             constexpr float kMinViewZ = -1e-4f;
-            const glm::mat3 rotation = panel.viewport->getRotationMatrix();
-            const glm::vec3 translation = panel.viewport->getTranslation();
             const glm::vec3 view_a = glm::transpose(rotation) * (world_a - translation);
             const glm::vec3 view_b = glm::transpose(rotation) * (world_b - translation);
 
-            const float cx = static_cast<float>(std::max(panel.render_size.x, 1)) * 0.5f;
-            const float cy = static_cast<float>(std::max(panel.render_size.y, 1)) * 0.5f;
-            const auto [fx, fy] = lfs::rendering::computePixelFocalLengths(
+            const auto [focal_x, focal_y] = lfs::rendering::computePixelFocalLengths(
                 panel.render_size, settings.focal_length_mm);
-            if (settings.orthographic && (!std::isfinite(ortho_scale) || ortho_scale <= 0.0f)) {
+            const auto [fx, fy, cx, cy] = camera && camera->intrinsics
+                                              ? *camera->intrinsics
+                                              : lfs::rendering::CameraIntrinsics{focal_x, focal_y,
+                                                                                 panel.render_size.x * 0.5f,
+                                                                                 panel.render_size.y * 0.5f};
+            if (orthographic && (!std::isfinite(ortho_scale) || ortho_scale <= 0.0f)) {
                 return std::nullopt;
             }
 
             const std::array<GuideClipPlane, 5> clip_planes =
-                settings.orthographic
+                orthographic
                     ? std::array<GuideClipPlane, 5>{{
                           {{0.0f, 0.0f, -1.0f}, kMinViewZ},
                           {{ortho_scale, 0.0f, 0.0f}, cx},
@@ -1283,9 +1287,9 @@ namespace lfs::vis::gui {
                     : std::array<GuideClipPlane, 5>{{
                           {{0.0f, 0.0f, -1.0f}, kMinViewZ},
                           {{fx, 0.0f, -cx}, 0.0f},
-                          {{-fx, 0.0f, -cx}, 0.0f},
+                          {{-fx, 0.0f, cx - panel.render_size.x}, 0.0f},
                           {{0.0f, -fy, -cy}, 0.0f},
-                          {{0.0f, fy, -cy}, 0.0f},
+                          {{0.0f, fy, cy - panel.render_size.y}, 0.0f},
                       }};
 
             const auto clipped = clipGuideSegment(view_a, view_b, clip_planes);
@@ -1295,7 +1299,7 @@ namespace lfs::vis::gui {
             const auto& [clipped_a, clipped_b] = *clipped;
 
             const auto project_view = [&](const glm::vec3& view) -> std::optional<glm::vec2> {
-                if (settings.orthographic) {
+                if (orthographic) {
                     return glm::vec2(cx + view.x * ortho_scale,
                                      cy - view.y * ortho_scale);
                 }
@@ -3282,14 +3286,17 @@ namespace lfs::vis::gui {
                                    4.5f);
             }
 
+            // The dataset point cloud's ROI and Crop, and the training ROI, are always drawn in their role colour.
             const auto point_crop = [&](const core::NodeId id) -> const core::SceneNode* {
                 if (!scene_manager)
                     return nullptr;
                 const auto& scene = scene_manager->getScene();
                 const auto* node = scene.getNodeById(id);
                 const auto* parent = node ? scene.getNodeById(node->parent_id) : nullptr;
-                return node && ((parent && parent->type == core::NodeType::POINTCLOUD) ||
-                                isTrainingRoi(scene, *node)) ? node : nullptr;
+                return node && ((parent && isPreTrainingPointCloud(scene, *parent)) ||
+                                isTrainingRoi(scene, *node))
+                           ? node
+                           : nullptr;
             };
             const auto role_color = [](const core::CropRole role) {
                 return role == core::CropRole::Primary ? glm::vec3(0.7f, 0.3f, 1.0f)
@@ -3359,11 +3366,8 @@ namespace lfs::vis::gui {
                     const auto* node = selected.size() == 1 ? scene.getNodeById(selected.front()) : nullptr;
                     if (node && node->type != core::NodeType::POINTCLOUD)
                         node = scene.getNodeById(node->parent_id);
-                    if (node && node->type == core::NodeType::POINTCLOUD) {
-                        const auto role = UnifiedToolRegistry::instance().getActiveTool() == "builtin.crop"
-                                              ? core::CropRole::Secondary : core::CropRole::Primary;
-                        draft_base = role_color(role);
-                    }
+                    if (node && isPreTrainingPointCloud(scene, *node))
+                        draft_base = role_color(activeCropRole(node));
                 }
                 const glm::vec4 draft_color = cropGuideColor(draft_base, false, 0.0f);
                 const auto& draft = gizmo.crop_polygon_draft;
@@ -3479,9 +3483,18 @@ namespace lfs::vis::gui {
                 return;
             }
 
-            const auto panels = collectVulkanGuidePanels(viewer, viewport_layout, rendering_manager);
-            if (panels.empty()) {
-                return;
+            auto panels = collectVulkanGuidePanels(viewer, viewport_layout, rendering_manager);
+            const bool gt_compare = rendering_manager.isGTComparisonActive();
+            if (gt_compare) {
+                const auto gt = rendering_manager.getGTComparisonGuideCamera();
+                if (!gt)
+                    return;
+                auto& panel = panels.front();
+                const auto bounds = rendering_manager.getContentBounds(panel.render_size);
+                panel.pos = viewport_layout.pos + glm::vec2(bounds.x, bounds.y);
+                panel.size = {bounds.width, bounds.height};
+                panel.render_size = gt->render_size;
+                panel.camera_override = gt->camera;
             }
 
             constexpr std::array axis_colors{
@@ -3512,6 +3525,10 @@ namespace lfs::vis::gui {
                     }
                 }
 
+                if (gt_compare) {
+                    continue;
+                }
+
                 constexpr float kPivotDurationSec = 0.5f;
                 const float time_since_set = panel.viewport->camera.getSecondsSincePivotSet();
                 const bool pivot_animation_active = time_since_set < kPivotDurationSec;
@@ -3529,7 +3546,7 @@ namespace lfs::vis::gui {
                 }
             }
 
-            if (scene_manager) {
+            if (scene_manager && !gt_compare) {
                 appendCameraFrustumOverlays(params,
                                             panels,
                                             settings,
@@ -5437,7 +5454,20 @@ namespace lfs::vis::gui {
             if (viewer_) {
                 SceneManager* const scene_manager = viewer_->getSceneManager();
                 std::optional<SceneRenderState> overlay_scene_state;
-                if (scene_manager) {
+                // Polygons have no render setting; their outline follows the selection. Role volumes
+                // of the dataset point cloud and the training ROI are drawn whenever they exist.
+                const auto has_role_volume = [scene_manager](const core::SceneNode* owner) {
+                    const auto& scene = scene_manager->getScene();
+                    return owner && std::ranges::any_of(owner->children, [&scene](const core::NodeId id) {
+                               const auto* child = scene.getNodeById(id);
+                               return child && child->cropRole();
+                           });
+                };
+                if (scene_manager && (settings.show_crop_box || settings.show_ellipsoid ||
+                                      scene_manager->getSelectedNodeCropPolygonId() != core::NULL_NODE ||
+                                      has_role_volume(scene_manager->getScene().getDatasetPointCloudNode()) ||
+                                      has_role_volume(scene_manager->getScene().getNodeById(
+                                          scene_manager->getScene().getTrainingModelNodeId())))) {
                     overlay_scene_state =
                         scene_manager->buildRenderState({.metadata_only = true});
                 }
@@ -6477,7 +6507,7 @@ namespace lfs::vis::gui {
             ui_hidden_ != last_ui_layout_ui_hidden_ ||
             python_console_visible != last_ui_layout_python_console_visible_ ||
             panel_layout_.isBottomDockVisible() != last_ui_layout_bottom_dock_visible_ ||
-            left_dock_rendered != last_ui_layout_left_dock_visible_ ||
+            left_dock_rendered != last_ui_layout_left_dock_rendered_ ||
             panel_layout_.getActiveTab() != last_ui_layout_active_tab_ ||
             panel_layout_.getBottomDockActiveTab() != last_ui_layout_bottom_dock_active_tab_ ||
             reg.visibility_revision() != last_ui_layout_panel_visibility_revision_;
@@ -6501,7 +6531,7 @@ namespace lfs::vis::gui {
                 reg.suspend_input(PanelSpace::SceneHeader);
                 reg.suspend_input(PanelSpace::MainPanelTab);
             }
-            if (last_ui_layout_left_dock_visible_ && !left_dock_rendered)
+            if (last_ui_layout_left_dock_rendered_ && !left_dock_rendered)
                 reg.suspend_input(PanelSpace::LeftDock);
             ui_layout_settle_frames_ = kUiLayoutSettleFrames;
             if (ui_visibility_resize_active_ &&
@@ -6524,7 +6554,7 @@ namespace lfs::vis::gui {
             last_ui_layout_ui_hidden_ = ui_hidden_;
             last_ui_layout_python_console_visible_ = python_console_visible;
             last_ui_layout_bottom_dock_visible_ = panel_layout_.isBottomDockVisible();
-            last_ui_layout_left_dock_visible_ = left_dock_rendered;
+            last_ui_layout_left_dock_rendered_ = left_dock_rendered;
             last_ui_layout_active_tab_ = panel_layout_.getActiveTab();
             last_ui_layout_bottom_dock_active_tab_ = panel_layout_.getBottomDockActiveTab();
             last_ui_layout_panel_visibility_revision_ = reg.visibility_revision();
@@ -6988,33 +7018,48 @@ namespace lfs::vis::gui {
             panel_layout_.isRightDockCollapsed());
         RmlViewportOverlay::SplitDividerOverlayState split_divider_state;
         if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr;
-            rendering && rendering->isSplitViewActive() && !rendering->isIndependentSplitViewActive()) {
-            const auto divider_x = rendering->getSplitDividerScreenX(viewport_layout_.pos, viewport_layout_.size);
-            const auto content_bounds = rendering->getContentBounds(glm::ivec2(
-                std::max(static_cast<int>(viewport_layout_.size.x), 0),
-                std::max(static_cast<int>(viewport_layout_.size.y), 0)));
-            if (divider_x && content_bounds.width > 0.0f && content_bounds.height > 0.0f) {
-                const auto& t = theme();
-                constexpr float kSplitDividerMinWidthPx = 10.0f;
-                const float divider_width =
-                    std::max(kSplitDividerMinWidthPx * current_ui_scale_,
-                             std::round(t.viewport.border_size * current_ui_scale_ * 4.0f));
-                split_divider_state.visible = true;
-                split_divider_state.x = std::round((*divider_x - screen.work_pos.x) - divider_width * 0.5f);
-                split_divider_state.y = content_bounds.y;
-                split_divider_state.width = divider_width;
-                split_divider_state.height = content_bounds.height;
-                const auto info = rendering->getSplitViewInfo();
-                if (splitViewUsesPLYComparison(rendering->getSettings().split_view_mode)) {
-                    const float inset = 10.0f * current_ui_scale_;
-                    split_divider_state.left_name = info.left_name;
-                    split_divider_state.right_name = info.right_name;
-                    split_divider_state.left_name_right = *divider_x - screen.work_pos.x - inset;
-                    split_divider_state.right_name_right = viewport_content_offset + content_bounds.x + content_bounds.width - inset;
-                    split_divider_state.name_bottom = content_bounds.y + content_bounds.height - inset;
-                    const float left_width = *divider_x - viewport_layout_.pos.x - content_bounds.x;
-                    const float right_width = content_bounds.width - left_width;
-                    split_divider_state.name_max_width = std::max(0.0f, std::min(left_width, right_width) - 2.0f * inset);
+            rendering && rendering->isSplitViewActive()) {
+            const auto* alignment = op::modelAlignmentSession();
+            const bool model_alignment = alignment != nullptr;
+            const bool comparison_divider = !rendering->isIndependentSplitViewActive();
+            if (comparison_divider || model_alignment) {
+                const auto divider_x = rendering->getSplitDividerScreenX(viewport_layout_.pos, viewport_layout_.size);
+                const auto content_bounds = rendering->getContentBounds(glm::ivec2(
+                    std::max(static_cast<int>(viewport_layout_.size.x), 0),
+                    std::max(static_cast<int>(viewport_layout_.size.y), 0)));
+                if (divider_x && content_bounds.width > 0.0f && content_bounds.height > 0.0f) {
+                    const auto& t = theme();
+                    constexpr float kSplitDividerMinWidthPx = 10.0f;
+                    const float divider_width =
+                        std::max(kSplitDividerMinWidthPx * current_ui_scale_,
+                                 std::round(t.viewport.border_size * current_ui_scale_ * 4.0f));
+                    split_divider_state.visible = true;
+                    split_divider_state.x = std::round((*divider_x - screen.work_pos.x) - divider_width * 0.5f);
+                    split_divider_state.y = content_bounds.y;
+                    split_divider_state.width = divider_width;
+                    split_divider_state.height = content_bounds.height;
+                    auto info = rendering->getSplitViewInfo();
+                    if (alignment) {
+                        const auto& scene = viewer_->getSceneManager()->getScene();
+                        const auto* reference = scene.getNodeByUuid(alignment->nodes[0]);
+                        const auto* mobile = scene.getNodeByUuid(alignment->nodes[1]);
+                        info.left_name = alignment->composite == SplitViewPanelId::Left ? LOC("align.composite_name")
+                                                                                        : LOCF("align.reference_name", reference ? reference->name : "");
+                        info.right_name = alignment->composite == SplitViewPanelId::Right ? LOC("align.composite_name")
+                                                                                          : LOCF("align.mobile_name", mobile ? mobile->name : "");
+                    }
+                    if (alignment ||
+                        splitViewUsesPLYComparison(rendering->getSettings().split_view_mode)) {
+                        const float inset = 10.0f * current_ui_scale_;
+                        split_divider_state.left_name = info.left_name;
+                        split_divider_state.right_name = info.right_name;
+                        split_divider_state.left_name_right = *divider_x - screen.work_pos.x - inset;
+                        split_divider_state.right_name_right = viewport_content_offset + content_bounds.x + content_bounds.width - inset;
+                        split_divider_state.name_bottom = content_bounds.y + content_bounds.height - inset;
+                        const float left_width = *divider_x - viewport_layout_.pos.x - content_bounds.x;
+                        const float right_width = content_bounds.width - left_width;
+                        split_divider_state.name_max_width = std::max(0.0f, std::min(left_width, right_width) - 2.0f * inset);
+                    }
                 }
             }
         }
@@ -8066,11 +8111,13 @@ namespace lfs::vis::gui {
         }
 
         auto* align_tool = ctx.viewer->getAlignTool();
-        if (align_tool && align_tool->isEnabled() && !ui_hidden_) {
+        const auto* renderer = ctx.viewer->getRenderingManager();
+        const bool model_alignment = renderer && op::modelAlignmentSession();
+        if (align_tool && (align_tool->isEnabled() || model_alignment) && !ui_hidden_) {
             align_tool->renderUI(ctx, nullptr);
         }
         auto* scale_distance_tool = ctx.viewer->getScaleDistanceTool();
-        if (scale_distance_tool && scale_distance_tool->isEnabled() && !ui_hidden_) {
+        if (!model_alignment && scale_distance_tool && scale_distance_tool->isEnabled() && !ui_hidden_) {
             scale_distance_tool->renderUI(ctx, nullptr);
         }
     }

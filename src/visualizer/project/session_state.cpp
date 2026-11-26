@@ -5,6 +5,7 @@
 
 #include "project/session_state.hpp"
 #include "core/native_fs.hpp"
+#include "operator/ops/model_alignment_ops.hpp"
 
 #include "core/error.hpp"
 #include "core/error_bus.hpp"
@@ -2698,8 +2699,13 @@ namespace lfs::vis::project {
             }
         }
 
-        const auto settings =
-            rendering_manager->getSettings();
+        auto settings = rendering_manager->getSettings();
+        const auto alignment = op::ModelAlignmentOperator::savedViewSession();
+        if (alignment) {
+            settings.split_view_mode = alignment->previous_mode;
+            settings.split_position = alignment->previous_position;
+            settings.split_view_offset = alignment->previous_offset;
+        }
         Json bookmarks_json = Json::array();
         for (const auto& bookmark : bookmarks) {
             auto item =
@@ -2714,11 +2720,10 @@ namespace lfs::vis::project {
 
         const auto primary =
             capturePanelCameraProjectState(
-                viewer.getViewport(), settings.ortho_scale);
+                alignment ? alignment->previous_primary : viewer.getViewport(), settings.ortho_scale);
         const auto secondary =
             capturePanelCameraProjectState(
-                rendering_manager
-                    ->projectSecondaryViewport(),
+                alignment ? alignment->previous_secondary : rendering_manager->projectSecondaryViewport(),
                 settings.ortho_scale);
         const auto& tool_registry =
             UnifiedToolRegistry::instance();

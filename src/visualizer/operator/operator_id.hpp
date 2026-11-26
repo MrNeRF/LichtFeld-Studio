@@ -39,8 +39,7 @@ namespace lfs::vis::op {
         CropPolygonSet,
 
         ScaleDistancePickPoint,
-
-        CropVolumeDuplicate,
+        ModelAlignment,
 
         _Count
     };

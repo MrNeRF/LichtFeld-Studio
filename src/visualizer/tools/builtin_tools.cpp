@@ -6,8 +6,8 @@
 #include "core/editor_context.hpp"
 #include "core/events.hpp"
 #include "core/services.hpp"
+#include "gui/gizmo_manager.hpp"
 #include "gui/gui_manager.hpp"
-#include "scene/scene_manager.hpp"
 #include "unified_tool_registry.hpp"
 
 #include <initializer_list>
@@ -61,25 +61,14 @@ namespace lfs::vis {
             desc.source = ToolSource::CPP;
             desc.poll_fn = [pre_training_only = std::string_view(id) != "builtin.cropbox"] {
                 const auto* editor = services().editorOrNull();
+                // ROI and Crop exist only for the untrained point cloud of a loaded dataset.
                 if (pre_training_only && (!editor || !editor->forcePointCloudMode()))
                     return false;
-                if (const auto* manager = services().sceneOrNull()) {
-                    for (const auto id : manager->getSelectedNodeIds()) {
-                        const auto* node = manager->getScene().getNodeById(id);
-                        if (node && node->type == core::NodeType::GROUP)
-                            return false;
-                    }
-                }
                 return editor && editor->hasSelection() && !editor->isToolsDisabled();
             };
             desc.invoke_fn = [tool_id = std::string(id)] {
-                auto* editor = services().editorOrNull();
-                auto* gui = services().guiOrNull();
-                if (!editor || !gui)
-                    return;
-                editor->setActiveOperator(tool_id, "translate");
-                UnifiedToolRegistry::instance().setActiveTool(tool_id);
-                gui->gizmo().newCropTool("box");
+                if (auto* gui = services().guiOrNull())
+                    static_cast<void>(gui->gizmo().activateCropTool(tool_id));
             };
             UnifiedToolRegistry::instance().registerTool(std::move(desc));
         }

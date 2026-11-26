@@ -12,8 +12,8 @@
 #include "py_prop.hpp"
 #include "py_splat_data.hpp"
 #include "py_tensor.hpp"
-#include "visualizer/scene/external_preview.hpp"
 #include "visualizer/core/editor_context.hpp"
+#include "visualizer/scene/external_preview.hpp"
 #include <cstdint>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
@@ -259,7 +259,8 @@ namespace lfs::python {
             const auto& live = node();
             const auto role = live.cropRole();
             const auto* owner = scene_->getNodeById(live.parent_id);
-            if (!role || !owner || (owner->type != core::NodeType::POINTCLOUD && !vis::isTrainingRoi(*scene_, live)))
+            // Only the dataset point cloud's volumes and the training ROI have a pre-training role.
+            if (!role || !owner || (!vis::isPreTrainingPointCloud(*scene_, *owner) && !vis::isTrainingRoi(*scene_, live)))
                 return std::nullopt;
             return *role == core::CropRole::Secondary ? "crop" : "roi";
         }

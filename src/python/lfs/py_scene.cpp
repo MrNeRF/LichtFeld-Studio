@@ -1067,7 +1067,7 @@ namespace lfs::python {
             }
             if (camera_needs_distortion_handling(*cam)) {
                 has_any = true;
-                if (!cam->has_distortion()) {
+                if (!cam->has_distortion() && cam->camera_model_type() != core::CameraModelType::EQUIRECTANGULAR) {
                     return false;
                 }
             }
@@ -1145,7 +1145,7 @@ namespace lfs::python {
         const auto ellipsoids = scene_->getRenderableEllipsoids();
         const auto polygons = scene_->getRenderableCropPolygons();
         const auto enabled = [](const auto& volume) {
-            return volume.data && volume.data->enabled && volume.crop_effects_enabled && volume.parent_node_index >= 0;
+            return volume.data && volume.data->enabled && volume.parent_node_index >= 0;
         };
         if (!std::any_of(boxes.begin(), boxes.end(), enabled) &&
             !std::any_of(ellipsoids.begin(), ellipsoids.end(), enabled) &&
@@ -1776,9 +1776,10 @@ namespace lfs::python {
             .def_ro("locked", &PySelectionGroup::locked, "Whether the group is locked from editing");
 
         nb::class_<PyCropBox>(m, "CropBox")
-            .def_prop_ro("role", [](const PyCropBox& self) {
-                return self.data()->role == core::CropRole::Secondary ? "secondary" : "primary";
-            }, "Stable crop role: primary or secondary")
+            .def_prop_ro(
+                "role",
+                [](const PyCropBox& self) { return self.data()->role == core::CropRole::Secondary ? "secondary" : "primary"; },
+                "Stable crop role: primary or secondary")
             .def_prop_ro("__property_group__", &PyCropBox::property_group, "Property group name for introspection")
             .def("get", &PyCropBox::get, nb::arg("name"), "Get property value by name")
             .def("set", &PyCropBox::set, nb::arg("name"), nb::arg("value"), "Set property value by name")
@@ -1802,9 +1803,10 @@ namespace lfs::python {
             .def("__dir__", &PyCropBox::python_dir, "List available attributes");
 
         nb::class_<PyEllipsoid>(m, "Ellipsoid")
-            .def_prop_ro("role", [](const PyEllipsoid& self) {
-                return self.data()->role == core::CropRole::Secondary ? "secondary" : "primary";
-            }, "Stable crop role: primary or secondary")
+            .def_prop_ro(
+                "role",
+                [](const PyEllipsoid& self) { return self.data()->role == core::CropRole::Secondary ? "secondary" : "primary"; },
+                "Stable crop role: primary or secondary")
             .def_prop_ro("__property_group__", &PyEllipsoid::property_group, "Property group name for introspection")
             .def("get", &PyEllipsoid::get, nb::arg("name"), "Get property value by name")
             .def("set", &PyEllipsoid::set, nb::arg("name"), nb::arg("value"), "Set property value by name")
@@ -1828,9 +1830,10 @@ namespace lfs::python {
             .def("__dir__", &PyEllipsoid::python_dir, "List available attributes");
 
         nb::class_<PyCropPolygon>(m, "CropPolygon")
-            .def_prop_ro("role", [](const PyCropPolygon& self) {
-                return self.data()->role == core::CropRole::Secondary ? "secondary" : "primary";
-            }, "Stable crop role: primary or secondary")
+            .def_prop_ro(
+                "role",
+                [](const PyCropPolygon& self) { return self.data()->role == core::CropRole::Secondary ? "secondary" : "primary"; },
+                "Stable crop role: primary or secondary")
             .def_prop_ro("__property_group__", &PyCropPolygon::property_group, "Property group name for introspection")
             .def_prop_ro("vertices", &PyCropPolygon::vertices, "Outline vertices (x, y) in the node's local XY plane")
             .def("get", &PyCropPolygon::get, nb::arg("name"), "Get property value by name")

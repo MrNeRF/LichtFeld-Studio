@@ -31,6 +31,7 @@
 #include "io/exporter.hpp"
 #include "io/video/video_export_options.hpp"
 #include "mcp/mcp_http_server.hpp"
+#include "operator/ops/model_alignment_ops.hpp"
 #include "preferences.hpp"
 #include "preprocessing/preprocess.hpp"
 #include "py_command.hpp"
@@ -55,9 +56,9 @@
 #include "visualizer/core/editor_context.hpp"
 #include "visualizer/core/services.hpp"
 #include "visualizer/gui/gizmo_manager.hpp"
-#include "visualizer/gui_capabilities.hpp"
 #include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui/panel_registry.hpp"
+#include "visualizer/gui_capabilities.hpp"
 #include "visualizer/input/sdl_coordinate_utils.hpp"
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/operation/undo_history.hpp"
@@ -71,6 +72,8 @@
 #include "visualizer/tools/unified_tool_registry.hpp"
 #include "visualizer/training/training_manager.hpp"
 #include "visualizer/visualizer.hpp"
+#include "visualizer/visualizer_impl.hpp"
+#include "vr/openxr_runtimes.hpp"
 #include "window/window_manager.hpp"
 #include <RmlUi/Core/Core.h>
 #include <RmlUi/Core/ElementDocument.h>
@@ -131,6 +134,7 @@ namespace lfs::python {
             event.type = vis::op::ModalEvent::Type::NONE;
             return vis::op::operators().dispatchModalEvent(event);
         }
+
     } // namespace
 
     using lfs::training::CommandCenter;
@@ -172,6 +176,16 @@ namespace lfs::python {
                     return viewer->postWork(std::move(work));
                 },
                 std::forward<F>(fn), [] {});
+        }
+
+        std::optional<vis::op::OperatorResult> dispatchModelAlignmentUiAction(vis::PointPickState::UiAction action) {
+            return invoke_on_viewer([action]() -> std::optional<vis::op::OperatorResult> {
+                auto* alignment = vis::op::ModelAlignmentOperator::active();
+                if (!alignment)
+                    return std::nullopt;
+                return dispatchPointPickUiAction(vis::op::BuiltinOp::ModelAlignment, alignment->pointState(), action);
+            },
+                                    std::nullopt);
         }
 
         std::string get_class_id(nb::object cls) {
@@ -4246,18 +4260,15 @@ namespace lfs::python {
                 return invoke_on_viewer([role] {
                     const std::string id = "builtin." + role;
                     auto& registry = vis::UnifiedToolRegistry::instance();
-                    if (!registry.poll(id))
-                        return false;
-                    registry.invoke(id);
-                    const auto* editor = get_editor_context();
-                    const auto* manager = get_scene_manager();
                     auto* gui = get_gui_manager();
-                    const auto* volume = manager && gui ? manager->getScene().getNodeById(gui->gizmo().cropToolVolumeNodeId()) : nullptr;
-                    const auto expected_role = role == "roi" ? core::CropRole::Primary : core::CropRole::Secondary;
-                    return editor && editor->getActiveOperator() == id && volume && volume->cropRole() == expected_role;
-                }, false);
+                    if (!gui || !registry.poll(id) || !gui->gizmo().activateCropTool(id))
+                        return false;
+                    markProjectSessionChapterCommitted("VIEW");
+                    return true;
+                },
+                                        false);
             },
-            nb::arg("role"), "Activate the pre-training roi or crop tool and its volume");
+            nb::arg("role"), "Activate the pre-training roi or crop tool and select its volume, creating a box when there is none");
 
         m.def(
             "set_active_operator",
@@ -4569,11 +4580,10 @@ namespace lfs::python {
         m.def(
             "set_crop_tool_shape",
             [](const std::string& shape) {
-                invoke_on_viewer([shape = shape] {
-                    if (auto* const gui = lfs::python::get_gui_manager())
-                        gui->gizmo().setCropToolShape(shape);
-                    markProjectSessionChapterCommitted("VIEW");
-                });
+                if (auto* const gui = lfs::python::get_gui_manager()) {
+                    gui->gizmo().setCropToolShape(shape);
+                }
+                markProjectSessionChapterCommitted("VIEW");
             },
             nb::arg("shape"),
             "Set the active crop tool shape: box, ellipsoid, or polygon");
@@ -4591,11 +4601,10 @@ namespace lfs::python {
         m.def(
             "set_crop_tool_operation",
             [](const std::string& operation) {
-                invoke_on_viewer([operation = operation] {
-                    if (auto* const gui = lfs::python::get_gui_manager())
-                        gui->gizmo().setCropToolOperation(operation);
-                    markProjectSessionChapterCommitted("VIEW");
-                });
+                if (auto* const gui = lfs::python::get_gui_manager()) {
+                    gui->gizmo().setCropToolOperation(operation);
+                }
+                markProjectSessionChapterCommitted("VIEW");
             },
             nb::arg("operation"),
             "Set the active crop or selection-volume gizmo operation: translate, rotate, or scale");
@@ -4609,102 +4618,6 @@ namespace lfs::python {
                 return "translate";
             },
             "Get the active crop or selection-volume gizmo operation");
-
-        m.def("crop_group_enabled", [](const std::string& uuid) {
-            const auto parsed=lfs::core::Uuid::from_string(uuid);
-            if (!parsed) return false;
-            return invoke_on_viewer([uuid=*parsed] {
-                auto* sm=lfs::vis::services().sceneOrNull();
-                const auto* owner=sm ? sm->getScene().getNodeByUuid(uuid) : nullptr;
-                return owner && owner->type==lfs::core::NodeType::SPLAT && owner->crop_effects_enabled;
-            },false); }, nb::arg("owner_uuid"), "Read the collective crop gate on an exact splat owner");
-        m.def("set_crop_group_enabled", [](const std::string& uuid, bool enabled) {
-            const auto parsed=lfs::core::Uuid::from_string(uuid);
-            if (!parsed) return false;
-            return invoke_on_viewer([uuid=*parsed,enabled] {
-                auto* sm=lfs::vis::services().sceneOrNull();
-                return sm && static_cast<bool>(sm->setSplatCropGroupEnabled(uuid,enabled));
-            },false); }, nb::arg("owner_uuid"), nb::arg("enabled"), "Toggle the collective crop gate without changing individual flags");
-        for (const bool bake : {false, true}) {
-            m.def(bake ? "bake_crop_group" : "delete_crop_group", [bake](const std::string& uuid) {
-                const auto parsed=lfs::core::Uuid::from_string(uuid);
-                if (!parsed) return false;
-                return invoke_on_viewer([uuid=*parsed,bake] {
-                    auto* sm=lfs::vis::services().sceneOrNull();
-                    return sm && static_cast<bool>(bake ? sm->bakeSplatCropGroup(uuid) : sm->deleteSplatCropGroup(uuid));
-                },false); }, nb::arg("owner_uuid"), bake ? "Apply enabled crop volumes as one undoable action" : "Remove all crop volumes as one undoable action");
-        }
-
-        m.def(
-            "finish_crop_tool", []() {
-                invoke_on_viewer([] {
-                    if (auto* gui = lfs::python::get_gui_manager())
-                        gui->gizmo().finishCropTool();
-                });
-            },
-            "Finish crop editing while retaining the editable volume and original geometry");
-        m.def(
-            "is_crop_tool_shape_locked", [] {
-                return invoke_on_viewer([] {
-                    auto* gui = lfs::python::get_gui_manager();
-                    return gui && gui->gizmo().isCropToolShapeLocked();
-                },
-                                        false);
-            },
-            "Whether editing an existing crop keeps its saved shape type");
-        m.def(
-            "change_crop_tool_shape", [](const std::string& shape) {
-                return invoke_on_viewer([shape = shape] {
-                    auto* gui = lfs::python::get_gui_manager();
-                    return gui && gui->gizmo().changeCropToolShape(shape);
-                },
-                                        false);
-            },
-            nb::arg("shape"), "Change only the crop being edited, preserving its identity and siblings");
-        m.def(
-            "set_crop_polygon_outline", [](const std::string& uuid, const std::vector<std::array<float, 2>>& points) {
-                const auto parsed = core::Uuid::from_string(uuid);
-                if (!parsed)
-                    return false;
-                return invoke_on_viewer([uuid = *parsed, points] {
-                    auto* manager = get_scene_manager();
-                    auto* node = manager ? manager->getScene().getNodeByUuid(uuid) : nullptr;
-                    if (!node || !node->crop_polygon)
-                        return false;
-                    const auto* editor = vis::services().editorOrNull();
-                    if (manager->getScene().isNodeEffectivelyLocked(node->id) ||
-                        (editor && editor->isToolsDisabled()) || vis::op::operators().hasModalOperator())
-                        return false;
-                    std::vector<glm::vec2> vertices;
-                    vertices.reserve(points.size());
-                    for (const auto& p : points)
-                        vertices.emplace_back(p[0], p[1]);
-                    const auto result = vis::cap::setCropPolygonOutline(
-                        *manager, get_rendering_manager(), node->id, std::move(vertices));
-                    return static_cast<bool>(result);
-                }, false);
-            },
-            nb::arg("uuid"), nb::arg("vertices"), "Update a crop polygon outline in one undo step");
-
-        m.def(
-            "edit_crop_tool", [](const std::string& uuid) {
-                const auto parsed = lfs::core::Uuid::from_string(uuid);
-                if (!parsed)
-                    return;
-                invoke_on_viewer([uuid = *parsed] {
-                    if (auto* gui = lfs::python::get_gui_manager())
-                        gui->gizmo().editCropTool(uuid);
-                });
-            },
-            nb::arg("uuid"), "Edit an existing crop volume without creating another");
-        m.def(
-            "new_crop_tool", [](const std::string& shape) {
-                invoke_on_viewer([shape = shape] {
-                    if (auto* gui = lfs::python::get_gui_manager())
-                        gui->gizmo().newCropTool(shape);
-                });
-            },
-            nb::arg("shape"), "Create another independent crop on the selected splat");
 
         m.def(
             "apply_crop_tool",
@@ -4723,6 +4636,36 @@ namespace lfs::python {
             "Apply the active crop tool primitive through the node-backed crop command path");
 
         m.def(
+            "set_crop_polygon_outline", [](const std::string& uuid, const std::vector<std::array<float, 2>>& points) {
+                const auto parsed = core::Uuid::from_string(uuid);
+                if (!parsed)
+                    return false;
+                return invoke_on_viewer([uuid = *parsed, points] {
+                    auto* manager = get_scene_manager();
+                    const auto* node = manager ? manager->getScene().getNodeByUuid(uuid) : nullptr;
+                    if (!node || !node->crop_polygon)
+                        return false;
+                    // Same availability as the crop tool: no edits while locked, tools are disabled or a
+                    // modal runs, and the retained training ROI stays fixed while training is active.
+                    auto& scene = manager->getScene();
+                    const auto* editor = vis::services().editorOrNull();
+                    const auto* trainer = vis::services().trainerOrNull();
+                    if (scene.isNodeEffectivelyLocked(node->id) || (editor && editor->isToolsDisabled()) ||
+                        vis::op::operators().hasModalOperator() ||
+                        (vis::isTrainingRoi(scene, *node) && trainer && trainer->isTrainingActive()))
+                        return false;
+                    std::vector<glm::vec2> vertices;
+                    vertices.reserve(points.size());
+                    for (const auto& p : points)
+                        vertices.emplace_back(p[0], p[1]);
+                    return static_cast<bool>(vis::cap::setCropPolygonOutline(
+                        *manager, get_rendering_manager(), node->id, std::move(vertices)));
+                },
+                                        false);
+            },
+            nb::arg("uuid"), nb::arg("vertices"), "Update a crop polygon outline in one undo step");
+
+        m.def(
             "start_crop_polygon",
             []() {
                 if (auto* const gui = lfs::python::get_gui_manager()) {
@@ -4730,6 +4673,62 @@ namespace lfs::python {
                 }
             },
             "Edit the selected splat's or point cloud's crop polygon, or start drawing one on a camera-facing plane");
+
+        nb::enum_<vis::op::ModelAlignmentDisplayMode>(m, "ModelAlignmentDisplayMode")
+            .value("SEPARATE", vis::op::ModelAlignmentDisplayMode::Separate)
+            .value("OVERLAY_LEFT", vis::op::ModelAlignmentDisplayMode::OverlayLeft)
+            .value("OVERLAY_RIGHT", vis::op::ModelAlignmentDisplayMode::OverlayRight);
+        nb::class_<vis::op::ModelAlignmentState>(m, "ModelAlignmentState")
+            .def_ro("active", &vis::op::ModelAlignmentState::active)
+            .def_ro("preview", &vis::op::ModelAlignmentState::preview)
+            .def_ro("can_apply", &vis::op::ModelAlignmentState::can_apply)
+            .def_ro("linked", &vis::op::ModelAlignmentState::linked)
+            .def_ro("display_mode", &vis::op::ModelAlignmentState::display_mode)
+            .def_ro("can_swap_roles", &vis::op::ModelAlignmentState::can_swap_roles)
+            .def_ro("can_delete_pair", &vis::op::ModelAlignmentState::can_delete_pair)
+            .def_ro("can_undo", &vis::op::ModelAlignmentState::can_undo);
+        m.def("get_model_alignment_state", [] {
+            if (!vis::op::operators().isModal(vis::op::BuiltinOp::ModelAlignment)) return vis::op::ModelAlignmentState{};
+            return invoke_on_viewer([] {
+                const auto* alignment = vis::op::ModelAlignmentOperator::active();
+                return alignment ? alignment->state() : vis::op::ModelAlignmentState{};
+            }, vis::op::ModelAlignmentState{}); }, "Current model alignment controls with named fields");
+        m.def("swap_model_alignment_roles", [] { invoke_on_viewer([] {
+                                                     auto* alignment = vis::op::ModelAlignmentOperator::active();
+                                                     const auto* scene = vis::services().sceneOrNull();
+                                                     if (alignment && scene && alignment->state().can_swap_roles)
+                                                         alignment->swapRoles(scene->getScene());
+                                                 }); }, "Swap reference and moving model before picking points");
+        m.def("set_model_alignment_display", [](vis::op::ModelAlignmentDisplayMode mode) { invoke_on_viewer([mode] {
+                                                                                               if (auto* alignment = vis::op::ModelAlignmentOperator::active()) {
+                                                                                                   alignment->setComposite(mode == vis::op::ModelAlignmentDisplayMode::Separate ? std::nullopt : std::optional{mode == vis::op::ModelAlignmentDisplayMode::OverlayLeft ? vis::SplitViewPanelId::Left : vis::SplitViewPanelId::Right});
+                                                                                               }
+                                                                                           }); }, nb::arg("mode"), "Choose separate models or an overlay in the left or right panel");
+        m.def("set_model_alignment_camera_link", [](bool linked) { invoke_on_viewer([linked] {
+                                                                       if (auto* alignment = vis::op::ModelAlignmentOperator::active(); alignment && alignment->state().linked != linked)
+                                                                           alignment->toggleCameraLink();
+                                                                   }); }, nb::arg("linked"), "Link or unlink navigation in the alignment preview");
+        m.def("cancel_model_alignment", [] { invoke_on_viewer([] {
+                                                 if (vis::op::operators().isModal(vis::op::BuiltinOp::ModelAlignment))
+                                                     vis::op::operators().cancelModalOperator();
+                                             }); }, "Cancel model alignment and restore the previous views");
+        m.def("undo_model_alignment", [] { invoke_on_viewer([] {
+                                               if (!vis::op::operators().isModal(vis::op::BuiltinOp::ModelAlignment))
+                                                   return;
+                                               vis::op::ModalEvent event{};
+                                               event.type = vis::op::ModalEvent::Type::ACTION;
+                                               event.data = vis::op::ActionEvent{vis::input::Action::UNDO, 0, {0, 0}};
+                                               (void)vis::op::operators().dispatchModalEvent(event);
+                                           }); }, "Undo the last point edit or exit alignment preview");
+        m.def("delete_model_alignment_pair", [] { invoke_on_viewer([] {
+                                                      if (auto* alignment = vis::op::ModelAlignmentOperator::active())
+                                                          (void)dispatchPointPickUiAction(vis::op::BuiltinOp::ModelAlignment, alignment->pointState(),
+                                                                                          vis::PointPickState::UiAction::DeleteSelected);
+                                                  }); }, "Delete the selected matching point pair");
+
+        m.def("apply_model_alignment", [] { return dispatchModelAlignmentUiAction(vis::PointPickState::UiAction::Apply) == vis::op::OperatorResult::FINISHED; }, "Apply the matching-point alignment and end the session");
+        m.def("clear_model_alignment_points", [] { (void)dispatchModelAlignmentUiAction(vis::PointPickState::UiAction::Clear); }, "Clear matching points while keeping them available to Undo");
+        m.def("toggle_model_alignment_preview", [] { (void)dispatchModelAlignmentUiAction(vis::PointPickState::UiAction::TogglePreview); }, "Switch between picking matching points and previewing model alignment");
 
         m.def(
             "can_apply_align",
@@ -6358,6 +6357,7 @@ namespace lfs::python {
                 result["resolution_scale"] = preferences.resolution_scale;
                 result["scene_units_per_meter"] = preferences.scene_units_per_meter;
                 result["move_speed"] = preferences.move_speed;
+                result["show_hands"] = preferences.show_hands;
                 return result;
             },
             "Get the VR preferences");
@@ -6365,18 +6365,47 @@ namespace lfs::python {
         m.def(
             "set_vr_preferences",
             [](const bool enabled, const float resolution_scale, const float scene_units_per_meter,
-               const float move_speed, const bool persist) {
+               const float move_speed, const bool show_hands, const bool persist) {
                 invoke_on_viewer([=] {
                     lfs::core::events::cmd::SetVrPreferences{.enabled = enabled,
                                                              .resolution_scale = resolution_scale,
                                                              .scene_units_per_meter = scene_units_per_meter,
                                                              .move_speed = move_speed,
+                                                             .show_hands = show_hands,
                                                              .persist = persist}
                         .emit();
                 });
             },
             nb::arg("enabled"), nb::arg("resolution_scale"), nb::arg("scene_units_per_meter"), nb::arg("move_speed"),
-            nb::arg("persist") = true, "Set the VR preferences; VR support takes effect after restart");
+            nb::arg("show_hands") = true, nb::arg("persist") = true,
+            "Set the VR preferences; VR support takes effect after restart");
+
+        m.def(
+            "get_vr_runtimes",
+            [] {
+                const auto runtimes = vis::vr::installedOpenXrRuntimes();
+                nb::dict result;
+                result["active"] = runtimes.active;
+                result["selected"] = vis::UserPreferences::instance().vrRuntime();
+                nb::list installed;
+                for (const auto& runtime : runtimes.installed) {
+                    nb::dict entry;
+                    entry["name"] = runtime.name;
+                    entry["manifest"] = runtime.manifest;
+                    installed.append(entry);
+                }
+                result["installed"] = installed;
+                return result;
+            },
+            "Get the OpenXR runtimes installed on this computer, the name of the system's active one, and the "
+            "manifest of the one chosen for VR (empty: the active one)");
+
+        m.def(
+            "set_vr_runtime",
+            [](const std::string& manifest) { vis::UserPreferences::instance().setVrRuntime(manifest); },
+            nb::arg("manifest"),
+            "Choose the OpenXR runtime VR uses by its manifest path; empty follows the system's active runtime. "
+            "Takes effect after restart");
 
         m.def(
             "get_mcp_port_override",

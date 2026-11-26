@@ -54,6 +54,10 @@ namespace lfs::vis {
         // Init fails when the GPU chosen for rendering is not this device.
         std::function<VkPhysicalDevice(VkInstance)> required_physical_device;
         std::function<VkResult(VkPhysicalDevice, const VkDeviceCreateInfo&, VkDevice&)> create_device;
+        // Extensions to enable as well wherever the driver has them: what such
+        // an API asks of an instance and a device it joins once they exist.
+        std::vector<std::string> wanted_instance_extensions;
+        std::vector<std::string> wanted_device_extensions;
     };
 
     class VulkanContext {
@@ -222,6 +226,9 @@ namespace lfs::vis {
 
         [[nodiscard]] VkInstance instance() const { return instance_; }
         [[nodiscard]] VkPhysicalDevice physicalDevice() const { return physical_device_; }
+        // Whether the instance or the device was created with this extension.
+        [[nodiscard]] bool instanceExtensionEnabled(std::string_view name) const;
+        [[nodiscard]] bool deviceExtensionEnabled(std::string_view name) const;
         [[nodiscard]] VkDevice device() const { return device_; }
         [[nodiscard]] VkQueue graphicsQueue() const { return graphics_queue_; }
         [[nodiscard]] uint32_t graphicsQueueFamily() const { return graphics_queue_family_; }
@@ -634,6 +641,8 @@ namespace lfs::vis {
         std::mutex graphics_queue_mutex_;
         std::shared_mutex device_queue_access_mutex_;
         VulkanDeviceHooks device_hooks_;
+        std::vector<std::string> instance_extensions_;
+        std::vector<std::string> device_extensions_;
         bool swapchain_maintenance1_enabled_ = false;
         bool swapchain_present_scaling_enabled_ = false;
         bool has_push_descriptor_ = false;

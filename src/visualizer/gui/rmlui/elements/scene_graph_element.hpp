@@ -44,15 +44,14 @@ namespace lfs::vis::gui {
             size_t count = 0;
             bool all_visible = false;
             bool any_visible = false;
-            bool has_crop_volume = false;
             bool all_training_compatible = false;
             bool all_training_enabled = false;
             bool any_training_enabled = false;
             bool all_delete_enabled = false;
         };
 
-        LFS_VIS_API explicit SceneGraphElement(const Rml::String& tag);
-        LFS_VIS_API ~SceneGraphElement() override;
+        explicit SceneGraphElement(const Rml::String& tag);
+        ~SceneGraphElement() override;
 
         void setPanelScreenOffset(float x, float y);
         void setFilterText(std::string_view text);
@@ -67,7 +66,7 @@ namespace lfs::vis::gui {
 
         [[nodiscard]] size_t rootCount() const { return root_count_; }
         [[nodiscard]] size_t modelCount() const { return model_count_; }
-        [[nodiscard]] size_t nodeCount() const { return real_node_count_; }
+        [[nodiscard]] size_t nodeCount() const { return node_snapshots_.size(); }
         [[nodiscard]] size_t selectedCount() const { return selected_ids_.size(); }
         [[nodiscard]] std::unordered_set<int> visibleCameraUids() const;
         [[nodiscard]] SelectionActionState selectionActionState() const;
@@ -121,10 +120,6 @@ namespace lfs::vis::gui {
             std::string name;
             bool visible = true;
             bool camera_frustum_container = false;
-            bool crop_volume = false;
-            bool roi_volume = false;
-            core::NodeId crop_group_owner = core::NULL_NODE;
-            bool crop_parent_enabled = true;
             bool has_children = false;
             bool training_enabled = true;
             bool training_mixed = false;
@@ -141,6 +136,7 @@ namespace lfs::vis::gui {
             bool rename_enabled = false;
             int camera_uid = -1;
             std::optional<std::string> camera_loss_icon_color;
+            bool roi_volume = false;
         };
 
         struct FlatRow {
@@ -167,6 +163,7 @@ namespace lfs::vis::gui {
             bool can_rename = false;
             bool rename_enabled = false;
             std::optional<std::string> camera_loss_icon_color;
+            bool roi_volume = false;
         };
 
         struct RowSlot {
@@ -174,7 +171,6 @@ namespace lfs::vis::gui {
             Rml::Element* content = nullptr;
             Rml::Element* selection_checkbox = nullptr;
             Rml::Element* vis_icon = nullptr;
-            Rml::Element* crop_toggle = nullptr;
             Rml::Element* delete_icon = nullptr;
             Rml::Element* training_toggle_icon = nullptr;
             Rml::Element* training_mixed_mark = nullptr;
@@ -239,6 +235,7 @@ namespace lfs::vis::gui {
         void collectHierarchyIds(core::NodeId node_id,
                                  std::unordered_set<core::NodeId>& ids) const;
         void handlePrimaryClick(core::NodeId node_id);
+        [[nodiscard]] bool selectionContainsOnlyCamerasInGroup(core::NodeId node_id) const;
         void handleSecondaryClick(core::NodeId node_id, float mouse_x, float mouse_y);
         bool activateNode(core::NodeId node_id);
         bool selectKeyboardRow(size_t row_index, bool extend, bool toggle);
@@ -281,14 +278,6 @@ namespace lfs::vis::gui {
         Rml::Element* header_arrow_el_ = nullptr;
         Rml::Element* header_label_el_ = nullptr;
 
-        [[nodiscard]] core::NodeId cropGroupOwner(core::NodeId id) const {
-            const auto it = node_snapshots_.find(id);
-            return it == node_snapshots_.end() ? core::NULL_NODE : it->second.crop_group_owner;
-        }
-        std::unordered_map<core::Uuid, core::NodeId> crop_group_ids_;
-        core::NodeId next_crop_group_id_ = -2;
-        core::NodeId selected_crop_group_ = core::NULL_NODE;
-        size_t real_node_count_ = 0;
         std::vector<RowSlot> row_slots_;
         std::unordered_map<core::NodeId, NodeSnapshot> node_snapshots_;
         std::vector<core::NodeId> root_ids_;

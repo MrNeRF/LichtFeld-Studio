@@ -35,6 +35,7 @@
 #include "operator/ops/align_ops.hpp"
 #include "operator/ops/crop_polygon_ops.hpp"
 #include "operator/ops/edit_ops.hpp"
+#include "operator/ops/model_alignment_ops.hpp"
 #include "operator/ops/scale_distance_ops.hpp"
 #include "operator/ops/scene_ops.hpp"
 #include "operator/ops/selection_ops.hpp"
@@ -336,8 +337,8 @@ namespace lfs::vis {
         rendering_manager_->setShaderService(shader_service_.get());
         gui_manager_->sequencer().setShaderService(shader_service_.get());
 
-        // Set initial antialiasing
-        RenderSettings initial_settings;
+        // Keep user viewport defaults while applying startup options.
+        auto initial_settings = rendering_manager_->getSettings();
         initial_settings.antialiasing = options.antialiasing;
         initial_settings.scene_upscaler = options.safe_mode
                                               ? "native"
@@ -1084,8 +1085,12 @@ namespace lfs::vis {
             viewport_.setViewMatrix(*rotation, eye);
             viewport_.camera.setPivot(target);
 
-            if (rendering_manager_)
+            if (rendering_manager_) {
+                if (isOnViewerThread())
+                    if (auto* alignment = op::ModelAlignmentOperator::active())
+                        alignment->syncCamera(viewport_);
                 rendering_manager_->markCameraPoseChanged();
+            }
         });
         callback_cleanup_.add([] { vis::set_set_view_callback(nullptr); });
 
@@ -1108,6 +1113,9 @@ namespace lfs::vis {
             vp.setViewMatrix(*rotation, eye);
             vp.camera.setPivot(target);
 
+            if (isOnViewerThread())
+                if (auto* alignment = op::ModelAlignmentOperator::active())
+                    alignment->syncCamera(vp);
             rendering_manager_->markCameraPoseChanged();
         });
         callback_cleanup_.add([] { vis::set_set_view_for_panel_callback(nullptr); });
@@ -1510,6 +1518,17 @@ namespace lfs::vis {
         // NOTE: Training control and project-save commands
         // are now handled by TrainerManager::setupEventHandlers()
 
+        cmd::DetectVr::when([this](const auto&) {
+            auto* const context = window_manager_ ? window_manager_->getVulkanContext() : nullptr;
+            if (!context || vr_active_ || !UserPreferences::instance().vrPreferences().enabled)
+                return;
+            if (!vr_->prepareOn(*context)) {
+                lfs::ErrorBus::instance().publish(vrNotice(
+                    lfs::ErrorCode::Unavailable, LOCF(vr_->statusKey(), vr_->statusDetail()),
+                    LFS_SOURCE_SITE_CURRENT()));
+            }
+            publishVrState();
+        });
         cmd::SetVrActive::when([this](const auto& command) {
             vr_request_ = command.active;
             wakeMainLoop();
@@ -1521,9 +1540,12 @@ namespace lfs::vis {
             preferences.setVrPreferences({.enabled = command.enabled,
                                           .resolution_scale = command.resolution_scale,
                                           .scene_units_per_meter = command.scene_units_per_meter,
-                                          .move_speed = command.move_speed},
+                                          .move_speed = command.move_speed,
+                                          .show_hands = command.show_hands},
                                          command.persist);
-            vr_->setMoveSpeed(preferences.vrPreferences().move_speed);
+            const auto applied = preferences.vrPreferences();
+            vr_->setMoveSpeed(applied.move_speed);
+            vr_->setShowHands(applied.show_hands);
         });
 
         cmd::ResetTraining::when([this](const auto&) {
@@ -2228,9 +2250,13 @@ namespace lfs::vis {
         if (!window_initialized_) {
             {
                 LOG_TIMER("startup.window_manager.init"); // wraps Vulkan instance/device/swapchain bring-up
-                if (UserPreferences::instance().vrPreferences().enabled && !vr_->prepare())
+                const bool vr_wanted = UserPreferences::instance().vrPreferences().enabled;
+                if (vr_wanted && !vr_->prepare())
                     LOG_WARN("VR unavailable: {}", vr_->statusDetail());
-                const auto vr_hooks = vr_->available() ? std::optional(vr_->deviceHooks()) : std::nullopt;
+                // Without a headset yet, the device is still made fit to join one later.
+                const auto vr_hooks = vr_->available() ? std::optional(vr_->deviceHooks())
+                                      : vr_wanted      ? std::optional(vr::OpenXrService::lateJoinHooks())
+                                                       : std::nullopt;
                 if (!window_manager_->init(vr_hooks ? &*vr_hooks : nullptr)) {
                     return false;
                 }
@@ -2418,11 +2444,12 @@ namespace lfs::vis {
         }
 
         if (tool_context_ && !vr_active_) {
-            if (selection_tool_ && selection_tool_->isEnabled())
+            const bool model_alignment = rendering_manager_ && op::modelAlignmentSession();
+            if (!model_alignment && selection_tool_ && selection_tool_->isEnabled())
                 selection_tool_->update(*tool_context_);
-            if (align_tool_ && align_tool_->isEnabled())
+            if (align_tool_ && (align_tool_->isEnabled() || model_alignment))
                 align_tool_->update(*tool_context_);
-            if (scale_distance_tool_ && scale_distance_tool_->isEnabled())
+            if (!model_alignment && scale_distance_tool_ && scale_distance_tool_->isEnabled())
                 scale_distance_tool_->update(*tool_context_);
         }
 
@@ -3202,6 +3229,8 @@ namespace lfs::vis {
             }
             {
                 auto& interop = rendering_manager_->viewportInterop();
+                // The mirrored eye has the headset's aspect ratio, not the viewport's.
+                interop.setSceneImageCropToFill(vr_active_);
                 if (vulkan_frame.external_image != VK_NULL_HANDLE) {
                     interop.setExternalSceneImage(vulkan_frame.external_image,
                                                   vulkan_frame.external_image_view,
@@ -3669,6 +3698,8 @@ namespace lfs::vis {
             }))
             return {};
         if (scene_manager_ && scene_manager_->canClearScene()) {
+            if (rendering_manager_ && op::modelAlignmentSession())
+                op::operators().cancelModalOperator();
             data_loader_->cancelPendingImports();
             if (gui_manager_)
                 gui_manager_->asyncTasks().cancelImport(false);
@@ -4361,6 +4392,8 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::deactivateProjectTools() {
+        if (rendering_manager_ && op::modelAlignmentSession())
+            op::operators().cancelModalOperator();
         lfs::core::events::tools::SetToolbarTool{
             .tool_mode = static_cast<int>(ToolType::None)}
             .emit();
@@ -4824,6 +4857,8 @@ namespace lfs::vis {
 
     void VisualizerImpl::projectMarkSessionChapterCommitted(
         const std::string_view chapter) {
+        if (chapter == "VIEW" && rendering_manager_ && op::modelAlignmentSession())
+            return;
         if (project_lifecycle_ &&
             !applying_project_session_restore_.load(
                 std::memory_order_acquire)) {

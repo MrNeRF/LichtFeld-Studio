@@ -1,0 +1,21 @@
+From b283ba36eea52dc525ab4c9324ae6de2055d1191 Mon Sep 17 00:00:00 2001
+From: HackAss2002 <HackAss2002@inbox.ru>
+Date: Thu, 4 Sep 2025 20:48:26 +0300
+Subject: [PATCH] Add algorithm include (#980)
+
+---
+ src/draco/io/ply_reader.cc | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/draco/io/ply_reader.cc b/src/draco/io/ply_reader.cc
+index ea7f2689a9f6a6e6d2c45093696a4ef2f946eace..0da9ab5fe816febfbc9b9ecf0762cae98ec67b28 100644
+--- a/src/draco/io/ply_reader.cc
++++ b/src/draco/io/ply_reader.cc
+@@ -14,6 +14,7 @@
+ //
+ #include "draco/io/ply_reader.h"
+ 
++#include <algorithm>
+ #include <array>
+ #include <regex>
+ 

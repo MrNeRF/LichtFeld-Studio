@@ -4,5 +4,12 @@
 <div class="setting-row setting-row--aligned" data-class-hidden="!is_distinct"><span class="setting-row__label-col">@tr:scene.camera_overlap</span><div class="setting-row__control-col setting-row__control-col--slider"><input type="range" class="setting-slider" data-value="overlap" min="0" max="100" step="1"/><span class="slider-value">{{overlap}}%</span></div></div>
 <div class="setting-row setting-row--aligned" data-if="is_cropbox"><span class="setting-row__label-col">@tr:scene.camera_crop_box</span><div class="setting-row__control-col setting-row__control-col--fill"><select data-value="cropbox_id"><option value="">@tr:scene.camera_select_cropbox</option><option data-for="crop : cropboxes" data-attr-value="crop.id">{{crop.name}}</option></select></div></div>
 <div class="setting-row setting-row--aligned" data-class-hidden="!is_cropbox"><span class="setting-row__label-col">@tr:scene.camera_coverage</span><div class="setting-row__control-col setting-row__control-col--slider"><input type="range" class="setting-slider" data-value="coverage" min="0" max="100" step="1"/><span class="slider-value">{{coverage}}%</span></div></div>
+<div class="setting-row setting-row--aligned" data-if="is_blurry" data-tooltip="scene.camera_blur_hint"><span class="setting-row__label-col">@tr:scene.camera_blur_threshold</span><div class="setting-row__control-col setting-row__control-col--slider"><input type="range" class="setting-slider" data-value="sharpness_threshold" min="0" max="100" step="1"/><span class="slider-value">{{sharpness_threshold}}%</span></div></div>
+<div data-if="is_blurry && running">
+  <div class="rendering-simplify-progress">
+    <progress max="100" data-attr-value="progress" />
+    <span class="progress__text">{{progress}}%</span>
+  </div>
+</div>
 <div class="rendering-simplify-error" data-if="message != ''">{{message}}</div><div class="rendering-simplify-actions"><button class="btn btn--primary" data-event-click="apply()" data-if="!running">@tr:common.apply</button><button class="btn btn--secondary" data-event-click="cancel()" data-if="running">@tr:common.cancel</button><button class="btn btn--secondary" data-event-click="cancel()" data-if="!running">@tr:common.cancel</button></div>
 </body></rml>

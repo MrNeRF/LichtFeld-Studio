@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <chrono>
 #include <cmath>
@@ -54,6 +55,7 @@
 #include "lfs/training/sh_value_storage.hpp"
 #include "licht_test_support.hpp"
 #include "training/checkpoint.hpp"
+#include "training/components/calibration_correction.hpp"
 #include "training/components/popspa_controller.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/rasterization/fastgs/rasterization/include/rasterization_api.h"
@@ -2798,6 +2800,7 @@ namespace {
             "bicycle";
         ckpt_params.dataset.output_path = output_path;
 
+        ckpt_params.dataset.images = "images/relocated";
         size_t display_count = 0;
         uint64_t display_means = 0;
         uint64_t display_sh0 = 0;
@@ -2836,6 +2839,7 @@ namespace {
                 << installed.error();
             ASSERT_NE(installed->trainer, nullptr);
             EXPECT_EQ(installed->iteration, expected_iteration);
+            EXPECT_EQ(installed->trainer->getParams().dataset.images, ckpt_params.dataset.images);
             EXPECT_EQ(
                 installed->trainer->get_current_iteration(),
                 expected_iteration);
@@ -4731,6 +4735,252 @@ namespace {
         constexpr size_t padding_end = offsetof(lfs::core::TensorFileHeader, numel);
         for (size_t i = padding_begin; i < padding_end; ++i)
             EXPECT_EQ(static_cast<unsigned char>(bytes[i]), 0u) << "header padding byte " << i;
+    }
+
+    // Feature bits 0 to 4: the set a build without calibration correction accepts.
+    constexpr uint32_t kFlagsKnownWithoutCalibrationCorrection = 0x1Fu;
+
+    struct CalibrationCorrectionCheckpoints {
+        lfs::core::param::TrainingParameters params;
+        std::unique_ptr<lfs::core::SplatData> model = make_checkpoint_test_splat(4, lfs::core::Device::CUDA);
+        lfs::training::MCMC strategy{*model};
+        lfs::training::CalibrationCorrection warp{5};
+        std::vector<float> values;
+
+        CalibrationCorrectionCheckpoints() {
+            params.optimization.strategy = "mcmc";
+            params.optimization.iterations = 2000;
+            params.optimization.max_cap = 4;
+            params.optimization.calibration_correction = true;
+            values.resize(warp.field().numel());
+            for (size_t i = 0; i < values.size(); ++i)
+                values[i] = 0.01f * static_cast<float>(static_cast<int>(i % 97) - 48);
+            warp.field() = lfs::core::Tensor::from_vector(values, warp.field().shape(), lfs::core::Device::CUDA);
+        }
+
+        std::string write(const bool correction) {
+            auto run = params;
+            run.optimization.calibration_correction = correction;
+            std::ostringstream out(std::ios::binary);
+            auto serialized = lfs::training::serialize_checkpoint(out, 1500, strategy, run, nullptr, nullptr, nullptr,
+                                                                  nullptr, nullptr, &warp);
+            EXPECT_TRUE(serialized.has_value()) << lfs::format_for_developer(serialized.error());
+            return out.str();
+        }
+
+        struct Loaded {
+            std::expected<int, std::string> iteration;
+            std::unique_ptr<lfs::core::SplatData> model;
+            lfs::core::param::TrainingParameters params;
+        };
+
+        Loaded load(const std::string& bytes, lfs::training::CalibrationCorrection* destination) {
+            Loaded loaded{.model = make_checkpoint_test_splat(1, lfs::core::Device::CUDA), .params = params};
+            lfs::training::MCMC target_strategy(*loaded.model);
+            std::istringstream input(bytes, std::ios::binary);
+            loaded.iteration = lfs::training::load_checkpoint(
+                input, bytes.size(), target_strategy, loaded.params, nullptr, nullptr, nullptr, {},
+                "calibration correction test", nullptr, nullptr, nullptr, destination);
+            return loaded;
+        }
+    };
+
+    lfs::core::CheckpointHeader checkpoint_header_of(const std::string& bytes) {
+        lfs::core::CheckpointHeader header{};
+        std::memcpy(&header, bytes.data(), sizeof(header));
+        return header;
+    }
+
+    nlohmann::json optimization_without_calibration_correction(nlohmann::json optimization) {
+        optimization.erase("calibration_correction");
+        return optimization;
+    }
+
+    void expect_same_model(const lfs::core::SplatData& a, const lfs::core::SplatData& b) {
+        ASSERT_EQ(a.size(), b.size());
+        EXPECT_EQ(a.means().to_vector(), b.means().to_vector());
+        EXPECT_EQ(a.sh0().to_vector(), b.sh0().to_vector());
+        EXPECT_EQ(a.scaling_raw().to_vector(), b.scaling_raw().to_vector());
+        EXPECT_EQ(a.rotation_raw().to_vector(), b.rotation_raw().to_vector());
+        EXPECT_EQ(a.opacity_raw().to_vector(), b.opacity_raw().to_vector());
+    }
+
+    TEST(CheckpointCalibrationCorrectionTest, FieldRoundTripsAndOldCheckpointsLoadAsZero) {
+        using namespace lfs::training;
+        lfs::core::param::TrainingParameters params;
+        params.optimization.strategy = "mcmc";
+        params.optimization.iterations = 2000;
+        params.optimization.max_cap = 4;
+        params.optimization.calibration_correction = true;
+        auto model = make_checkpoint_test_splat(4, lfs::core::Device::CUDA);
+        MCMC strategy(*model);
+
+        CalibrationCorrection warp(5);
+        std::vector<float> values(warp.field().numel());
+        for (size_t i = 0; i < values.size(); ++i)
+            values[i] = 0.01f * static_cast<float>(static_cast<int>(i % 97) - 48);
+        warp.field() = lfs::core::Tensor::from_vector(values, warp.field().shape(), lfs::core::Device::CUDA);
+
+        const auto load = [&](const std::string& bytes, CalibrationCorrection* destination) {
+            auto target_model = make_checkpoint_test_splat(1, lfs::core::Device::CUDA);
+            MCMC target_strategy(*target_model);
+            auto target_params = params;
+            std::istringstream input(bytes, std::ios::binary);
+            return load_checkpoint(input, bytes.size(), target_strategy, target_params, nullptr, nullptr, nullptr, {},
+                                   "calibration correction test", nullptr, nullptr, nullptr, destination);
+        };
+
+        std::ostringstream with_warp(std::ios::binary);
+        auto serialized = serialize_checkpoint(with_warp, 1500, strategy, params, nullptr, nullptr, nullptr, nullptr,
+                                               nullptr, &warp);
+        ASSERT_TRUE(serialized.has_value()) << lfs::format_for_developer(serialized.error());
+        EXPECT_EQ(static_cast<uint32_t>(serialized->header.flags) & ~kFlagsKnownWithoutCalibrationCorrection, 0u);
+
+        CalibrationCorrection restored(5);
+        const auto loaded = load(with_warp.str(), &restored);
+        ASSERT_TRUE(loaded.has_value()) << loaded.error();
+        EXPECT_EQ(*loaded, 1500);
+        EXPECT_EQ(restored.field().to_vector(), values);
+
+        // A reader without a warp consumes the block; a different camera count keeps a fresh warp.
+        EXPECT_TRUE(load(with_warp.str(), nullptr).has_value());
+        CalibrationCorrection other_dataset(3);
+        ASSERT_TRUE(load(with_warp.str(), &other_dataset).has_value());
+        EXPECT_EQ(other_dataset.field().to_vector(), std::vector<float>(other_dataset.field().numel(), 0.0f));
+
+        warp.field() = lfs::core::Tensor::zeros({5, 7, 7, 2}, lfs::core::Device::CUDA);
+        std::ostringstream other_grid(std::ios::binary);
+        ASSERT_TRUE(serialize_checkpoint(other_grid, 1500, strategy, params, nullptr, nullptr, nullptr, nullptr,
+                                         nullptr, &warp));
+        ASSERT_TRUE(load(other_grid.str(), &restored));
+        EXPECT_EQ(restored.field().to_vector(), std::vector<float>(values.size(), 0.f));
+
+        // Without the option the checkpoint has no warp block, and loading it resets the field to zero.
+        restored.field().fill_(1.f);
+        params.optimization.calibration_correction = false;
+        std::ostringstream without_warp(std::ios::binary);
+        auto plain = serialize_checkpoint(without_warp, 1500, strategy, params, nullptr, nullptr, nullptr);
+        ASSERT_TRUE(plain.has_value()) << lfs::format_for_developer(plain.error());
+        EXPECT_FALSE(lfs::core::has_flag(plain->header.flags, lfs::core::CheckpointFlags::HAS_CALIBRATION_CORRECTION));
+        EXPECT_LT(without_warp.str().size(), with_warp.str().size());
+        ASSERT_TRUE(load(without_warp.str(), &restored).has_value());
+        EXPECT_EQ(restored.field().to_vector(), std::vector<float>(values.size(), 0.0f));
+    }
+
+    TEST(CheckpointCalibrationCorrectionTest, ReadersWithoutTheFieldSeeTheSameCheckpointAsAPlainRun) {
+        CalibrationCorrectionCheckpoints fixture;
+        const auto with_field = fixture.write(true);
+        const auto plain = fixture.write(false);
+        const auto header = checkpoint_header_of(with_field);
+        const auto plain_header = checkpoint_header_of(plain);
+        EXPECT_EQ(static_cast<uint32_t>(header.flags) & ~kFlagsKnownWithoutCalibrationCorrection, 0u);
+        EXPECT_EQ(header.flags, plain_header.flags);
+        EXPECT_EQ(header.version, plain_header.version);
+
+        // Everything a reader reaches through the header is the plain run's, apart from the option itself.
+        ASSERT_EQ(header.params_json_offset, plain_header.params_json_offset);
+        EXPECT_EQ(with_field.substr(sizeof(header), header.params_json_offset - sizeof(header)),
+                  plain.substr(sizeof(header), plain_header.params_json_offset - sizeof(header)));
+        EXPECT_EQ(plain_header.params_json_offset + plain_header.params_json_size, plain.size());
+        EXPECT_GT(with_field.size(), header.params_json_offset + header.params_json_size);
+        const auto json = nlohmann::json::parse(with_field.substr(header.params_json_offset, header.params_json_size));
+        const auto plain_json = nlohmann::json::parse(plain.substr(plain_header.params_json_offset, plain_header.params_json_size));
+        EXPECT_TRUE(json.at("optimization").at("calibration_correction").get<bool>());
+        EXPECT_EQ(optimization_without_calibration_correction(json.at("optimization")),
+                  optimization_without_calibration_correction(plain_json.at("optimization")));
+        EXPECT_EQ(json.at("dataset"), plain_json.at("dataset"));
+
+        const auto loaded = fixture.load(with_field, nullptr);
+        const auto loaded_plain = fixture.load(plain, nullptr);
+        ASSERT_TRUE(loaded.iteration.has_value()) << loaded.iteration.error();
+        ASSERT_TRUE(loaded_plain.iteration.has_value()) << loaded_plain.iteration.error();
+        EXPECT_EQ(*loaded.iteration, *loaded_plain.iteration);
+        expect_same_model(*loaded.model, *loaded_plain.model);
+        EXPECT_EQ(optimization_without_calibration_correction(loaded.params.optimization.to_json()),
+                  optimization_without_calibration_correction(loaded_plain.params.optimization.to_json()));
+
+        // The model-only readers used to view and convert a project.
+        for (const auto* bytes : {&with_field, &plain}) {
+            std::istringstream input(*bytes, std::ios::binary);
+            auto splat = lfs::core::load_checkpoint_splat_data(input, bytes->size());
+            ASSERT_TRUE(splat.has_value()) << splat.error();
+            expect_same_model(*splat, *loaded_plain.model);
+            std::istringstream params_input(*bytes, std::ios::binary);
+            EXPECT_TRUE(lfs::core::load_checkpoint_params(params_input, bytes->size()).has_value());
+        }
+    }
+
+    TEST(CheckpointCalibrationCorrectionTest, FlaggedLayoutWithBareTensorStillRestoresTheField) {
+        CalibrationCorrectionCheckpoints fixture;
+        const auto with_field = fixture.write(true);
+        const auto current = checkpoint_header_of(with_field);
+
+        // The flagged layout: bit 5 set and the bare tensor between the last state block and the JSON.
+        std::ostringstream tensor(std::ios::binary);
+        tensor << fixture.warp.field();
+        auto header = current;
+        header.flags = header.flags | lfs::core::CheckpointFlags::HAS_CALIBRATION_CORRECTION;
+        std::string flagged = with_field.substr(0, current.params_json_offset) + tensor.str();
+        header.params_json_offset = flagged.size();
+        flagged += with_field.substr(current.params_json_offset, current.params_json_size);
+        std::memcpy(flagged.data(), &header, sizeof(header));
+
+        for (const std::string* bytes : std::array<const std::string*, 2>{&with_field, &flagged}) {
+            std::istringstream input(*bytes, std::ios::binary);
+            EXPECT_TRUE(lfs::training::checkpoint_has_calibration_correction(input, bytes->size(), checkpoint_header_of(*bytes)));
+            lfs::training::CalibrationCorrection restored(5);
+            const auto loaded = fixture.load(*bytes, &restored);
+            ASSERT_TRUE(loaded.iteration.has_value()) << loaded.iteration.error();
+            EXPECT_EQ(restored.field().to_vector(), fixture.values);
+            EXPECT_TRUE(fixture.load(*bytes, nullptr).iteration.has_value());
+        }
+        const auto plain = fixture.write(false);
+        std::istringstream plain_input(plain, std::ios::binary);
+        EXPECT_FALSE(lfs::training::checkpoint_has_calibration_correction(plain_input, plain.size(), checkpoint_header_of(plain)));
+    }
+
+    TEST(CheckpointCalibrationCorrectionTest, DamagedBlockLoadsTheModelWithAZeroField) {
+        CalibrationCorrectionCheckpoints fixture;
+        const auto with_field = fixture.write(true);
+        const auto header = checkpoint_header_of(with_field);
+        const auto reference = fixture.load(fixture.write(false), nullptr);
+        ASSERT_TRUE(reference.iteration.has_value()) << reference.iteration.error();
+        const size_t length_at = header.params_json_offset + header.params_json_size + sizeof(uint32_t);
+        const size_t tensor_at = length_at + sizeof(uint64_t);
+
+        const auto with_length = [&](const uint64_t length) {
+            auto bytes = with_field;
+            std::memcpy(bytes.data() + length_at, &length, sizeof(length));
+            return bytes;
+        };
+        auto bad_tensor = with_field;
+        bad_tensor[tensor_at] ^= 0x5A;
+        const uint64_t tensor_bytes = with_field.size() - tensor_at;
+        const std::vector<std::pair<std::string, std::string>> cases = {
+            {"cut short", with_field.substr(0, with_field.size() - 64)},
+            {"length past the end", with_length(tensor_bytes + 1)},
+            {"length shorter than the tensor", with_length(tensor_bytes - 4)},
+            {"damaged tensor header", bad_tensor},
+        };
+        for (const auto& [name, bytes] : cases) {
+            SCOPED_TRACE(name);
+            std::vector<std::string> warnings;
+            const auto token = lfs::core::Logger::get().add_log_handler(
+                [&warnings](const lfs::core::LogLevel level, const lfs::core::SourceSite&, const std::string_view message) {
+                    if (level == lfs::core::LogLevel::Warn && message.find("Calibration correction") != std::string_view::npos)
+                        warnings.emplace_back(message);
+                });
+            lfs::training::CalibrationCorrection restored(5);
+            restored.field().fill_(1.f);
+            const auto loaded = fixture.load(bytes, &restored);
+            lfs::core::Logger::get().remove_log_handler(token);
+            ASSERT_TRUE(loaded.iteration.has_value()) << loaded.iteration.error();
+            EXPECT_EQ(*loaded.iteration, 1500);
+            expect_same_model(*loaded.model, *reference.model);
+            EXPECT_TRUE(loaded.params.optimization.calibration_correction);
+            EXPECT_EQ(restored.field().to_vector(), std::vector<float>(fixture.values.size(), 0.0f));
+            EXPECT_EQ(warnings.size(), 1u);
+        }
     }
 
 } // namespace

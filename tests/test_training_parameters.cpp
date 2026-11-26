@@ -2,11 +2,13 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/checkpoint_format.hpp"
 #include "core/logger.hpp"
 #include "core/optimization_properties.hpp"
 #include "core/parameters.hpp"
 #include "core/property_registry.hpp"
 #include "python/lfs/py_params.hpp"
+#include "training/progress.hpp"
 
 #include <algorithm>
 #include <any>
@@ -116,7 +118,7 @@ namespace {
     TEST_F(TrainingParametersTest, ResolvesMrnfFactorySentinels) {
         const auto defaults = OptimizationParameters::defaults_for_strategy("mrnf");
 
-        EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_lr"), 0.012f);
+        EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_lr"), 0.025f);
         EXPECT_EQ(resolved<int>(defaults, "max_cap"), 5'000'000);
         EXPECT_FLOAT_EQ(resolved<float>(defaults, "min_opacity"), 1.0f / 255.0f);
         EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_reg"), 0.0f);
@@ -134,10 +136,8 @@ namespace {
             {"ray_depth_lr", {"mrnf"}},
             {"scaling_lr_end", {"mrnf"}},
             {"late_lr_anneal", {"mrnf"}},
-            {"growth_grad_threshold", {"mrnf"}},
             {"grow_fraction", {"mrnf"}},
             {"grow_until_iter", {"mrnf"}},
-            {"growth_exchange", {"mrnf"}},
             {"opacity_decay", {"mrnf"}},
             {"scale_decay", {"mrnf"}},
             {"means_noise_weight", {"mrnf"}},
@@ -238,10 +238,11 @@ namespace {
     }
 
     TEST_F(TrainingParametersTest, DefaultsForStrategyCanonicalizesAliasesAndFallbacks) {
-        EXPECT_FLOAT_EQ(OptimizationParameters::defaults_for_strategy("mnrf").opacity_lr, 0.012f);
-        EXPECT_FLOAT_EQ(OptimizationParameters::defaults_for_strategy("lfs").opacity_lr, 0.012f);
-        EXPECT_FLOAT_EQ(OptimizationParameters::defaults_for_strategy("").opacity_lr, 0.012f);
-        EXPECT_FLOAT_EQ(OptimizationParameters::defaults_for_strategy("garbage").opacity_lr, 0.012f);
+        // refine_every 163 is MRNF's alone (MCMC 100, IGS+ 500).
+        EXPECT_EQ(OptimizationParameters::defaults_for_strategy("mnrf").refine_every, 163u);
+        EXPECT_EQ(OptimizationParameters::defaults_for_strategy("lfs").refine_every, 163u);
+        EXPECT_EQ(OptimizationParameters::defaults_for_strategy("").refine_every, 163u);
+        EXPECT_EQ(OptimizationParameters::defaults_for_strategy("garbage").refine_every, 163u);
     }
 
     // This checks the serialized surface, not C++ struct completeness: a member absent from both
@@ -331,6 +332,94 @@ namespace {
         EXPECT_TRUE(PropertyRegistry::instance().get_group_snapshot("optimization"));
     }
 
+    TEST_F(TrainingParametersTest, IterationsRegistryRangeIsTheTrainerLimit) {
+        const auto meta = optimization_meta("iterations");
+        ASSERT_TRUE(meta.min_value.has_value() && meta.max_value.has_value());
+        const auto maximum = static_cast<size_t>(*meta.max_value);
+        ASSERT_EQ(static_cast<double>(maximum), *meta.max_value);
+
+        auto params = OptimizationParameters::mrnf_defaults();
+        params.iterations = maximum;
+        EXPECT_TRUE(params.validate().empty()) << params.validate();
+        params.iterations = maximum + 1;
+        EXPECT_FALSE(params.validate().empty());
+        params.iterations = static_cast<size_t>(*meta.min_value);
+        EXPECT_TRUE(params.validate().empty()) << params.validate();
+        params.iterations = static_cast<size_t>(*meta.min_value) - 1;
+        EXPECT_FALSE(params.validate().empty());
+    }
+
+    TEST_F(TrainingParametersTest, NormalSupervisionAtTheLastSignedIteration) {
+        auto p = OptimizationParameters::mrnf_defaults();
+        constexpr int last = std::numeric_limits<int>::max();
+        p.iterations = last;
+        p.use_normal_loss = true;
+        p.normal_start_fraction = p.normal_end_fraction = 1.0f;
+        EXPECT_FALSE(p.normal_supervision_active(1));
+        EXPECT_FALSE(p.normal_supervision_active(last - 1));
+        EXPECT_TRUE(p.normal_supervision_active(last));
+    }
+
+    TEST_F(TrainingParametersTest, CompletedIterationHasAWideSuccessor) {
+        constexpr int last = std::numeric_limits<int>::max();
+        EXPECT_EQ(lfs::training::next_training_iteration(0), 1);
+        EXPECT_EQ(lfs::training::next_training_iteration(last - 1), last);
+        EXPECT_EQ(lfs::training::next_training_iteration(last), int64_t{last} + 1);
+    }
+
+    TEST_F(TrainingParametersTest, LargeControllerTailStartsAtZero) {
+        auto p = OptimizationParameters::mrnf_defaults();
+        p.ppisp_controller_activation_step = -1;
+        p.steps_scaler = 1'000'000.0f;
+        EXPECT_EQ(p.resolved_ppisp_controller_activation_step(std::numeric_limits<int>::max()), 0);
+    }
+
+    TEST_F(TrainingParametersTest, ControllerTailKeepsFloat32Rounding) {
+        auto p = OptimizationParameters::mrnf_defaults();
+        p.ppisp_controller_activation_step = -1;
+        p.steps_scaler = 1.0005f;
+        EXPECT_EQ(p.resolved_ppisp_controller_activation_step(30'000), 24'997);
+    }
+
+    TEST_F(TrainingParametersTest, GenericScalingKeepsFloat32ScheduleRounding) {
+        auto p = OptimizationParameters::mrnf_defaults();
+        p.scale_steps(0.66665f);
+        EXPECT_EQ(p.iterations, 20000u);
+        EXPECT_EQ(p.eval_steps.back(), 20000u);
+        EXPECT_EQ(p.save_steps.back(), 20000u);
+        p = OptimizationParameters::mrnf_defaults();
+        p.scale_steps(1.005f);
+        EXPECT_EQ(p.stop_refine, 28643u);
+        p = OptimizationParameters::mrnf_defaults();
+        p.scale_steps(1.0005f);
+        EXPECT_EQ(p.eval_steps.front(), 7003u);
+        EXPECT_EQ(p.iterations, 30015u);
+        p.iterations = std::numeric_limits<int>::max();
+        p.scale_steps(1.0f);
+        EXPECT_EQ(p.iterations, uint64_t{1} << 31);
+    }
+
+    TEST_F(TrainingParametersTest, StepScalingSaturatesOutOfDomainProducts) {
+        constexpr size_t saturated = std::numeric_limits<size_t>::max();
+        for (const float ratio : {1e20f, 0x1p63f, std::numeric_limits<float>::infinity(),
+                                  std::numeric_limits<float>::quiet_NaN()}) {
+            auto p = OptimizationParameters::mrnf_defaults();
+            p.iterations = 1;
+            p.scale_steps(ratio);
+            EXPECT_EQ(p.iterations, saturated);
+            EXPECT_FALSE(p.validate().empty());
+        }
+        for (const bool eval : {true, false}) {
+            auto p = OptimizationParameters::mrnf_defaults();
+            auto& steps = eval ? p.eval_steps : p.save_steps;
+            steps = {saturated / 2};
+            p.scale_steps(2.0f);
+            EXPECT_EQ(p.iterations, 60000u);
+            EXPECT_EQ(steps, (std::vector<size_t>{saturated}));
+            EXPECT_FALSE(p.validate().empty());
+        }
+    }
+
     TEST_F(TrainingParametersTest, MissingRequiredJsonKeyStillThrows) {
         auto json = OptimizationParameters::mrnf_defaults().to_json();
         json.erase("iterations");
@@ -412,6 +501,39 @@ namespace {
             auto old_json = params.to_json();
             old_json.erase("keep_all_checkpoints");
             EXPECT_FALSE(OptimizationParameters::from_json(old_json).keep_all_checkpoints);
+        }
+    }
+
+    // Catches a run saved before calibration correction existed picking it up on resume, or a parameter file
+    // without the key missing the default.
+    TEST_F(TrainingParametersTest, CalibrationCorrectionStaysOffForRunsSavedWithoutIt) {
+        for (const auto& defaults : {OptimizationParameters::mcmc_defaults(), OptimizationParameters::mrnf_defaults(),
+                                     OptimizationParameters::igs_plus_defaults()}) {
+            SCOPED_TRACE(defaults.strategy);
+            ASSERT_TRUE(defaults.calibration_correction);
+            auto stored = defaults.to_json();
+            EXPECT_TRUE(OptimizationParameters::from_json(stored).calibration_correction);
+            stored["calibration_correction"] = false;
+            EXPECT_FALSE(OptimizationParameters::from_json(stored).calibration_correction);
+            stored.erase("calibration_correction");
+            EXPECT_FALSE(OptimizationParameters::from_json(stored).calibration_correction);
+
+            // The parameters of a .resume checkpoint and of a project's embedded checkpoint.
+            const auto checkpoint = nlohmann::json{{"optimization", stored}}.dump();
+            EXPECT_FALSE(lfs::core::parse_checkpoint_params_json(checkpoint).optimization.calibration_correction);
+            EXPECT_FALSE(lfs::core::parse_checkpoint_params_json(stored.dump()).optimization.calibration_correction);
+
+            // A parameter file is no saved run.
+            const auto path = std::filesystem::temp_directory_path() /
+                              ("lfs_calibration_correction_" + defaults.strategy + ".json");
+            std::ofstream(path) << nlohmann::json{{"optimization", stored}}.dump();
+            const auto config = lfs::core::param::read_optim_params_from_json(path);
+            ASSERT_TRUE(config) << config.error();
+            EXPECT_TRUE(config->calibration_correction);
+            const auto imported = lfs::core::param::read_training_parameters_from_json(path);
+            ASSERT_TRUE(imported) << imported.error().detail();
+            EXPECT_TRUE(imported->optimization.calibration_correction);
+            std::filesystem::remove(path);
         }
     }
 
@@ -675,15 +797,16 @@ namespace {
         EXPECT_FLOAT_EQ(params.scale_reg_decay_power, 0.4f);
         EXPECT_FLOAT_EQ(params.erank_reg, 0.001f);
         EXPECT_FLOAT_EQ(params.dc_reg, 0.001f);
-        EXPECT_FLOAT_EQ(params.sh_rest_reg, 0.001f);
+        EXPECT_FLOAT_EQ(params.sh_rest_reg, 0.375f);
         EXPECT_FLOAT_EQ(params.lambda_dssim, 0.22f);
-        EXPECT_FLOAT_EQ(params.growth_grad_threshold, 0.00309693f);
         EXPECT_FLOAT_EQ(params.max_screen_share, 0.586511f);
         EXPECT_FLOAT_EQ(params.screen_share_penalty, 0.847085f);
         EXPECT_FLOAT_EQ(params.means_lr, 2.17871e-5f);
         EXPECT_EQ(params.refine_every, 163u);
         EXPECT_FLOAT_EQ(params.scaling_lr, 0.00828016f);
+        EXPECT_EQ(params.grow_until_iter, 27'500u);
         EXPECT_FLOAT_EQ(params.rotation_lr, 0.0015f);
+        EXPECT_FLOAT_EQ(params.opacity_lr, 0.025f);
         EXPECT_NEAR(params.scale_reg_at(0), 0.014f, 1.0e-7f);
         EXPECT_FLOAT_EQ(params.scale_reg_at(static_cast<int>(params.iterations)), 0.0f);
         EXPECT_TRUE(params.validate().empty()) << params.validate();
@@ -694,7 +817,25 @@ namespace {
         EXPECT_FLOAT_EQ(roundtrip.scale_reg_decay_power, 0.4f);
         EXPECT_FLOAT_EQ(roundtrip.erank_reg, 0.001f);
         EXPECT_FLOAT_EQ(roundtrip.dc_reg, 0.001f);
-        EXPECT_FLOAT_EQ(roundtrip.sh_rest_reg, 0.001f);
+        EXPECT_FLOAT_EQ(roundtrip.sh_rest_reg, 0.375f);
+    }
+
+    // Files written before growth_exchange and growth_grad_threshold were removed still load; the keys are ignored.
+    TEST_F(TrainingParametersTest, RemovedGrowthKeysAreIgnoredOnLoad) {
+        auto expected = OptimizationParameters::mrnf_defaults();
+        expected.max_cap = 1234;
+        auto old_json = expected.to_json();
+        old_json["growth_exchange"] = true;
+        old_json["growth_grad_threshold"] = 0.5;
+        EXPECT_EQ(OptimizationParameters::from_json(old_json).to_json(), expected.to_json());
+
+        const auto path = std::filesystem::temp_directory_path() / "lfs_training_parameters_removed_keys.json";
+        std::ofstream(path) << old_json.dump();
+        const auto loaded = lfs::core::param::read_optim_params_from_json(path);
+        std::error_code ec;
+        std::filesystem::remove(path, ec);
+        ASSERT_TRUE(loaded.has_value()) << loaded.error();
+        EXPECT_EQ(loaded->to_json(), expected.to_json());
     }
 
     TEST_F(TrainingParametersTest, CapacityDefaultsRespectExplicitValues) {

@@ -119,6 +119,10 @@ namespace lfs::vis {
         // Bucketed VkImage extent for padded output slots (defaults to size).
         glm::ivec2 scene_image_alloc_size{0, 0};
         bool scene_image_flip_y = false;
+        // Keeps the image's own aspect ratio and crops it to fill the viewport,
+        // instead of stretching it. For an image not rendered for the viewport:
+        // the VR mirror shows an eye, which has the headset's aspect ratio.
+        bool scene_image_crop_to_fill = false;
         VkImage external_scene_image = VK_NULL_HANDLE;
         VkImageView external_scene_image_view = VK_NULL_HANDLE;
         VkImageLayout external_scene_image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;

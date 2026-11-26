@@ -4,6 +4,7 @@
 
 #include "viewport_request_builder.hpp"
 #include "core/camera.hpp"
+#include "core/editor_context.hpp"
 #include "frustum_depth_coverage.hpp"
 #include "rendering/model_renderability.hpp"
 #include "scene/scene_manager.hpp"
@@ -159,7 +160,15 @@ namespace lfs::vis {
         }
 
         const core::Scene* pointCloudCropScene(const FrameContext& ctx, const core::Scene* override_scene = nullptr) {
-            return override_scene ? override_scene : ctx.scene_manager ? &ctx.scene_manager->getScene() : nullptr;
+            return override_scene ? override_scene : ctx.scene_manager ? &ctx.scene_manager->getScene()
+                                                                       : nullptr;
+        }
+
+        // Every crop filters a point-cloud display except an ROI: the dataset point cloud's primary
+        // volume before training, or the one bound to the training model.
+        [[nodiscard]] bool isRoiVolume(const core::Scene& scene, const core::NodeId id) {
+            const auto* node = scene.getNodeById(id);
+            return node && (isPointCloudRoi(scene, *node) || isTrainingRoi(scene, *node));
         }
 
         template <typename Volume>
@@ -168,9 +177,7 @@ namespace lfs::vis {
                 return false;
             if (volume.data->role == core::CropRole::Secondary)
                 return true;
-            const auto* owner = scene ? scene->getNodeById(volume.parent_splat_id) : nullptr;
-            return owner && owner->type == core::NodeType::SPLAT &&
-                   owner->uuid != scene->getTrainingModelNodeUuid();
+            return scene && !isRoiVolume(*scene, volume.node_id);
         }
 
         [[nodiscard]] const lfs::core::Scene::RenderableCropBox* findEnabledPointCloudCropBox(
@@ -180,7 +187,7 @@ namespace lfs::vis {
                 return nullptr;
             }
             for (const auto& cb : cropboxes) {
-                if (cb.node_id == node_id && isPointCloudCropFilter(cb, scene) && cb.data->enabled && cb.crop_effects_enabled) {
+                if (cb.node_id == node_id && isPointCloudCropFilter(cb, scene) && cb.data->enabled) {
                     return &cb;
                 }
             }
@@ -190,7 +197,7 @@ namespace lfs::vis {
             const std::vector<lfs::core::Scene::RenderableCropBox>& cropboxes, const core::Scene* scene) {
             const lfs::core::Scene::RenderableCropBox* selected = nullptr;
             for (const auto& cb : cropboxes) {
-                if (!isPointCloudCropFilter(cb, scene) || !cb.data->enabled || !cb.crop_effects_enabled || !cb.parent_effectively_visible) {
+                if (!isPointCloudCropFilter(cb, scene) || !cb.data->enabled || !cb.parent_effectively_visible) {
                     continue;
                 }
                 if (selected) {
@@ -208,7 +215,7 @@ namespace lfs::vis {
                 return nullptr;
             }
             for (const auto& el : ellipsoids) {
-                if (el.node_id == node_id && isPointCloudCropFilter(el, scene) && el.data->enabled && el.crop_effects_enabled) {
+                if (el.node_id == node_id && isPointCloudCropFilter(el, scene) && el.data->enabled) {
                     return &el;
                 }
             }
@@ -218,7 +225,7 @@ namespace lfs::vis {
             const std::vector<lfs::core::Scene::RenderableEllipsoid>& ellipsoids, const core::Scene* scene) {
             const lfs::core::Scene::RenderableEllipsoid* selected = nullptr;
             for (const auto& el : ellipsoids) {
-                if (!isPointCloudCropFilter(el, scene) || !el.data->enabled || !el.crop_effects_enabled || !el.parent_effectively_visible) {
+                if (!isPointCloudCropFilter(el, scene) || !el.data->enabled || !el.parent_effectively_visible) {
                     continue;
                 }
                 if (selected) {
@@ -240,7 +247,7 @@ namespace lfs::vis {
             const auto selected_idx = ctx.scene_state.selected_cropbox_index;
             if (selected_idx >= 0) {
                 const size_t idx = static_cast<size_t>(selected_idx);
-                if (idx < cropboxes.size() && isPointCloudCropFilter(cropboxes[idx], scene) && cropboxes[idx].data->enabled && cropboxes[idx].crop_effects_enabled) {
+                if (idx < cropboxes.size() && isPointCloudCropFilter(cropboxes[idx], scene) && cropboxes[idx].data->enabled) {
                     return &cropboxes[idx];
                 }
             }
@@ -264,7 +271,7 @@ namespace lfs::vis {
             const lfs::core::Scene::RenderableCropPolygon* single = nullptr;
             bool several = false;
             for (const auto& polygon : ctx.scene_state.crop_polygons) {
-                if (!isPointCloudCropFilter(polygon, scene) || !polygon.data->enabled || !polygon.crop_effects_enabled)
+                if (!isPointCloudCropFilter(polygon, scene) || !polygon.data->enabled)
                     continue;
                 if (selected_polygon_id != core::NULL_NODE && polygon.node_id == selected_polygon_id)
                     return &polygon;
@@ -279,44 +286,32 @@ namespace lfs::vis {
             }
             return single;
         }
-        template <typename Filter>
-        void upsertScopedCrop(std::vector<Filter>& filters, Filter filter) {
+        void upsertScopedCropBox(std::vector<lfs::rendering::GaussianScopedBoxFilter>& filters,
+                                 lfs::rendering::GaussianScopedBoxFilter filter) {
             if (filter.parent_node_index < 0) {
                 return;
             }
-            auto existing = filters.end();
-            for (auto it = filters.begin(); it != filters.end(); ++it) {
-                if (filter.source_node_id >= 0 ? it->source_node_id == filter.source_node_id
-                                               : it->parent_node_index == filter.parent_node_index) {
-                    if (existing != filters.end() && filter.source_node_id < 0)
-                        return;
-                    existing = it;
+            for (auto& existing : filters) {
+                if (existing.parent_node_index == filter.parent_node_index) {
+                    existing = std::move(filter);
+                    return;
                 }
             }
-            if (existing != filters.end()) {
-                filter.inverse = existing->inverse;
-                filter.source_node_id = existing->source_node_id;
-                *existing = std::move(filter);
-            } else {
-                // Do not invent a second filter for a persistent but disabled volume.
-                if (filter.source_node_id < 0)
-                    filters.push_back(std::move(filter));
-            }
+            filters.push_back(std::move(filter));
         }
 
+        // The bound training ROI bounds training only; it never crops the model in the viewport.
         bool isTrainingRoiVolume(const FrameContext& ctx, const core::NodeId id) {
             if (!ctx.scene_manager)
                 return false;
             const auto& scene = ctx.scene_manager->getScene();
             const auto* node = scene.getNodeById(id);
-            const auto* owner = node ? scene.getNodeById(node->parent_id) : nullptr;
-            return node && owner && owner->uuid == scene.getTrainingModelNodeUuid() &&
-                   node->cropRole() == core::CropRole::Primary;
+            return node && isTrainingRoi(scene, *node);
         }
 
         void applyGaussianCropBox(lfs::rendering::GaussianFilterState& filters, const FrameContext& ctx) {
             for (const auto& cb : ctx.scene_state.cropboxes) {
-                if (!cb.data || !cb.data->enabled || !cb.crop_effects_enabled || cb.parent_node_index < 0 ||
+                if (!cb.data || !cb.data->enabled || cb.parent_node_index < 0 ||
                     isTrainingRoiVolume(ctx, cb.node_id)) {
                     continue;
                 }
@@ -327,44 +322,40 @@ namespace lfs::vis {
                          .transform = glm::inverse(cb.world_transform)},
                     .inverse = cb.data->inverse,
                     .desaturate = ctx.settings.desaturate_cropping,
-                    .parent_node_index = cb.parent_node_index,
-                    .source_node_id = cb.node_id});
+                    .parent_node_index = cb.parent_node_index});
             }
 
             if (ctx.gizmo.cropbox_active && ctx.gizmo.cropbox_affects_render &&
                 ctx.gizmo.cropbox_parent_node_index >= 0 &&
                 !isTrainingRoiVolume(ctx, ctx.scene_manager ? ctx.scene_manager->getSelectedNodeCropBoxId() : core::NULL_NODE)) {
-                upsertScopedCrop(filters.crop_regions,
-                                 lfs::rendering::GaussianScopedBoxFilter{
-                                     .bounds =
-                                         {.min = ctx.gizmo.cropbox_min,
-                                          .max = ctx.gizmo.cropbox_max,
-                                          .transform = glm::inverse(ctx.gizmo.cropbox_transform)},
-                                     .inverse = false,
-                                     .desaturate = ctx.settings.desaturate_cropping,
-                                     .parent_node_index = ctx.gizmo.cropbox_parent_node_index,
-                                     .source_node_id = ctx.scene_manager ? ctx.scene_manager->getSelectedNodeCropBoxId() : -1});
+                upsertScopedCropBox(filters.crop_regions,
+                                    lfs::rendering::GaussianScopedBoxFilter{
+                                        .bounds =
+                                            {.min = ctx.gizmo.cropbox_min,
+                                             .max = ctx.gizmo.cropbox_max,
+                                             .transform = glm::inverse(ctx.gizmo.cropbox_transform)},
+                                        .inverse = false,
+                                        .desaturate = ctx.settings.desaturate_cropping,
+                                        .parent_node_index = ctx.gizmo.cropbox_parent_node_index});
             }
 
             if (!filters.crop_regions.empty()) {
                 filters.crop_region = filters.crop_regions.front();
             }
         }
+        // The crop tool previews its pending edit on a point cloud only for a volume that filters it:
+        // an ROI, the selected one or the edited owner's, bounds training and never hides points.
         template <typename Volume>
         bool liveCropPreviewEnabled(const std::vector<Volume>& volumes, core::NodeId selected, int parent,
                                     const core::Scene* scene) {
             bool excluded = false;
             for (const auto& volume : volumes) {
                 if (selected >= 0 ? volume.node_id == selected : volume.parent_node_index == parent) {
-                    if (!isPointCloudCropFilter(volume, scene)) {
-                        if (selected >= 0)
-                            return false;
-                        excluded = true;
-                        continue;
-                    }
-                    if (!volume.crop_effects_enabled || (selected >= 0 && !volume.data->enabled))
+                    if (isPointCloudCropFilter(volume, scene))
+                        return true;
+                    if (selected >= 0)
                         return false;
-                    return true;
+                    excluded = true;
                 }
             }
             return !excluded;
@@ -449,9 +440,23 @@ namespace lfs::vis {
             filters.crop_desaturate = ctx.settings.desaturate_cropping;
         }
 
+        void upsertScopedEllipsoid(std::vector<lfs::rendering::GaussianScopedEllipsoidFilter>& filters,
+                                   lfs::rendering::GaussianScopedEllipsoidFilter filter) {
+            if (filter.parent_node_index < 0) {
+                return;
+            }
+            for (auto& existing : filters) {
+                if (existing.parent_node_index == filter.parent_node_index) {
+                    existing = std::move(filter);
+                    return;
+                }
+            }
+            filters.push_back(std::move(filter));
+        }
+
         void applyGaussianEllipsoid(lfs::rendering::GaussianFilterState& filters, const FrameContext& ctx) {
             for (const auto& el : ctx.scene_state.ellipsoids) {
-                if (!el.data || !el.data->enabled || !el.crop_effects_enabled || el.parent_node_index < 0) {
+                if (!el.data || !el.data->enabled || el.parent_node_index < 0) {
                     continue;
                 }
                 filters.ellipsoid_regions.push_back(lfs::rendering::GaussianScopedEllipsoidFilter{
@@ -460,21 +465,19 @@ namespace lfs::vis {
                          .transform = glm::inverse(el.world_transform)},
                     .inverse = el.data->inverse,
                     .desaturate = ctx.settings.desaturate_cropping,
-                    .parent_node_index = el.parent_node_index,
-                    .source_node_id = el.node_id});
+                    .parent_node_index = el.parent_node_index});
             }
 
             if (ctx.gizmo.ellipsoid_active && ctx.gizmo.ellipsoid_affects_render &&
                 ctx.gizmo.ellipsoid_parent_node_index >= 0) {
-                upsertScopedCrop(filters.ellipsoid_regions,
-                                 lfs::rendering::GaussianScopedEllipsoidFilter{
-                                     .bounds =
-                                         {.radii = ctx.gizmo.ellipsoid_radii,
-                                          .transform = glm::inverse(ctx.gizmo.ellipsoid_transform)},
-                                     .inverse = false,
-                                     .desaturate = ctx.settings.desaturate_cropping,
-                                     .parent_node_index = ctx.gizmo.ellipsoid_parent_node_index,
-                                     .source_node_id = ctx.scene_manager ? ctx.scene_manager->getSelectedNodeEllipsoidId() : -1});
+                upsertScopedEllipsoid(filters.ellipsoid_regions,
+                                      lfs::rendering::GaussianScopedEllipsoidFilter{
+                                          .bounds =
+                                              {.radii = ctx.gizmo.ellipsoid_radii,
+                                               .transform = glm::inverse(ctx.gizmo.ellipsoid_transform)},
+                                          .inverse = false,
+                                          .desaturate = ctx.settings.desaturate_cropping,
+                                          .parent_node_index = ctx.gizmo.ellipsoid_parent_node_index});
             }
 
             if (!filters.ellipsoid_regions.empty()) {
@@ -495,14 +498,13 @@ namespace lfs::vis {
             };
             auto& regions = filters.crop_polygon_regions;
             for (const auto& polygon : ctx.scene_state.crop_polygons) {
-                if (!polygon.data || !polygon.data->enabled || !polygon.crop_effects_enabled || polygon.parent_node_index < 0 ||
+                if (!polygon.data || !polygon.data->enabled || polygon.parent_node_index < 0 ||
                     isTrainingRoiVolume(ctx, polygon.node_id)) {
                     continue;
                 }
                 regions.push_back(filter_for(polygon.data->vertices, polygon.data->half_depth,
                                              polygon.world_transform, polygon.data->inverse,
                                              polygon.parent_node_index));
-                regions.back().source_node_id = polygon.node_id;
             }
 
             // The crop tool previews its pending transform during a drag.
@@ -512,18 +514,13 @@ namespace lfs::vis {
                 auto live = filter_for(ctx.gizmo.crop_polygon_vertices, ctx.gizmo.crop_polygon_half_depth,
                                        ctx.gizmo.crop_polygon_transform, false,
                                        ctx.gizmo.crop_polygon_parent_node_index);
-                live.source_node_id = ctx.scene_manager ? ctx.scene_manager->getSelectedNodeCropPolygonId() : -1;
-                const auto matches = [&](const auto& region) {
-                    return live.source_node_id >= 0 ? region.source_node_id == live.source_node_id
-                                                    : region.parent_node_index == live.parent_node_index;
-                };
-                const auto existing = std::find_if(regions.begin(), regions.end(), matches);
-                const bool ambiguous = live.source_node_id < 0 && std::count_if(regions.begin(), regions.end(), matches) > 1;
-                if (!ambiguous && existing != regions.end()) {
+                const auto existing = std::find_if(regions.begin(), regions.end(), [&](const auto& region) {
+                    return region.parent_node_index == live.parent_node_index;
+                });
+                if (existing != regions.end()) {
                     live.inverse = existing->inverse;
-                    live.source_node_id = existing->source_node_id;
                     *existing = std::move(live);
-                } else if (!ambiguous && live.source_node_id < 0) {
+                } else {
                     regions.push_back(std::move(live));
                 }
             }
@@ -848,16 +845,14 @@ namespace lfs::vis {
         });
         const auto is_selected_crop = [&](const core::NodeId id) {
             const auto* volume = scene.getNodeById(id);
-            return volume && volume->parent_id == node.id &&
-                   (volume->cropRole() == core::CropRole::Secondary ||
-                    (node.type == core::NodeType::SPLAT && node.uuid != scene.getTrainingModelNodeUuid()));
+            return volume && volume->parent_id == node.id && !isRoiVolume(scene, id);
         };
         scoped.gizmo.cropbox_active = ctx.gizmo.cropbox_active && ctx.scene_manager &&
                                       is_selected_crop(ctx.scene_manager->getSelectedNodeCropBoxId());
         scoped.gizmo.ellipsoid_active = ctx.gizmo.ellipsoid_active && ctx.scene_manager &&
                                         is_selected_crop(ctx.scene_manager->getSelectedNodeEllipsoidId());
         scoped.gizmo.crop_polygon_active = ctx.gizmo.crop_polygon_active && ctx.scene_manager &&
-                                          is_selected_crop(ctx.scene_manager->getSelectedNodeCropPolygonId());
+                                           is_selected_crop(ctx.scene_manager->getSelectedNodeCropPolygonId());
         // Selection is suppressed in scoped requests, but role resolution still needs the scene owner.
         auto request = buildPointCloudRenderRequestWithScene(scoped, render_size, transforms, &scene);
         // Preview tensors use the visible combined-model order. Keep only the
@@ -1088,7 +1083,7 @@ namespace lfs::vis {
         keep_matching(state.crop_polygons);
         state.selected_cropbox_index = -1;
         for (size_t i = 0; i < state.cropboxes.size(); ++i) {
-            if (state.cropboxes[i].data && state.cropboxes[i].data->enabled && state.cropboxes[i].crop_effects_enabled) {
+            if (state.cropboxes[i].data && state.cropboxes[i].data->enabled) {
                 state.selected_cropbox_index = static_cast<int>(i);
                 break;
             }

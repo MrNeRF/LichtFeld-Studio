@@ -1317,74 +1317,6 @@ namespace {
         EXPECT_NE(live.getNode("Existing"), nullptr);
     }
 
-    TEST(SceneChapterAdapterTest, RepeatedCropInstancesRoundTripWithDistinctIdentities) {
-        Scene scene;
-        const auto owner = scene.addSplat("Stack", make_splat(3));
-        const auto box = scene.addCropBox("Box", owner);
-        const auto ellipsoid = scene.addEllipsoid("Ellipsoid", owner);
-        scene.getMutableNode("Ellipsoid")->ellipsoid->radii = glm::vec3(1.0f);
-        lfs::core::CropPolygonData polygon_data;
-        polygon_data.vertices = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
-        const auto polygon = scene.addCropPolygon("Polygon", owner, polygon_data);
-        ASSERT_NE(polygon, lfs::core::NULL_NODE);
-        for (const auto id : {box, ellipsoid, polygon}) {
-            const auto copy_name = scene.duplicateNode(scene.getNodeById(id)->name);
-            ASSERT_FALSE(copy_name.empty());
-            auto* child = scene.getMutableNode(copy_name);
-            ASSERT_NE(child, nullptr);
-            child->visible.setQuiet(false);
-            if (child->cropbox) {
-                child->cropbox->enabled = false;
-                child->cropbox->inverse = true;
-            }
-            if (child->ellipsoid) {
-                child->ellipsoid->radii = {2, 3, 4};
-                child->ellipsoid->enabled = true;
-            }
-            if (child->crop_polygon) {
-                child->crop_polygon->half_depth = 4;
-                child->crop_polygon->inverse = true;
-            }
-        }
-        ASSERT_EQ(scene.getNodeById(owner)->children.size(), 6);
-        const auto owner_uuid = scene.getNodeById(owner)->uuid;
-        const ScenePayloadBindings bindings{{owner_uuid, PayloadBinding{.fourcc = "DSRC", .instance_uuid = owner_uuid, .reference_uuid = std::nullopt, .source_kind = "ply"}}};
-        const auto chapter = capture_scene_graph(scene, bindings);
-        ASSERT_TRUE(chapter) << lfs::format_for_developer(chapter.error());
-        const auto decoded = SceneGraphChapter::from_bytes(chapter->to_bytes());
-        ASSERT_TRUE(decoded);
-        Scene restored;
-        const ScenePayloadResolver resolver{.splat = [](const PayloadBinding&) -> lfs::Result<std::unique_ptr<lfs::core::SplatData>> { return make_splat(3); }};
-        ASSERT_TRUE(hydrate_scene_graph(*decoded, restored, resolver));
-        const auto* restored_owner = restored.getNodeByUuid(owner_uuid);
-        ASSERT_NE(restored_owner, nullptr);
-        EXPECT_EQ(restored_owner->children.size(), 6);
-        for (const auto id : scene.getNodeById(owner)->children) {
-            const auto* source = scene.getNodeById(id);
-            const auto* copy = restored.getNodeByUuid(source->uuid);
-            ASSERT_NE(copy, nullptr);
-            EXPECT_EQ(copy->type, source->type);
-            EXPECT_EQ(copy->parent_id, restored_owner->id);
-            EXPECT_EQ(copy->local_transform.get(), source->local_transform.get());
-            EXPECT_EQ(static_cast<bool>(copy->visible), static_cast<bool>(source->visible));
-            if (source->cropbox) {
-                ASSERT_TRUE(copy->cropbox);
-                EXPECT_EQ(copy->cropbox->enabled, source->cropbox->enabled);
-                EXPECT_EQ(copy->cropbox->inverse, source->cropbox->inverse);
-            }
-            if (source->ellipsoid) {
-                ASSERT_TRUE(copy->ellipsoid);
-                EXPECT_EQ(copy->ellipsoid->radii, source->ellipsoid->radii);
-                EXPECT_EQ(copy->ellipsoid->enabled, source->ellipsoid->enabled);
-            }
-            if (source->crop_polygon) {
-                ASSERT_TRUE(copy->crop_polygon);
-                EXPECT_EQ(copy->crop_polygon->vertices, source->crop_polygon->vertices);
-                EXPECT_EQ(copy->crop_polygon->half_depth, source->crop_polygon->half_depth);
-            }
-        }
-    }
-
     TEST(SceneChapterAdapterTest, CropPolygonSurvivesCaptureAndHydrationUnderItsSplat) {
         Scene scene;
         const auto splat = scene.addSplat("Model", make_splat(3));
@@ -6060,6 +5992,72 @@ namespace {
             for (const auto& entry : fs::directory_iterator(temporary.path)) {
                 EXPECT_EQ(entry.path().filename().string().find(".saveas-"), std::string::npos);
             }
+        }
+    }
+
+    TEST(ProjectDocumentTest, FirstSaveAsKeepsAdjacentDatasetPortable) {
+        TemporaryDirectory temporary;
+        const auto original = temporary.path / "original";
+        const auto moved = temporary.path / "moved";
+        const auto destination = original / "scene.licht";
+
+        for (const bool adjacent : {true, false}) {
+            SCOPED_TRACE(adjacent);
+            const auto dataset = adjacent ? original / "images" : temporary.path / "external";
+            fs::create_directories(original);
+            fs::create_directories(dataset);
+            std::ofstream(dataset / "frame.txt") << "dataset";
+
+            auto document = make_empty_document(fixed_uuid(19'156), 100);
+            const auto uuid = require_result(upsert_path_reference(
+                document->edit_references(), {}, dataset, "dataset", "dataset"));
+            require_status(document->edit_project().set_dataset_reference(uuid));
+            auto element = document->edit_references().dom().array_find("references", uuid.to_string());
+            ASSERT_TRUE(element);
+            require_status(element->set("locator.future_path_flag", true));
+            require_status(element->set("fingerprint.future_hash", "retained"));
+            const auto original_reference = document->references().dom().array_get("references", uuid.to_string());
+            ASSERT_TRUE(original_reference);
+
+            if (adjacent) {
+                auto fail_options = save_options(19'157, 200);
+                bool reached_chunks = false;
+                fail_options.boundary_observer = [&](CommitBoundary boundary) {
+                    if (boundary == CommitBoundary::ChunksWritten) {
+                        reached_chunks = true;
+                        throw std::runtime_error("Injected save failure before publication");
+                    }
+                };
+                EXPECT_FALSE(document->save_as(destination, fail_options));
+                ASSERT_TRUE(reached_chunks);
+                EXPECT_FALSE(document->source_path());
+                EXPECT_FALSE(fs::exists(destination));
+                EXPECT_EQ(document->references().dom().array_get("references", uuid.to_string()), original_reference);
+            }
+
+            ASSERT_TRUE(document->save_as(destination, save_options(19'158, 300)));
+            const auto saved = require_result(document->references().find(uuid));
+            ASSERT_TRUE(saved);
+            EXPECT_EQ(saved->locator.base, adjacent ? LocatorBase::Project : LocatorBase::Absolute);
+            EXPECT_EQ(saved->locator.absolute_fallback, lfs::core::path_to_utf8(dataset));
+            document.reset();
+
+            const auto relocated = moved / (adjacent ? "adjacent" : "outside");
+            fs::create_directories(moved);
+            fs::rename(original, relocated);
+            auto reopened = require_result_ptr(ProjectDocument::open(relocated / destination.filename()));
+            const auto persisted = reopened->references().dom().array_get("references", uuid.to_string());
+            ASSERT_TRUE(persisted);
+            auto expected = *original_reference;
+            if (adjacent) {
+                expected["locator"]["base"] = "project";
+                expected["locator"]["preferred"] = "images";
+            }
+            EXPECT_EQ(*persisted, expected);
+            const auto resolved = resolve_path_reference(reopened->references(), relocated, uuid);
+            ASSERT_TRUE(resolved);
+            EXPECT_EQ(*resolved, adjacent ? relocated / "images" : dataset);
+            EXPECT_TRUE(fs::is_regular_file(*resolved / "frame.txt"));
         }
     }
 

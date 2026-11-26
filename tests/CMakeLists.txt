@@ -255,8 +255,6 @@ if(BUILD_VISUALIZER_TESTS)
     endif()
 
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
-        test_splat_operations.cpp
-        test_splat_crop_workflow.cpp
         test_camera_training_notice.cpp
         test_analog_navigation.cpp
         test_gamepad_service.cpp
@@ -375,13 +373,13 @@ if(BUILD_VISUALIZER_TESTS)
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     add_test(
         NAME lichtfeld_visualizer_tests
-        COMMAND lichtfeld_visualizer_tests --gtest_filter=-SplatCropWorkflowTest.*Gpu*:CollisionJobsTest.*:AsyncSplatPayloadTest.*:CropVolumeSourceTest.*:DatasetEmbedIntegrationTest.*:ImportComparisonTest.*:ImportErrorTest.*:MainLoopSignalTest.*:PayloadRecaptureTest.*:ProjectSwitchErrorTest.*:SceneGenerationRenderPublicationTest.*:SelectionSubmodeTest.*:SequencerFrameDemandTest.*:SplatSimplifyCompletionTest.*:SplatSimplifyIdentityTest.*:StoredSessionRestoreTest.*:TrainerProjectWriterTest.*:ViewportAppearanceCorrectionTest.*:VisualizerImplResetTest.*:VisualizerPostWorkTest.*:VisualizerPostedWorkTest.*:CameraCreationSchemaTest.*:LoaderGeoreferenceTest.*:ProjectDocumentPerformanceGate.*:ProjectDocumentTest.*:SceneChapterAdapterTest.*:SfmObservationChapterTest.*:SpanStreambufTest.*:SplatChapterTest.*
+        COMMAND lichtfeld_visualizer_tests --gtest_filter=-CollisionJobsTest.*:AsyncSplatPayloadTest.*:CropVolumeSourceTest.*:DatasetEmbedIntegrationTest.*:ImportComparisonTest.*:ImportErrorTest.*:MainLoopSignalTest.*:PayloadRecaptureTest.*:ProjectSwitchErrorTest.*:SceneGenerationRenderPublicationTest.*:SelectionSubmodeTest.*:SequencerFrameDemandTest.*:SplatSimplifyCompletionTest.*:SplatSimplifyIdentityTest.*:StoredSessionRestoreTest.*:TrainerProjectWriterTest.*:ViewportAppearanceCorrectionTest.*:VisualizerImplResetTest.*:VisualizerPostWorkTest.*:VisualizerPostedWorkTest.*:CameraCreationSchemaTest.*:LoaderGeoreferenceTest.*:ProjectDocumentPerformanceGate.*:ProjectDocumentTest.*:SceneChapterAdapterTest.*:SfmObservationChapterTest.*:SpanStreambufTest.*:SplatChapterTest.*
     )
     set_tests_properties(lichtfeld_visualizer_tests PROPERTIES
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         TIMEOUT 300
     )
-    add_test(NAME lichtfeld.collision_jobs_gpu COMMAND lichtfeld_visualizer_tests --gtest_filter=SplatCropWorkflowTest.*Gpu*:CollisionJobsTest.*:VisualizerImplResetTest.StartupRecoveryScansRootAndProjectLocationScratch)
+    add_test(NAME lichtfeld.collision_jobs_gpu COMMAND lichtfeld_visualizer_tests --gtest_filter=CollisionJobsTest.*:VisualizerImplResetTest.StartupRecoveryScansRootAndProjectLocationScratch)
     add_test(NAME lichtfeld.collision_archive COMMAND lichtfeld_visualizer_tests --gtest_filter=ProjectDocumentTest.SaveAsAtomicallyRebindsAndPreservesUnloadedPayloads:ProjectDocumentTest.PhaseAFailureInjectionLeavesEveryLiveSceneByteUntouched:ProjectDocumentTest.TrainingAutosaveRecoveryPreservesInactiveParameterSlotsAndBindings:VisualizerImplResetTest.ScratchDirectoryFallsBackToRootWhenProjectLocationUnusable)
     set_tests_properties(lichtfeld.collision_archive PROPERTIES LABELS "cpu;collision" TIMEOUT 120 WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     set_tests_properties(lichtfeld.collision_jobs_gpu PROPERTIES LABELS "gpu;collision" TIMEOUT 120
@@ -618,9 +616,9 @@ set_target_properties(lichtfeld_format_tests PROPERTIES
     CXX_STANDARD 23
     CXX_STANDARD_REQUIRED ON
 )
-# Release format tests enforce wall-clock performance budgets. Keep the
-# configuration's optimization flags even when the app uses FAST_COMPILE;
-# /Od would disable optimization without clearing Release's NDEBUG.
+if(COMMAND lfs_enable_fast_cxx_compile)
+    lfs_enable_fast_cxx_compile(lichtfeld_format_tests)
+endif()
 add_test(NAME lichtfeld_format_tests
     COMMAND $<TARGET_FILE:lichtfeld_format_tests> --gtest_color=no
 )
@@ -818,6 +816,7 @@ set(TEST_FILES
     ${POPSPA_TEST_FILES}
     test_mcmc_tensor_ops.cpp
     test_training_cropbox_mask.cpp
+    test_crop_roles.cpp
     test_training_parameters.cpp
     test_property_defaults.cpp
     test_tensor_index_select_uint8.cpp
@@ -864,6 +863,7 @@ set(TEST_FILES
     test_geometry_payload.cpp
     test_selection_chapter.cpp
     test_project_document.cpp
+    test_project_operations.cpp
     test_project_thumbnail_sources.cpp
     test_project_training_copy.cpp
     test_gallery_scene_publication.cpp
@@ -927,6 +927,7 @@ set(TEST_FILES
     test_expanded_tensor_ops.cpp
     test_bool_any_all.cpp
     test_fused_l1_ssim.cpp
+    test_blur_tolerant_ssim.cpp
     test_masked_ssim_window.cpp
     test_densify_error_map.cpp
     test_screen_share.cpp
@@ -945,6 +946,7 @@ set(TEST_FILES
     test_tensor_kernels_6c_elem.cpp
     test_tensor_lazy_stateful_ops.cpp
     test_fastgs_kernels.cpp
+    test_calibration_correction.cpp
     test_camera_pose_gradient.cpp
     test_ray_depth_step.cpp
     test_color_variance.cpp
@@ -1007,6 +1009,7 @@ set(TEST_FILES
     test_operator_registry_props.cpp
     test_fastgs_analytical_gradients.cpp
     test_normal_prior_decode.cpp
+    test_prior_own_size.cpp
     test_normal_auto_generate.cpp
     test_lens_priors.cpp
     test_metrics_evaluator.cpp
@@ -1074,6 +1077,8 @@ set(TEST_FILES
     test_camera_thumbnail_policy.cpp
     test_apriltag_scene_scale.cpp
     test_undistort.cpp
+    test_panorama_views.cpp
+    test_fisheye_views.cpp
     gut_camera_model_cuda.cu
     test_viewport_region_utils.cpp
     test_viewport_interop_decision.cpp
@@ -1179,7 +1184,7 @@ list(APPEND TEST_FILES test_batch_trainer.cpp)
 
 # Keep the source manifest strict: a stale entry should fail configuration
 # instead of silently dropping coverage from the executable.
-set(TEST_SOURCES test_main.cpp ${TEST_FILES} test_splat_operations.cpp test_splat_crop_workflow.cpp)
+set(TEST_SOURCES test_main.cpp ${TEST_FILES})
 
 # PyModalRegistry and its native-modal dispatch path for regression tests.
 list(APPEND TEST_SOURCES
@@ -1315,6 +1320,7 @@ target_link_libraries(lichtfeld_tests PRIVATE
     Zep::Zep
     vterm
     GTest::gtest
+    TBB::tbb
     nanobind-static
     ZLIB::ZLIB
     ${TORCH_LIBRARIES}

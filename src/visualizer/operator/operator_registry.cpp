@@ -128,14 +128,14 @@ namespace lfs::vis::op {
 
         const std::string id = to_string(op);
 
-        if (active_modal_builtin_.has_value() && *active_modal_builtin_ == op) {
+        if (active_modal_builtin_.load() == op) {
             if (active_modal_) {
                 if (auto ctx = makeContext()) {
                     active_modal_->cancel(*ctx);
                 }
                 active_modal_.reset();
             }
-            active_modal_builtin_.reset();
+            setActiveModalBuiltin(BuiltinOp::_Count);
         }
 
         builtins_[idx] = RegisteredOperator{};
@@ -160,7 +160,7 @@ namespace lfs::vis::op {
     void OperatorRegistry::unregisterAllPython() {
         std::lock_guard lock(mutex_);
 
-        if (active_modal_ && !active_modal_builtin_.has_value()) {
+        if (active_modal_ && active_modal_builtin_.load() == BuiltinOp::_Count) {
             if (auto ctx = makeContext()) {
                 active_modal_->cancel(*ctx);
             }
@@ -226,6 +226,12 @@ namespace lfs::vis::op {
     }
 
     bool OperatorRegistry::pollImpl(const RegisteredOperator& reg, const OperatorProperties* props) const {
+        // A running instance can poll against session state rather than the idle cache.
+        if (!props && active_modal_id_.empty() && active_modal_ &&
+            reg.descriptor.builtin_id == active_modal_builtin_.load()) {
+            auto ctx = makeContext();
+            return ctx && active_modal_->poll(*ctx);
+        }
         if (props != nullptr) {
             if (reg.poll_fn) {
                 return reg.poll_fn();
@@ -432,7 +438,7 @@ namespace lfs::vis::op {
 
     OperatorReturnValue OperatorRegistry::invoke(BuiltinOp op, OperatorProperties* props) {
         std::unique_lock lock(mutex_);
-        assert(!(active_modal_ && !active_modal_id_.empty() && !active_modal_builtin_.has_value()) &&
+        assert(!(active_modal_ && !active_modal_id_.empty() && active_modal_builtin_.load() == BuiltinOp::_Count) &&
                "Both modal types active simultaneously");
 
         const auto idx = static_cast<size_t>(op);
@@ -446,7 +452,7 @@ namespace lfs::vis::op {
         auto result = invokeImpl(lock, builtins_[idx], to_string(op), props);
 
         if (result.status == OperatorResult::RUNNING_MODAL && active_modal_) {
-            active_modal_builtin_ = op;
+            setActiveModalBuiltin(op);
             active_modal_id_.clear();
         }
 
@@ -455,7 +461,7 @@ namespace lfs::vis::op {
 
     OperatorReturnValue OperatorRegistry::invoke(const std::string& class_id, OperatorProperties* props) {
         std::unique_lock lock(mutex_);
-        assert(!(active_modal_ && !active_modal_id_.empty() && !active_modal_builtin_.has_value()) &&
+        assert(!(active_modal_ && !active_modal_id_.empty() && active_modal_builtin_.load() == BuiltinOp::_Count) &&
                "Both modal types active simultaneously");
 
         auto builtin = builtin_op_from_string(class_id);
@@ -471,6 +477,12 @@ namespace lfs::vis::op {
         }
 
         return invokeImpl(lock, it->second, class_id, props);
+    }
+
+    void OperatorRegistry::setActiveModalBuiltin(BuiltinOp op) {
+        active_modal_builtin_.store(op, std::memory_order_release);
+        poll_cache_.erase(to_string(BuiltinOp::Undo));
+        poll_cache_.erase(to_string(BuiltinOp::Redo));
     }
 
     bool OperatorRegistry::hasModalOperator() const {
@@ -492,8 +504,8 @@ namespace lfs::vis::op {
         if (!active_modal_id_.empty()) {
             return active_modal_id_;
         }
-        if (active_modal_builtin_.has_value()) {
-            const auto idx = static_cast<size_t>(*active_modal_builtin_);
+        if (active_modal_builtin_.load() != BuiltinOp::_Count) {
+            const auto idx = static_cast<size_t>(active_modal_builtin_.load());
             if (idx < builtins_.size() && builtins_[idx].is_registered) {
                 return builtins_[idx].descriptor.id();
             }
@@ -575,9 +587,9 @@ namespace lfs::vis::op {
             modal_props_ = props;
         } else if (result == OperatorResult::CANCELLED) {
             op->cancel(*ctx);
-            active_modal_builtin_.reset();
+            setActiveModalBuiltin(BuiltinOp::_Count);
         } else {
-            active_modal_builtin_.reset();
+            setActiveModalBuiltin(BuiltinOp::_Count);
         }
 
         const bool finalize_history = (result == OperatorResult::FINISHED || result == OperatorResult::CANCELLED) &&
@@ -616,7 +628,7 @@ namespace lfs::vis::op {
             active_modal_->cancel(*ctx);
         }
         active_modal_.reset();
-        active_modal_builtin_.reset();
+        setActiveModalBuiltin(BuiltinOp::_Count);
         const bool finalize_history = active_modal_has_undo_transaction_;
         lock.unlock();
         if (finalize_history) {
@@ -642,7 +654,7 @@ namespace lfs::vis::op {
             active_modal_.reset();
         }
 
-        active_modal_builtin_.reset();
+        setActiveModalBuiltin(BuiltinOp::_Count);
         const bool finalize_history = active_modal_has_undo_transaction_;
 
         for (auto& reg : builtins_) {

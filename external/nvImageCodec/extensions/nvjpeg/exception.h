@@ -22,14 +22,22 @@
 #include <nvimgcodec.h>
 #include <nvjpeg.h>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 
 const char* getErrorString(nvjpegStatus_t);
 
-class NvJpegException : public std::exception {
+// Derives from std::runtime_error, not std::exception directly: the static_* thunks that form this
+// extension's C boundary catch std::runtime_error, and an exception escaping them would skip the
+// per-sample imageReady() call and stall the batch.
+class NvJpegException : public std::runtime_error {
 public:
     static NvJpegException FromNvJpegError(nvjpegStatus_t status, const std::string& where);
     static NvJpegException FromCUDAError(cudaError_t status, const std::string& where);
+
+    NvJpegException(nvimgcodecStatus_t status, std::string info)
+        : std::runtime_error(info), status_(status), info_(std::move(info)) {
+    }
 
     inline virtual ~NvJpegException() throw() {}
 
@@ -38,7 +46,6 @@ public:
     nvimgcodecStatus_t nvimgcodecStatus() const { return status_; }
 
 private:
-    NvJpegException() = default;
     nvimgcodecStatus_t status_ = NVIMGCODEC_STATUS_SUCCESS;
     std::string info_;
 };

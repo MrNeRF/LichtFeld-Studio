@@ -1935,6 +1935,21 @@ namespace lfs::io::project {
         return element->set("unresolved", record.unresolved);
     }
 
+    lfs::Result<void> ReferencesChapter::update_locator(const lfs::core::Uuid& uuid, const ReferenceLocator& locator) {
+        auto element = dom_.array_find("references", uuid.to_string());
+        if (!element) {
+            return fail<void>(
+                lfs::ErrorCode::NotFound, "The external reference record is missing.",
+                std::format("REFS UUID {} does not exist", uuid.to_string()), "REFS",
+                "references.uuid");
+        }
+        auto value = element->get_json("locator").value_or(Json::object());
+        value.update(locator_json(locator));
+        if (!locator.absolute_fallback)
+            value.erase("absolute_fallback");
+        return element->set_json("locator", std::move(value));
+    }
+
     lfs::Result<bool> ReferencesChapter::remove(const lfs::core::Uuid& uuid) {
         if (uuid.is_nil()) {
             return fail<bool>(
@@ -2119,6 +2134,29 @@ namespace lfs::io::project {
 
     } // namespace
 
+    ReferenceLocator make_path_reference_locator(
+        const std::filesystem::path& project_root,
+        const std::filesystem::path& live_path) {
+        const auto absolute = absolute_lexically(live_path);
+        const auto absolute_text = lfs::core::path_to_utf8(absolute);
+        ReferenceLocator locator{
+            .preferred = absolute_text,
+            .base = LocatorBase::Absolute,
+            .absolute_fallback = absolute_text,
+        };
+        if (!project_root.empty()) {
+            const auto root = absolute_lexically(project_root);
+            const auto relative = absolute.lexically_relative(root);
+            if (!relative.empty() && relative != "." &&
+                relative.is_relative()) {
+                locator.preferred =
+                    lfs::core::path_to_generic_utf8(relative);
+                locator.base = LocatorBase::Project;
+            }
+        }
+        return locator;
+    }
+
     lfs::Result<lfs::core::Uuid> upsert_path_reference(
         ReferencesChapter& references,
         const std::filesystem::path& project_root,
@@ -2144,23 +2182,7 @@ namespace lfs::io::project {
         if (!fingerprint) {
             return std::move(fingerprint).error();
         }
-        const auto absolute = absolute_lexically(live_path);
-        const auto absolute_text = lfs::core::path_to_utf8(absolute);
-        ReferenceLocator locator{
-            .preferred = absolute_text,
-            .base = LocatorBase::Absolute,
-            .absolute_fallback = absolute_text,
-        };
-        if (!project_root.empty()) {
-            const auto root = absolute_lexically(project_root);
-            const auto relative = absolute.lexically_relative(root);
-            if (!relative.empty() && relative != "." &&
-                relative.is_relative()) {
-                locator.preferred =
-                    lfs::core::path_to_generic_utf8(relative);
-                locator.base = LocatorBase::Project;
-            }
-        }
+        auto locator = make_path_reference_locator(project_root, live_path);
 
         auto records = references.records();
         if (!records) {
@@ -2801,18 +2823,11 @@ namespace lfs::io::project {
                 }
                 result.payload = std::move(*parsed);
             }
-            if (const Json* enabled = JsonChapterDom::read_json_ref(element, "crop_effects_enabled")) {
-                if (!enabled->is_boolean())
-                    return fail<SceneNodeRecord>(lfs::ErrorCode::DataLoss, "Invalid crop group state.", "crop_effects_enabled must be boolean", "SCNG", "nodes.crop_effects_enabled");
-                result.crop_effects_enabled = enabled->get<bool>();
-            }
-
             if (const Json* role = JsonChapterDom::read_json_ref(element, "secondary_crop")) {
                 if (!role->is_boolean())
                     return fail<SceneNodeRecord>(lfs::ErrorCode::DataLoss, "Invalid crop role.", "secondary_crop must be boolean", "SCNG", "nodes.secondary_crop");
                 result.secondary_crop = role->get<bool>();
             }
-
             if (const Json* cropbox =
                     JsonChapterDom::read_json_ref(element, "cropbox");
                 cropbox) {
@@ -2951,6 +2966,28 @@ namespace lfs::io::project {
         return *cached_nodes_;
     }
 
+    lfs::Result<std::optional<PublishedSplatMetadata>> SceneGraphChapter::published_splat_metadata(
+        const lfs::core::Uuid& uuid) const {
+        const auto element = dom_.array_find("nodes", uuid.to_string());
+        const auto metadata = element ? element->get_json("publication") : std::nullopt;
+        if (!metadata)
+            return std::optional<PublishedSplatMetadata>{};
+        const auto invalid = [] {
+            return fail<std::optional<PublishedSplatMetadata>>(
+                lfs::ErrorCode::DataLoss, "The published splat metadata is invalid.",
+                "Invalid publication count or SH degree", "SCNG", "nodes.publication");
+        };
+        if (!metadata->is_object() || !metadata->contains("count") ||
+            !metadata->contains("sh_degree") || !metadata->at("count").is_number_integer() ||
+            !metadata->at("sh_degree").is_number_integer())
+            return invalid();
+        const auto count = metadata->at("count").get<std::int64_t>();
+        const auto degree = metadata->at("sh_degree").get<std::int64_t>();
+        if (count <= 0 || degree < 0 || degree > 3)
+            return invalid();
+        return std::optional<PublishedSplatMetadata>{PublishedSplatMetadata{static_cast<std::uint64_t>(count), static_cast<int>(degree)}};
+    }
+
     lfs::Result<std::optional<SceneNodeRecord>> SceneGraphChapter::find(
         const lfs::core::Uuid& uuid) const {
         if (uuid.is_nil()) {
@@ -3037,12 +3074,7 @@ namespace lfs::io::project {
             element["visible"] = value.visible;
             element["locked"] = value.locked;
             element["training_enabled"] = value.training_enabled;
-            // The gate defaults to true. Avoid adding a crop-only key to every
-            // camera in large datasets, while clearing a previously stored override.
-            if (!value.crop_effects_enabled)
-                element["crop_effects_enabled"] = false;
-            else
-                element.erase("crop_effects_enabled");
+            // Primary is the default role; only a secondary crop stores the key.
             if (value.secondary_crop)
                 element["secondary_crop"] = true;
             else

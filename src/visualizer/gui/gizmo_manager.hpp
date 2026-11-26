@@ -93,15 +93,13 @@ namespace lfs::vis {
                 return ensureCropToolState();
             }
             [[nodiscard]] LFS_VIS_API std::string cropToolOperation() const;
-            LFS_VIS_API void finishCropTool();
-            LFS_VIS_API void editCropTool(const core::Uuid& uuid);
-            LFS_VIS_API void editCropTool(const core::Uuid& uuid, bool allow_shape_change);
-            LFS_VIS_API bool changeCropToolShape(const std::string& shape);
-            [[nodiscard]] LFS_VIS_API bool isCropToolShapeLocked() const;
-            [[nodiscard]] core::NodeId cropToolVolumeNodeId() const { return crop_tool_volume_node_id_; }
-            LFS_VIS_API void newCropTool(const std::string& shape);
+            // Applies the active Crop; on a point-cloud ROI it commits the edit and leaves the tool.
             LFS_VIS_API void applyActiveCropTool();
             LFS_VIS_API void deleteActiveCropToolVolume();
+            // Enters builtin.cropbox, builtin.roi or builtin.crop on the selected splat or point cloud and
+            // selects that role's volume, creating a box when there is none. False when no volume is edited.
+            LFS_VIS_API bool activateCropTool(const std::string& tool_id);
+            [[nodiscard]] core::NodeId cropToolVolumeNodeId() const { return crop_tool_volume_node_id_; }
             // Polygon button: edit the selected splat's or point cloud's polygon, or start drawing one.
             LFS_VIS_API void activateCropPolygonTool();
             // Fit or reset the selected crop polygon, or the selected splat's or point cloud's.
@@ -138,6 +136,7 @@ namespace lfs::vis {
             struct ToolStateStamp {
                 bool valid = false;
                 bool ui_hidden = false;
+                bool gt_compare = false;
                 bool has_scene_manager = false;
                 bool has_selected_node = false;
                 const void* align_tool = nullptr;
@@ -155,6 +154,7 @@ namespace lfs::vis {
             VisualizerImpl* viewer_;
             void beginViewportGizmoOrbit(::Viewport& viewport, const glm::vec2& mouse, float time);
             void orbitViewportGizmo(::Viewport& viewport, float time);
+            void publishViewportGizmoCameraMove(const ::Viewport& viewport);
             void releaseViewportGizmoPointer();
             [[nodiscard]] std::optional<core::NodeId> selectedCropVolumeNodeId(core::NodeId target_id) const;
             [[nodiscard]] bool ensureCropVolumeForCurrentSelection();
@@ -177,6 +177,18 @@ namespace lfs::vis {
             glm::mat3 gizmo_cumulative_rotation_{1.0f};
             glm::vec3 gizmo_cumulative_scale_{1.0f};
 
+            // Cropbox gizmo
+            bool cropbox_gizmo_active_ = false;
+            std::string cropbox_node_name_;
+            core::CropBoxData cropbox_data_before_drag_;
+            glm::mat4 cropbox_transform_before_drag_{1.0f};
+
+            // Ellipsoid gizmo
+            bool ellipsoid_gizmo_active_ = false;
+            std::string ellipsoid_node_name_;
+            core::EllipsoidData ellipsoid_data_before_drag_;
+            glm::mat4 ellipsoid_transform_before_drag_{1.0f};
+
             enum class CropToolShape {
                 Box,
                 Ellipsoid,
@@ -185,7 +197,6 @@ namespace lfs::vis {
 
             CropToolShape crop_tool_shape_ = CropToolShape::Box;
             bool crop_tool_initialized_ = false;
-            bool crop_tool_shape_locked_ = false;
             core::NodeId crop_tool_target_node_id_ = core::NULL_NODE;
             core::NodeId crop_tool_volume_node_id_ = core::NULL_NODE;
             bool crop_tool_drag_active_ = false;
@@ -288,18 +299,18 @@ namespace lfs::vis {
             void previewCropPolygonOutline(const std::vector<glm::vec2>& vertices, const glm::mat4& polygon_to_world);
             bool commitCropPolygonOutline(std::vector<glm::vec2> vertices);
             [[nodiscard]] bool isCropToolActive() const;
+            void showRoiEllipsoidUnsupported();
             [[nodiscard]] bool isSelectionVolumeMode() const;
             [[nodiscard]] bool isVolumeGizmoToolActive() const;
             [[nodiscard]] std::optional<core::NodeId> selectedCropTargetNodeId() const;
             [[nodiscard]] LFS_VIS_API bool ensureCropToolState();
-            bool syncSelectedCropShape();
             [[nodiscard]] bool syncCropToolStateFromNode(core::NodeId target_id, core::NodeId volume_node_id, bool* changed = nullptr);
             [[nodiscard]] LFS_VIS_API bool persistActiveCropToolToNode(bool enable);
             void scaleCropToolTransform(const glm::vec3& total_scale);
             void updateCropToolOverlayState();
             void clearCropToolOverlayState();
             void leaveCropTool(bool hide_volume, bool select_parent, bool clear_active_tool);
-            bool deleteCropVolumeAfterApply(core::NodeId volume_node_id);
+            void deleteCropVolumeAfterApply(core::NodeId volume_node_id);
             void clearSelectionVolumeState();
             void captureSelectionVolumeBase(uint64_t source_generation);
             [[nodiscard]] bool applySelectionVolumeFromGizmo(bool push_undo);

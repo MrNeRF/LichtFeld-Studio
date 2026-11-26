@@ -18,6 +18,25 @@
 
 namespace lfs::training::camera_pose {
 
+    // Rotate the top three rows of a homogeneous pose or its gradient. The stored matrix maps draw to owner.
+    template <bool Transpose>
+    LFS_POSE_HD void rotate_rows(const float rotation[9], const float in[16], float out[16]) {
+        bool identity = true;
+        for (int i = 0; i < 9; ++i)
+            identity = identity && rotation[i] == (i % 4 == 0 ? 1.0f : 0.0f);
+        for (int i = 0; i < 16; ++i)
+            out[i] = in[i];
+        if (identity)
+            return;
+        for (int i = 0; i < 3; ++i) {
+            const int first = Transpose ? i : 3 * i;
+            const int stride = Transpose ? 3 : 1;
+            for (int j = 0; j < 4; ++j)
+                out[4 * i + j] = rotation[first] * in[j] + rotation[first + stride] * in[4 + j] +
+                                 rotation[first + 2 * stride] * in[8 + j];
+        }
+    }
+
     // exp([phi]x), row-major; exactly the identity at phi = 0.
     template <class T>
     LFS_POSE_HD void exp_so3(const T phi[3], T E[9]) {
