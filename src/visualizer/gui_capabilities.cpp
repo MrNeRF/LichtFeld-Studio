@@ -1833,7 +1833,8 @@ namespace lfs::vis::cap {
         bool use_before = cropbox_node->cropbox->enabled;
 
         const glm::vec3 center = (min_bounds + max_bounds) * 0.5f;
-        const glm::vec3 half_size = (max_bounds - min_bounds) * 0.5f;
+        // A planar cloud has no thickness; a box without one holds none of its points.
+        const glm::vec3 half_size = glm::max((max_bounds - min_bounds) * 0.5f, glm::vec3(kCropVolumeMinExtent));
 
         auto updated_data = before_data;
         updated_data.min = -half_size;
