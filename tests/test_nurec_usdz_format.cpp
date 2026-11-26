@@ -460,4 +460,59 @@ namespace {
         }
     }
 
+    TEST_F(NurecUsdzFormatTest, PayloadInSmallPiecesRoundTripsExactly) {
+        // zlib gets the payload, and libarchive the entry, in pieces of at most 4 GiB and 2 GiB, so a real model only
+        // reaches the pieces past those sizes; lowered to 7 bytes, the pieces cover a small one.
+        struct RestorePieces {
+            ~RestorePieces() { set_nurec_piece_bytes_for_testing(0); }
+        } restore;
+
+        const auto original = create_test_splat(64, 3);
+        // The payload entry is named after the output file and the layers refer to it by that name, so both
+        // exports get the same file name, each in a folder of its own.
+        const fs::path whole_path = temp_dir / "whole" / "model.usdz";
+        const fs::path pieces_path = temp_dir / "pieces" / "model.usdz";
+        fs::create_directories(whole_path.parent_path());
+        fs::create_directories(pieces_path.parent_path());
+        ASSERT_TRUE(save_nurec_usdz(original, {.output_path = whole_path}).has_value());
+        set_nurec_piece_bytes_for_testing(7);
+        ASSERT_TRUE(save_nurec_usdz(original, {.output_path = pieces_path}).has_value());
+
+        // Both files hold the same layers and, decompressed in one call, the same payload.
+        const auto whole_entries = read_usdz_entries(whole_path);
+        const auto pieces_entries = read_usdz_entries(pieces_path);
+        ASSERT_EQ(pieces_entries.size(), whole_entries.size());
+        for (const auto& [name, bytes] : whole_entries) {
+            ASSERT_TRUE(pieces_entries.contains(name)) << name;
+            if (fs::path(name).extension() != ".nurec") {
+                EXPECT_EQ(pieces_entries.at(name), bytes) << name;
+                continue;
+            }
+            const auto whole_payload = gunzip_bytes(bytes);
+            const auto pieces_payload = gunzip_bytes(pieces_entries.at(name));
+            ASSERT_TRUE(whole_payload.has_value()) << whole_payload.error();
+            ASSERT_TRUE(pieces_payload.has_value()) << pieces_payload.error();
+            EXPECT_EQ(*pieces_payload, *whole_payload);
+        }
+
+        // Decompressed in pieces or whole, either file loads as the same model.
+        const auto pieces_in_pieces = load_nurec_usdz(pieces_path);
+        const auto whole_in_pieces = load_nurec_usdz(whole_path);
+        set_nurec_piece_bytes_for_testing(0);
+        const auto pieces_whole = load_nurec_usdz(pieces_path);
+        const auto reference = load_nurec_usdz(whole_path);
+        ASSERT_TRUE(reference.has_value()) << reference.error();
+        for (const auto* const loaded : {&pieces_in_pieces, &whole_in_pieces, &pieces_whole}) {
+            ASSERT_TRUE(loaded->has_value()) << loaded->error();
+            const SplatData& model = **loaded;
+            ASSERT_EQ(model.size(), reference->size());
+            EXPECT_EQ(tensor_to_vector(model.means()), tensor_to_vector(reference->means()));
+            EXPECT_EQ(tensor_to_vector(model.sh0()), tensor_to_vector(reference->sh0()));
+            EXPECT_EQ(tensor_to_vector(model.shN()), tensor_to_vector(reference->shN()));
+            EXPECT_EQ(tensor_to_vector(model.scaling_raw()), tensor_to_vector(reference->scaling_raw()));
+            EXPECT_EQ(tensor_to_vector(model.rotation_raw()), tensor_to_vector(reference->rotation_raw()));
+            EXPECT_EQ(tensor_to_vector(model.opacity_raw()), tensor_to_vector(reference->opacity_raw()));
+        }
+    }
+
 } // namespace
