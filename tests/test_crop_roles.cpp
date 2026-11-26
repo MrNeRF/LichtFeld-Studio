@@ -139,12 +139,15 @@ namespace {
         ASSERT_TRUE(roi);
         ASSERT_TRUE(crop);
         const auto roi_uuid = scene.getNodeById(*roi)->uuid;
+        const auto crop_uuid = scene.getNodeById(*crop)->uuid;
         for (const auto shape : {core::NodeType::ELLIPSOID, core::NodeType::CROP_POLYGON, core::NodeType::CROPBOX}) {
             SCOPED_TRACE(static_cast<int>(shape));
             const auto id = shapeFor(*sm, nullptr, cloud, core::CropRole::Secondary, shape);
             ASSERT_NE(id, core::NULL_NODE);
             EXPECT_EQ(scene.getNodeById(id)->type, shape);
             EXPECT_EQ(scene.getNodeById(id)->cropRole(), core::CropRole::Secondary);
+            // A role volume stays one node, so its identity survives every shape.
+            EXPECT_EQ(scene.getNodeById(id)->uuid, crop_uuid);
             ASSERT_NE(scene.getNodeByUuid(roi_uuid), nullptr);
             EXPECT_EQ(scene.getNodeByUuid(roi_uuid)->type, core::NodeType::CROPBOX);
             EXPECT_EQ(scene.getNodeByUuid(roi_uuid)->cropRole(), core::CropRole::Primary);
@@ -153,6 +156,7 @@ namespace {
         const auto polygon_roi = shapeFor(*sm, nullptr, cloud, core::CropRole::Primary, core::NodeType::CROP_POLYGON);
         ASSERT_NE(polygon_roi, core::NULL_NODE);
         EXPECT_EQ(scene.getNodeById(polygon_roi)->cropRole(), core::CropRole::Primary);
+        EXPECT_EQ(scene.getNodeById(polygon_roi)->uuid, roi_uuid);
         EXPECT_EQ(scene.getNodeById(roleVolume(scene, cloud, core::CropRole::Secondary))->type, core::NodeType::CROPBOX);
 
         // Undo walks back one role at a time.
@@ -162,6 +166,8 @@ namespace {
         ASSERT_TRUE(op::undoHistory().undo().success);
         EXPECT_EQ(scene.getNodeById(roleVolume(scene, cloud, core::CropRole::Secondary))->type, core::NodeType::CROP_POLYGON);
         EXPECT_EQ(scene.getNodeById(roleVolume(scene, cloud, core::CropRole::Primary))->type, core::NodeType::CROPBOX);
+        EXPECT_EQ(scene.getNodeById(roleVolume(scene, cloud, core::CropRole::Primary))->uuid, roi_uuid);
+        EXPECT_EQ(scene.getNodeById(roleVolume(scene, cloud, core::CropRole::Secondary))->uuid, crop_uuid);
     }
 
     TEST_F(CropRoleSceneTest, NewRoiIsABoxOrPolygonWhileAnOlderEllipsoidRoiStillConverts) {

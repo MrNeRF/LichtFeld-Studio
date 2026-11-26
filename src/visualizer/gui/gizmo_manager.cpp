@@ -703,6 +703,7 @@ namespace lfs::vis::gui {
         crop_tool_visualizer_transform_ = next_transform;
         crop_tool_target_node_id_ = target_id;
         crop_tool_volume_node_id_ = volume_node_id;
+        crop_tool_volume_type_ = node->type;
         crop_tool_initialized_ = true;
         if (changed)
             *changed = state_changed;
@@ -850,6 +851,13 @@ namespace lfs::vis::gui {
             clearCropToolOverlayState();
             return false;
         }
+
+        // A role's volume keeps its node when MCP or Python changes its shape; the tool follows it.
+        if (const auto* const volume = sm->getScene().getNodeById(*volume_id);
+            volume && *volume_id == crop_tool_volume_node_id_ && volume->type != crop_tool_volume_type_)
+            crop_tool_shape_ = volume->type == core::NodeType::ELLIPSOID      ? CropToolShape::Ellipsoid
+                               : volume->type == core::NodeType::CROP_POLYGON ? CropToolShape::Polygon
+                                                                              : CropToolShape::Box;
 
         bool state_changed = false;
         if (!syncCropToolStateFromNode(*target_id, *volume_id, &state_changed)) {

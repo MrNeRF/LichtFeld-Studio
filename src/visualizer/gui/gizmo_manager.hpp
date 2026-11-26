@@ -199,6 +199,7 @@ namespace lfs::vis {
             bool crop_tool_initialized_ = false;
             core::NodeId crop_tool_target_node_id_ = core::NULL_NODE;
             core::NodeId crop_tool_volume_node_id_ = core::NULL_NODE;
+            core::NodeType crop_tool_volume_type_ = core::NodeType::CROPBOX;
             bool crop_tool_drag_active_ = false;
             bool crop_tool_drag_changed_ = false;
             glm::vec3 crop_tool_box_min_before_drag_{-0.5f};
