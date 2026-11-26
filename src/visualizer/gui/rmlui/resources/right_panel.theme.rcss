@@ -64,11 +64,11 @@
 }
 
 .tab:hover {
-    @{right_panel.tab_hover_decor};
+    @{dock.tab_hover_decor};
 }
 
 .tab:focus-visible {
-    @{right_panel.tab_hover_decor};
+    @{dock.tab_hover_decor};
     color: @{text};
     border-color: @{primary};
     border-left-color: @{primary};

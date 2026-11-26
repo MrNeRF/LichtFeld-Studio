@@ -33,6 +33,12 @@ namespace lfs::vis::gui {
         setBottomDockActiveTab(id);
     }
 
+    bool PanelLayoutManager::leftDockResizeHovered(const LeftDockLayout& layout, const PanelInputState& input,
+                                                  const float top, const float height) {
+        return layout.containsResizePointer(input.mouse_x, input.mouse_y, top, height) &&
+               !PanelRegistry::instance().isPositionOverFloatingPanel(input.mouse_x, input.mouse_y);
+    }
+
     void PanelLayoutManager::setShowSequencer(const bool visible) {
         if (show_sequencer_ == visible)
             return;
@@ -591,8 +597,8 @@ namespace lfs::vis::gui {
             docked_ids.insert(tab.id);
         if (bottom_dock_sync_seeded_) {
             for (const auto& tab : docked_tabs) {
-                if (!previous_bottom_docked_ids_.contains(tab.id)) {
-                    activateBottomDockTab(tab.id);
+                if (!bottom_dock_collapsed_ && !previous_bottom_docked_ids_.contains(tab.id)) {
+                    setBottomDockActiveTab(tab.id);
                     bottom_dock_active_tab_changed_ = true;
                 }
             }
@@ -878,8 +884,7 @@ namespace lfs::vis::gui {
         const float panel_x = dock_layout.panel_x;
 
         left_dock_hovering_edge_ =
-            !float_blocks_left_dock &&
-            dock_layout.containsResizePointer(dock_input.mouse_x, dock_input.mouse_y, screen.work_pos.y, panel_h);
+            leftDockResizeHovered(dock_layout, input, screen.work_pos.y, panel_h);
 
         if (left_dock_resizing_) {
             left_dock_width_ = left_dock_drag_.edgeAt(

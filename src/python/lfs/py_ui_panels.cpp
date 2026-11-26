@@ -840,7 +840,7 @@ namespace lfs::python {
                         gui_manager->panelLayout().activateBottomDockTab(panel_id);
                 });
             },
-            nb::arg("panel_id"), "Set the active bottom-dock panel id");
+            nb::arg("panel_id"), "Activate a bottom-dock panel and reopen the dock if it is collapsed.");
 
         m.def(
             "set_main_panel_active_tab", [](const std::string& panel_id) {

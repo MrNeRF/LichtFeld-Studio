@@ -587,11 +587,17 @@ TEST_F(PanelLayoutRenderDemandTest, BottomDockCollapseKeepsActivePanelAndHeight)
     PanelLayoutManager restored;
     restored.applyProjectState(saved);
     EXPECT_TRUE(restored.isBottomDockCollapsed());
+    restored.renderBottomDock(draw_ctx, true, false, input, s);
+    auto late_panel = registerPanel("test.bottom.late", PanelSpace::BottomDock, 20.0f);
+    restored.renderBottomDock(draw_ctx, true, false, input, s);
+    EXPECT_TRUE(restored.isBottomDockCollapsed());
+    EXPECT_EQ(late_panel->draw_count, 0);
+    EXPECT_EQ(restored.getBottomDockActiveTab(), active);
 
-    layout.activateBottomDockTab(active);
-    layout.renderBottomDock(draw_ctx, true, false, input, s);
-    EXPECT_FLOAT_EQ(layout.computeBottomDockReservedHeight(true, false, s), expanded_height);
-    EXPECT_EQ(layout.getBottomDockActiveTab(), active);
+    restored.activateBottomDockTab(active);
+    restored.renderBottomDock(draw_ctx, true, false, input, s);
+    EXPECT_FLOAT_EQ(restored.computeBottomDockReservedHeight(true, false, s), expanded_height);
+    EXPECT_EQ(restored.getBottomDockActiveTab(), active);
     EXPECT_GT(panel->draw_count, draws);
 }
 

@@ -17,11 +17,11 @@
 }
 
 .tab:hover {
-    @{right_panel.tab_hover_decor};
+    @{dock.tab_hover_decor};
 }
 
 .tab:focus-visible {
-    @{right_panel.tab_hover_decor};
+    @{dock.tab_hover_decor};
     color: @{text};
     border-color: @{primary};
 }
@@ -61,5 +61,5 @@
 }
 
 #tab-separator {
-    background-color: @{right_panel.separator};
+    background-color: @{dock.tab_separator};
 }

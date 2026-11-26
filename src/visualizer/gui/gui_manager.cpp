@@ -6330,8 +6330,7 @@ namespace lfs::vis::gui {
             const auto left = panel_layout_.computeLeftDockLayout(show_main_panel_, ui_hidden_, shell_screen);
             const bool dragging = panel_layout_.isLeftDockResizing() && frame_input.mouse_down[0];
             const bool over_left_edge =
-                left.containsResizePointer(frame_input.mouse_x, frame_input.mouse_y, panel_y, panel_h) &&
-                !reg.isPositionOverFloatingPanel(frame_input.mouse_x, frame_input.mouse_y);
+                PanelLayoutManager::leftDockResizeHovered(left, frame_input, panel_y, panel_h);
             if (!block_underlay_input && left.panel_width > 0.0f && (dragging || over_left_edge)) {
                 shell_regions.left_resize = {left.edge_min_x, panel_y,
                                              left.panel_x + left.panel_width - left.edge_min_x, panel_h};
@@ -6753,15 +6752,19 @@ namespace lfs::vis::gui {
         const bool bottom_dock_input_activity =
             bottom_dock_pointer_activity ||
             hasKeyboardActivity(sdl_input);
+        const auto make_bottom_dock_chrome = [&](const float height) {
+            return BottomDockLayout{
+                .pos = {bottom_dock_x, screen.work_pos.y + screen.work_size.y - height},
+                .size = {bottom_dock_w, height},
+                .grip_h = bottom_dock_grip_h,
+                .tab_bar_h = PanelLayoutManager::TAB_BAR_H * current_ui_scale_,
+                .separator_h = current_ui_scale_,
+            };
+        };
         const auto bottom_dock_active_before_input = panel_layout_.getBottomDockActiveTab();
         rml_bottom_dock_.setVisible(panel_layout_.isBottomDockExpanded());
         if (panel_layout_.isBottomDockExpanded()) {
-            BottomDockLayout bottom_dock_rml_layout;
-            bottom_dock_rml_layout.pos = {bottom_dock_x, bottom_dock_y};
-            bottom_dock_rml_layout.size = {bottom_dock_w, bottom_dock_h};
-            bottom_dock_rml_layout.grip_h = bottom_dock_grip_h;
-            bottom_dock_rml_layout.tab_bar_h = PanelLayoutManager::TAB_BAR_H * current_ui_scale_;
-            bottom_dock_rml_layout.separator_h = current_ui_scale_;
+            const auto bottom_dock_rml_layout = make_bottom_dock_chrome(bottom_dock_h);
             if (reg.isPositionOverFloatingPanel(panel_input.mouse_x, panel_input.mouse_y))
                 rml_bottom_dock_.processInput(bottom_dock_rml_layout, maskInputForBlockedUi(panel_input));
             else
@@ -6798,16 +6801,9 @@ namespace lfs::vis::gui {
             });
         }
         if (panel_layout_.isBottomDockExpanded()) {
-            BottomDockLayout bottom_dock_rml_layout;
-            bottom_dock_rml_layout.pos = {bottom_dock_x, bottom_dock_y};
-            bottom_dock_rml_layout.size = {bottom_dock_w, bottom_dock_h};
-            bottom_dock_rml_layout.grip_h = bottom_dock_grip_h;
-            bottom_dock_rml_layout.tab_bar_h = PanelLayoutManager::TAB_BAR_H * current_ui_scale_;
-            bottom_dock_rml_layout.separator_h = current_ui_scale_;
-            const float reserved_height =
-                panel_layout_.computeBottomDockReservedHeight(show_main_panel_, ui_hidden_, screen);
-            bottom_dock_rml_layout.pos.y = screen.work_pos.y + screen.work_size.y - reserved_height;
-            bottom_dock_rml_layout.size.y = reserved_height;
+            // Resize input can change the height this frame; draw at the new edge.
+            auto bottom_dock_rml_layout = make_bottom_dock_chrome(
+                panel_layout_.computeBottomDockReservedHeight(show_main_panel_, ui_hidden_, screen));
             bottom_dock_rml_layout.grip_hovered = panel_layout_.isBottomDockHoveringEdge();
             bottom_dock_rml_layout.grip_active = panel_layout_.isBottomDockResizing();
             rml_bottom_dock_.render(bottom_dock_rml_layout, bottom_dock_tab_snaps,

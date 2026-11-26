@@ -2225,11 +2225,11 @@ def test_right_panel_tabs_keep_stable_boundaries_without_transparent_shell():
     assert "flex-direction: row;" in rule_body(bottom_tabs_rcss, "#tab-strip-viewport")
     assert "border-bottom-width: 0;" in rule_body(bottom_tabs_rcss, ".tab.active")
     assert "border-color: @{border};" in rule_body(panel_tabs_theme, ".tab")
-    assert "@{right_panel.tab_hover_decor};" in rule_body(panel_tabs_theme, ".tab:hover")
+    assert "@{dock.tab_hover_decor};" in rule_body(panel_tabs_theme, ".tab:hover")
     assert "border-color: @{primary};" in rule_body(panel_tabs_theme, ".tab:focus-visible")
     assert "background-color: transparent;" in rule_body(panel_tabs_theme, ".tab.active")
     assert "border-color: @{primary};" in rule_body(panel_tabs_theme, ".tab.active")
-    assert "@{right_panel.separator}" in panel_tabs_theme
+    assert "@{dock.tab_separator}" in panel_tabs_theme
 
     hover_rule = rule_body(right_panel_theme, ".tab:hover")
     assert "border-color:" not in hover_rule

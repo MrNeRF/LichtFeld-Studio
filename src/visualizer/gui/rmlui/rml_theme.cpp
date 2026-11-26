@@ -921,8 +921,7 @@ namespace lfs::vis::gui::rml_theme {
                 {"panel.primary_border_faint", colorToRmlAlpha(p.primary, 0.13f)},
                 {"panel.primary_accent", colorToRmlAlpha(p.primary, 0.22f)},
                 {"right_panel.tab_hover", colorToRmlAlpha(p.surface_bright, 0.5f)},
-                {"right_panel.tab_active_bg", colorToRmlAlpha(p.surface_bright, 0.4f)},
-                {"right_panel.tab_hover_decor", right_panel_tab_hover_decor},
+                {"dock.tab_hover_decor", right_panel_tab_hover_decor},
                 {"right_panel.tab_border", colorToRmlAlpha(p.border, enhanced_panel_chrome ? 0.46f : 0.42f)},
                 {"right_panel.tab_active_border",
                  enhanced_panel_chrome ? colorToRmlAlpha(p.primary, 0.78f)
@@ -935,7 +934,7 @@ namespace lfs::vis::gui::rml_theme {
                 {"right_panel.splitter_hover", colorToRmlAlpha(p.info, 0.6f)},
                 {"right_panel.splitter_active", colorToRmlAlpha(p.info, 0.8f)},
                 {"right_panel.border", colorToRmlAlpha(p.border, 0.6f)},
-                {"right_panel.separator", colorToRmlAlpha(p.border, 0.4f)},
+                {"dock.tab_separator", colorToRmlAlpha(p.border, 0.4f)},
                 {"dock.tab_idle_background", colorToRmlAlpha(p.surface_bright, 0.36f)},
                 {"dock.resize_hover", colorToRmlAlpha(p.info, 0.3f)},
                 {"dock.resize_active", colorToRmlAlpha(p.info, 0.5f)},
