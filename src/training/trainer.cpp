@@ -2376,6 +2376,7 @@ namespace lfs::training {
                 !storage) {
                 return lfs::Status::failure(std::move(storage).error());
             }
+            syncTrainingSceneTopology(scene_, strategy_->get_model());
         }
         // MCMC soft-deletes removed splats, so count the live ones.
         LOG_INFO("Cropped the trained model to its crop {}: {} of {} splats kept",

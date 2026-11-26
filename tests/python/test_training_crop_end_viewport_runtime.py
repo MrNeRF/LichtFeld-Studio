@@ -51,6 +51,9 @@ def test_completed_training_edit_viewport_renders(tmp_path, strategy, crop, shap
             assert len(roi) == 1 and roi[0].get("crop_role") == "roi", roi
             complete = _tool(endpoint, "crop_volume_get", {"owner": "Model", "role": "roi"})["volume"]
             assert complete["uuid"] == before["uuid"] and complete["shape"] == shape
+            if crop:
+                model = next(node for node in complete_nodes if node["name"] == "Model")
+                assert model["gaussian_count"] == int(match[1]), (model, match[0])
             return
         count_result = _tool(endpoint, "editor_run", {"code": "import lichtfeld as lf\n"
                              "print(next(n for n in lf.get_scene().get_nodes() if n.name=='Model').splat_data().num_points)",
