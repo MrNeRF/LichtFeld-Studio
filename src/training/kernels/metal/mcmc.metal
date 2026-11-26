@@ -167,7 +167,8 @@ kernel void mcmc_sample(constant McmcSampleParams& p [[buffer(0)]], uint i [[thr
     int right = int(p.categories) - 1;
     int selected = int(p.categories) - 1;
     while (left <= right) {
-        const int mid = (left + right) / 2;
+        // left + (right - left) / 2: (left + right) overflows int past 1.07G alive Gaussians.
+        const int mid = left + (right - left) / 2;
         if (p.cumsum[mid] * probability_scale >= u) {
             selected = mid;
             right = mid - 1;
