@@ -25,14 +25,6 @@ namespace lfs::vis::gui {
         lfs::python::request_redraw();
     }
 
-    void PanelLayoutManager::activateBottomDockTab(const std::string& id) {
-        if (bottom_dock_collapsed_ && !id.empty()) {
-            setSideDockCollapsed(lfs::core::SideDock::Bottom, false);
-            lfs::python::request_redraw();
-        }
-        setBottomDockActiveTab(id);
-    }
-
     bool PanelLayoutManager::leftDockResizeHovered(const LeftDockLayout& layout, const PanelInputState& input,
                                                   const float top, const float height) {
         return layout.containsResizePointer(input.mouse_x, input.mouse_y, top, height) &&

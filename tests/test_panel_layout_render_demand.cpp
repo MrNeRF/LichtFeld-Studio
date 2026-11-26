@@ -598,7 +598,8 @@ TEST_F(PanelLayoutRenderDemandTest, BottomDockCollapseKeepsActivePanelAndHeight)
     EXPECT_TRUE(restored.isBottomDockCollapsed());
     EXPECT_EQ(restored.getBottomDockActiveTab(), "test.bottom.late");
 
-    restored.activateBottomDockTab(active);
+    restored.setBottomDockActiveTab(active);
+    restored.setSideDockCollapsed(lfs::core::SideDock::Bottom, false);
     restored.renderBottomDock(draw_ctx, true, false, input, s);
     EXPECT_FLOAT_EQ(restored.computeBottomDockReservedHeight(true, false, s), expanded_height);
     EXPECT_EQ(restored.getBottomDockActiveTab(), active);

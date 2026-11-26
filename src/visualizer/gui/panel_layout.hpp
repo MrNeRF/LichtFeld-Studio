@@ -186,7 +186,6 @@ namespace lfs::vis::gui {
         bool isBottomDockHoveringEdge() const { return bottom_dock_hovering_edge_; }
         bool isBottomDockResizing() const { return bottom_dock_resizing_; }
         void setBottomDockActiveTab(const std::string& id);
-        void activateBottomDockTab(const std::string& id);
         static bool leftDockResizeHovered(const LeftDockLayout& layout, const PanelInputState& input,
                                          float top, float height);
         bool bottomDockActiveTabChanged() const { return bottom_dock_active_tab_changed_; }

@@ -3,6 +3,7 @@
 
 #include "core/event_bridge/event_bridge.hpp"
 #include "gui/gui_manager.hpp"
+#include "gui/native_panels.hpp"
 #include "licht_test_support.hpp"
 #include "project/session_state.hpp"
 #include "python/python_runtime.hpp"
@@ -149,6 +150,37 @@ namespace lfs::vis {
         // phase before the full viewport refresh is considered complete.
         EXPECT_TRUE(rendering->isViewportResizeDeferring());
         EXPECT_TRUE(rendering->hasPendingViewportResizeSettle());
+    }
+
+    TEST_F(UiVisibilityTransitionTest, BottomDockActivationFollowsPendingLayoutAndIgnoresFloatingPanels) {
+        VisualizerImpl viewer(projectOptions());
+        auto* const manager = viewer.getGuiManager();
+        ASSERT_NE(manager, nullptr);
+        manager->registerNativePanels();
+
+        using lfs::core::SideDock;
+        const auto bottom = std::to_underlying(SideDock::Bottom);
+        const std::string id(gui::native_panels::SEQUENCER_PANEL_ID);
+        auto& registry = gui::PanelRegistry::instance();
+        ASSERT_TRUE(registry.get_panel(id).has_value());
+        manager->ui_visibility_resize_active_ = true;
+        manager->ui_target_bottom_collapsed_ = true;
+        manager->revealPanel(id);
+        EXPECT_TRUE(manager->panelLayout().getBottomDockActiveTab().empty());
+        EXPECT_FALSE(manager->side_dock_toggle_pending_.test(bottom));
+
+        manager->activateBottomDockTab(id);
+        EXPECT_EQ(manager->panelLayout().getBottomDockActiveTab(), id);
+        EXPECT_TRUE(manager->side_dock_toggle_pending_.test(bottom));
+        EXPECT_TRUE(manager->ui_target_bottom_collapsed_);
+
+        manager->side_dock_toggle_pending_.reset();
+        manager->panelLayout().setBottomDockActiveTab({});
+        ASSERT_TRUE(registry.set_panel_space(id, gui::PanelSpace::Floating));
+        manager->activateBottomDockTab(id);
+        manager->activateBottomDockTab("missing.panel");
+        EXPECT_TRUE(manager->panelLayout().getBottomDockActiveTab().empty());
+        EXPECT_FALSE(manager->side_dock_toggle_pending_.test(bottom));
     }
 
     TEST_F(UiVisibilityTransitionTest, SideDockCollapseRoundTripsWithoutReplacingPreferredWidths) {

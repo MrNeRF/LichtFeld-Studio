@@ -147,6 +147,9 @@ horizontal tab row. The bottom dock retains its horizontal tabs.
 For plugins registered in `BOTTOM_DOCK`, `lf.ui.set_bottom_dock_active_tab(panel_id)`
 selects the tab and preserves the dock's collapsed state.
 `lf.ui.activate_bottom_dock_tab(panel_id)` also expands the dock when collapsed.
+It applies to enabled panels currently in the bottom dock.
+Use `lf.ui.is_bottom_dock_collapsed()` to distinguish the selected tab from one
+whose contents are displayed.
 
 Labels read bottom to top and use the translated panel label. Tab height follows
 the measured text length, including glyph clearance and compact padding. Labels

@@ -73,6 +73,7 @@ namespace lfs::vis {
     class VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
     class VisualizerImplResetTest_UiVisibilityWaitsForMatchingFrame_Test;
     class UiVisibilityTransitionTest_UiVisibilityWaitsForMatchingFrame_Test;
+    class UiVisibilityTransitionTest_BottomDockActivationFollowsPendingLayoutAndIgnoresFloatingPanels_Test;
     class VisualizerImplResetTest_UiVisibilityTimeoutCommitsRequestedLayout_Test;
     class UiVisibilityTransitionTest_UiVisibilityTimeoutCommitsRequestedLayout_Test;
     class UiVisibilityTransitionTest_UiVisibilityFinishesWithoutWaitingForFullscreenGuard_Test;
@@ -162,6 +163,7 @@ namespace lfs::vis {
             [[nodiscard]] const PanelLayoutManager& panelLayout() const { return panel_layout_; }
             [[nodiscard]] bool isSequencerVisible() const { return !ui_hidden_ && panel_layout_.isShowSequencer(); }
             void focusMainPanelTab(std::string panel_id) { revealPanel(panel_id); }
+            void activateBottomDockTab(const std::string& id) { revealPanel(id, PanelSpace::BottomDock); }
             [[nodiscard]] GlobalContextMenu& globalContextMenu() { return *global_context_menu_; }
 
             // State queries
@@ -281,6 +283,7 @@ namespace lfs::vis {
             friend class lfs::vis::VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
             friend class lfs::vis::VisualizerImplResetTest_UiVisibilityWaitsForMatchingFrame_Test;
             friend class lfs::vis::UiVisibilityTransitionTest_UiVisibilityWaitsForMatchingFrame_Test;
+            friend class lfs::vis::UiVisibilityTransitionTest_BottomDockActivationFollowsPendingLayoutAndIgnoresFloatingPanels_Test;
             friend class lfs::vis::VisualizerImplResetTest_UiVisibilityTimeoutCommitsRequestedLayout_Test;
             friend class lfs::vis::UiVisibilityTransitionTest_UiVisibilityTimeoutCommitsRequestedLayout_Test;
             friend class lfs::vis::UiVisibilityTransitionTest_UiVisibilityFinishesWithoutWaitingForFullscreenGuard_Test;
@@ -377,7 +380,7 @@ namespace lfs::vis {
             void queueUiVisibilityToggle();
             void queueSideDockToggle(lfs::core::SideDock side);
             bool rightDockRendered() const;
-            void revealPanel(const std::string& id);
+            void revealPanel(const std::string& id, std::optional<PanelSpace> space = std::nullopt);
             void requestUiVisibilityToggle();
             void updateUiVisibilityTransition();
             void commitUiVisibilityTransition(bool matched_frame);

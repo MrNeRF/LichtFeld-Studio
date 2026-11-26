@@ -5647,25 +5647,43 @@ namespace lfs::vis::gui {
         }
     }
 
-    void GuiManager::revealPanel(const std::string& id) {
+    void GuiManager::revealPanel(const std::string& id, const std::optional<PanelSpace> space) {
         if (!viewer_)
             return;
         if (!viewer_->isOnViewerThread()) {
-            viewer_->postWork(VisualizerImpl::WorkItem{.run = [this, id = std::string(id)] { revealPanel(id); }, .cancel = {}});
+            viewer_->postWork(VisualizerImpl::WorkItem{.run = [this, id, space] { revealPanel(id, space); }, .cancel = {}});
             return;
         }
         const auto panel = PanelRegistry::instance().get_panel(id);
-        if (!panel || !panel->enabled)
+        if (!panel || !panel->enabled || (space && panel->space != *space))
             return;
-        const bool right = panel->space == PanelSpace::MainPanelTab || panel->space == PanelSpace::SceneHeader;
-        if (!right && panel->space != PanelSpace::LeftDock)
-            return;
-        if (panel->space == PanelSpace::MainPanelTab)
+
+        using lfs::core::SideDock;
+        SideDock side;
+        bool collapsed;
+        switch (panel->space) {
+        case PanelSpace::MainPanelTab:
             focus_panel_name_ = id;
-        const bool collapsed = ui_visibility_resize_active_
-                                   ? (right ? ui_target_right_collapsed_ : ui_target_left_collapsed_)
-                                   : (right ? panel_layout_.isRightDockCollapsed() : panel_layout_.isLeftDockCollapsed());
-        const auto side = right ? lfs::core::SideDock::Right : lfs::core::SideDock::Left;
+            [[fallthrough]];
+        case PanelSpace::SceneHeader:
+            side = SideDock::Right;
+            collapsed = ui_visibility_resize_active_ ? ui_target_right_collapsed_ : panel_layout_.isRightDockCollapsed();
+            break;
+        case PanelSpace::LeftDock:
+            side = SideDock::Left;
+            collapsed = ui_visibility_resize_active_ ? ui_target_left_collapsed_ : panel_layout_.isLeftDockCollapsed();
+            break;
+        case PanelSpace::BottomDock:
+            // Enabling a plugin panel emits RevealPanel even during background setup.
+            if (space != PanelSpace::BottomDock)
+                return;
+            panel_layout_.setBottomDockActiveTab(id);
+            side = SideDock::Bottom;
+            collapsed = ui_visibility_resize_active_ ? ui_target_bottom_collapsed_ : panel_layout_.isBottomDockCollapsed();
+            break;
+        default:
+            return;
+        }
         side_dock_toggle_pending_.set(std::to_underlying(side), collapsed);
         lfs::python::request_redraw();
     }
@@ -5674,6 +5692,8 @@ namespace lfs::vis::gui {
         if (!viewer_)
             return;
         const auto request = [this, side] {
+            if (side == lfs::core::SideDock::Bottom && !panel_layout_.isBottomDockVisible())
+                return;
             side_dock_toggle_pending_.set(std::to_underlying(side));
             if (auto* wm = viewer_->getWindowManager())
                 wm->wakeEventLoop();

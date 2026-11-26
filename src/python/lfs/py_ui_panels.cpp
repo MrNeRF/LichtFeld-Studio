@@ -843,10 +843,21 @@ namespace lfs::python {
             nb::arg("panel_id"), "Set the active bottom-dock panel id");
 
         m.def(
+            "is_bottom_dock_collapsed", [] {
+                return invoke_on_viewer(
+                    [] {
+                        const auto* gui_manager = get_gui_manager();
+                        return gui_manager && gui_manager->panelLayout().isBottomDockCollapsed();
+                    },
+                    false);
+            },
+            "Return whether the bottom dock is collapsed.");
+
+        m.def(
             "activate_bottom_dock_tab", [](const std::string& panel_id) {
                 invoke_on_viewer([panel_id] {
                     if (auto* const gui_manager = get_gui_manager())
-                        gui_manager->panelLayout().activateBottomDockTab(panel_id);
+                        gui_manager->activateBottomDockTab(panel_id);
                 });
             },
             nb::arg("panel_id"), "Activate a bottom-dock panel and reopen the dock if it is collapsed.");

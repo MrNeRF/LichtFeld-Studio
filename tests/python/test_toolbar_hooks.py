@@ -365,8 +365,13 @@ def test_bottom_dock_toolbar_selection_and_dispatch_rules(toolbar_module, monkey
     calls = []
     set_visible = lambda value: calls.append(("visible", value))
     set_active = lambda panel_id: (calls.append(("active", panel_id)), active.__setitem__(0, panel_id))
+    collapsed = [False]
     if explicit_activation:
         monkeypatch.setattr(lf_stub.ui, "activate_bottom_dock_tab", set_active, raising=False)
+        monkeypatch.setattr(lf_stub.ui, "is_bottom_dock_collapsed", lambda: collapsed[0], raising=False)
+        monkeypatch.setattr(
+            lf_stub.ui, "set_bottom_dock_active_tab", lambda _: pytest.fail("passive setter called")
+        )
     else:
         monkeypatch.setattr(lf_stub.ui, "set_bottom_dock_active_tab", set_active, raising=False)
 
@@ -384,10 +389,21 @@ def test_bottom_dock_toolbar_selection_and_dispatch_rules(toolbar_module, monkey
     module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, True, set_visible)
     assert calls == [("visible", False)]
 
+    if explicit_activation:
+        collapsed[0] = True
+        calls.clear()
+        assert not module._bottom_dock_panel_selected(module._HISTOGRAM_PANEL_ID, True)
+        module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, True, set_visible)
+        assert calls == [("active", module._HISTOGRAM_PANEL_ID)]
+
     spaces[module._HISTOGRAM_PANEL_ID] = lf_stub.ui.PanelSpace.FLOATING
     calls.clear()
     module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, True, set_visible)
     assert calls == [("visible", False)]
+
+    calls.clear()
+    module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, False, set_visible)
+    assert calls == [("visible", True)]
 
 
 def test_toolbar_attach_handle_marks_model_dirty(toolbar_module):
