@@ -226,8 +226,9 @@ namespace lfs::vis::op {
     }
 
     bool OperatorRegistry::pollImpl(const RegisteredOperator& reg, const OperatorProperties* props) const {
-        if (!props && reg.descriptor.builtin_id == BuiltinOp::ModelAlignment &&
-            active_modal_builtin_.load() == BuiltinOp::ModelAlignment && active_modal_) {
+        // A running instance can poll against session state rather than the idle cache.
+        if (!props && active_modal_id_.empty() && active_modal_ &&
+            reg.descriptor.builtin_id == active_modal_builtin_.load()) {
             auto ctx = makeContext();
             return ctx && active_modal_->poll(*ctx);
         }
