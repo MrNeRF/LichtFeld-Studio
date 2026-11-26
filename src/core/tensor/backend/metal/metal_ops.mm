@@ -13,6 +13,7 @@
 #include "image_warp_program.hpp"
 #include "metal_backend_ops.hpp"
 #include "metal_context.hpp"
+#include "metal_testing.hpp"
 
 #include "core/assert.hpp"
 #include "core/detail/fused_pointwise.hpp"
@@ -26,6 +27,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <bit>
 #include <cmath>
 #include <cstring>
@@ -54,9 +56,18 @@ namespace lfs::core::internal {
             return ((m + 63) / 64) * ((n + 63) / 64) * batch >= kWideTiles ? 64 : 32;
         }
 
+        // A kernel's grid position is a 32-bit uint, so a 1D grid past 2^32 - 1 threads would wrap it: refuse one
+        // loudly, whatever kernel it is for.
         MTLSize threads(const size_t count) {
+            LFS_ASSERT_MSG(count <= std::numeric_limits<uint32_t>::max(),
+                           std::format("Metal dispatch of {} threads exceeds the 32-bit grid position", count));
             return MTLSizeMake(count, 1, 1);
         }
+
+        // Generic fills and copies dispatch one thread per element of up to 16 bytes, so a call past this many
+        // elements goes in pieces, each from its own 64-bit offset; below it, it is a single dispatch. A test lowers it.
+        constexpr size_t kCopyPieceElements = size_t{1} << 31;
+        std::atomic<size_t> copy_piece_elements{kCopyPieceElements};
 
         uint32_t checked_u32(const size_t value, const char* const description) {
             LFS_ASSERT_MSG(value <= std::numeric_limits<uint32_t>::max(), std::format("{} (value={})", description, value));
@@ -205,12 +216,17 @@ namespace lfs::core::internal {
             if (element_size == 4 && bytes % 16 == 0 && output_at.offset % 16 == 0)
                 element_size = 16;
             const auto pipeline = context.pipeline("fill", {{0, 0}, {5, static_cast<uint32_t>(element_size)}});
-            const FillParams params{.output_offset = output_at.offset, .pattern = pattern, .count = bytes / element_size};
             const std::array uses{output};
-            context.dispatch(uses, {.pipeline = pipeline,
-                                    .buffers = {output_at.address},
-                                    .params = param_bytes(params),
-                                    .grid = threads(params.count)});
+            const size_t count = bytes / element_size, piece = copy_piece_elements.load(std::memory_order_relaxed);
+            for (size_t first = 0; first < count; first += piece) {
+                const FillParams params{.output_offset = output_at.offset + first * element_size,
+                                        .pattern = pattern,
+                                        .count = std::min(piece, count - first)};
+                context.dispatch(uses, {.pipeline = pipeline,
+                                        .buffers = {output_at.address},
+                                        .params = param_bytes(params),
+                                        .grid = threads(params.count)});
+            }
         }
 
         API_AVAILABLE(macos(26.0))
@@ -227,16 +243,19 @@ namespace lfs::core::internal {
             const uint32_t element_size = aligned(16) ? 16 : aligned(4) ? 4
                                                                         : 1;
             const auto pipeline = context.pipeline("copy_bytes", {{5, element_size}});
-            const CopyParams params{
-                .source_offset = source_at.offset,
-                .destination_offset = destination_at.offset,
-                .count = bytes / element_size,
-            };
             const std::array uses{source, destination};
-            context.dispatch(uses, {.pipeline = pipeline,
-                                    .buffers = {source_at.address, destination_at.address},
-                                    .params = param_bytes(params),
-                                    .grid = threads(params.count)});
+            const size_t count = bytes / element_size, piece = copy_piece_elements.load(std::memory_order_relaxed);
+            for (size_t first = 0; first < count; first += piece) {
+                const CopyParams params{
+                    .source_offset = source_at.offset + first * element_size,
+                    .destination_offset = destination_at.offset + first * element_size,
+                    .count = std::min(piece, count - first),
+                };
+                context.dispatch(uses, {.pipeline = pipeline,
+                                        .buffers = {source_at.address, destination_at.address},
+                                        .params = param_bytes(params),
+                                        .grid = threads(params.count)});
+            }
         }
 
         struct StridedParams {
@@ -1395,6 +1414,8 @@ namespace lfs::core::internal {
         }
 
         MTLSize thread_groups(const size_t count) {
+            LFS_ASSERT_MSG(count <= std::numeric_limits<uint32_t>::max(),
+                           std::format("Metal dispatch of {} threads exceeds the 32-bit grid position", count));
             return MTLSizeMake((count + kThreadgroupWidth - 1) / kThreadgroupWidth, 1, 1);
         }
 
@@ -1567,6 +1588,10 @@ namespace lfs::core::internal {
             bool pending_ = false;
         };
     } // namespace
+
+    void set_metal_copy_piece_elements_for_testing(const size_t elements) noexcept {
+        copy_piece_elements.store(elements == 0 ? kCopyPieceElements : elements, std::memory_order_relaxed);
+    }
 
     // Fused expressions compile to MSL once per layout class; the launch
     // arguments are the dispatch parameters.

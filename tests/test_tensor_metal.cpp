@@ -13,6 +13,7 @@
 #include "core/tensor.hpp"
 #include "core/tensor/backend/facade_trace.hpp"
 #include "core/tensor/backend/gpu_backend_ops.hpp"
+#include "core/tensor/backend/metal/metal_testing.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_environment.hpp"
 #include "core/tensor_execution.hpp"
@@ -2696,6 +2697,36 @@ namespace {
             EXPECT_EQ(mismatches, 0u) << "region " << region;
         }
         EXPECT_LT(rounded, 64u);
+    }
+
+    // Generic fills and copies dispatch one thread per element of up to 16 bytes, and a kernel's grid position is 32
+    // bits wide, so past 2^31 elements they go in pieces, each from its own 64-bit offset. With the piece lowered to 7
+    // elements, fills and copies of 16-, 4- and 1-byte elements, at aligned and unaligned offsets, still write every
+    // byte exactly as one dispatch did.
+    TEST_F(TensorMetal, FillsAndCopiesInPiecesWriteEveryByte) {
+        GpuBackendScope scope(GpuBackend::Metal);
+        struct Restore {
+            ~Restore() { internal::set_metal_copy_piece_elements_for_testing(0); }
+        } restore;
+        internal::set_metal_copy_piece_elements_for_testing(7);
+        // 1,000 floats move as 250 16-byte elements, 1,001 as 4-byte ones, 1,003 bytes one by one.
+        for (const auto& [count, dtype] : {std::pair{size_t{1000}, DataType::Float32},
+                                           std::pair{size_t{1001}, DataType::Float32},
+                                           std::pair{size_t{1003}, DataType::UInt8}}) {
+            SCOPED_TRACE(std::to_string(count) + (dtype == DataType::UInt8 ? " bytes" : " floats"));
+            const Tensor cpu = random_tensor(count, 0.0f, 200.0f, 3).to(dtype);
+            const Tensor metal = to_metal(cpu);
+            expect_close(metal.clone(), cpu, 0.0f, 0.0f);
+            expect_close(Tensor::zeros({count}, Device::GPU, dtype), Tensor::zeros({count}, Device::CPU, dtype), 0.0f, 0.0f);
+            expect_close(Tensor::full({count}, 7.0f, Device::GPU, dtype), Tensor::full({count}, 7.0f, Device::CPU, dtype),
+                         0.0f, 0.0f);
+            // One element in: 4-byte aligned for floats but not 16, unaligned for bytes.
+            Tensor shifted = Tensor::zeros({count}, Device::GPU, dtype);
+            shifted.slice(0, 1, count).copy_from(metal.slice(0, 0, count - 1));
+            Tensor expected = Tensor::zeros({count}, Device::CPU, dtype);
+            expected.slice(0, 1, count).copy_from(cpu.slice(0, 0, count - 1));
+            expect_close(shifted, expected, 0.0f, 0.0f);
+        }
     }
 
 } // namespace
