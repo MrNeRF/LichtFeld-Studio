@@ -4155,6 +4155,10 @@ class HistogramPanel(Panel):
         if not changed:
             return
         self._sync_panel_space_state()
+        if target_space == lf.ui.PanelSpace.BOTTOM_DOCK:
+            activate = getattr(lf.ui, "activate_bottom_dock_tab", None)
+            if callable(activate):
+                activate(self.id)
         if self._handle:
             self._handle.dirty_all()
 

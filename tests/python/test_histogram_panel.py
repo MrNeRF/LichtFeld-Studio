@@ -1605,7 +1605,13 @@ def test_histogram_panel_preserves_and_toggles_saved_space(histogram_panel_modul
         state["space"] = space
         return True
 
+    def activate(panel_id):
+        assert panel_id == panel.id
+        assert state["space"] == lf.ui.PanelSpace.BOTTOM_DOCK
+        moves.append("activate")
+
     monkeypatch.setattr(lf.ui, "set_panel_space", set_space)
+    monkeypatch.setattr(lf.ui, "activate_bottom_dock_tab", activate, raising=False)
     assert panel._sync_panel_space_state() is (saved_space == "FLOATING")
     assert state["space"] == getattr(lf.ui.PanelSpace, saved_space)
     assert panel._sync_panel_space_state() is False
@@ -1619,16 +1625,20 @@ def test_histogram_panel_preserves_and_toggles_saved_space(histogram_panel_modul
         assert panel._is_floating == (state["space"] == lf.ui.PanelSpace.FLOATING)
         assert panel._sync_panel_space_state() is False
     assert state["space"] == getattr(lf.ui.PanelSpace, saved_space)
-    assert len(moves) == 2
+    bottom = [lf.ui.PanelSpace.BOTTOM_DOCK, "activate"]
+    floating = [lf.ui.PanelSpace.FLOATING]
+    assert moves == (bottom + floating if saved_space == "FLOATING" else floating + bottom)
 
 
 def test_histogram_failed_dock_toggle_preserves_state(histogram_panel_module, lf, monkeypatch):
     panel = histogram_panel_module.HistogramPanel()
-    monkeypatch.setattr(lf.ui, "get_panel", lambda _: SimpleNamespace(space=lf.ui.PanelSpace.BOTTOM_DOCK))
+    monkeypatch.setattr(lf.ui, "get_panel", lambda _: SimpleNamespace(space=lf.ui.PanelSpace.FLOATING))
     monkeypatch.setattr(lf.ui, "set_panel_space", lambda *_: False)
+    monkeypatch.setattr(lf.ui, "activate_bottom_dock_tab", lambda _: pytest.fail("failed move activated"), raising=False)
+    panel._sync_panel_space_state()
     panel._on_toggle_dock_mode(None, None, None)
-    assert panel._dock_toggle_label() == "Undock"
-    assert not panel._is_floating
+    assert panel._dock_toggle_label() == "Dock"
+    assert panel._is_floating
 
 
 
