@@ -34,7 +34,7 @@ body {
     left: 0;
     top: 0;
     bottom: 0;
-    width: 1dp;
+    width: 4dp;
     pointer-events: none;
     z-index: 1;
 }

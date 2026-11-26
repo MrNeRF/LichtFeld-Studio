@@ -82,7 +82,7 @@
 }
 
 #left-border {
-    background-color: @{border};
+    background-color: @{menu.background};
 }
 
 #resize-handle:hover,

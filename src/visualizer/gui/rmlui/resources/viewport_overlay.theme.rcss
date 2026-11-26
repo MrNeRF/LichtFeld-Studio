@@ -181,7 +181,7 @@
 }
 
 .viewport-frame-border {
-    background-color: @{border};
+    background-color: @{menu.background};
 }
 
 .left-dock-resize-indicator {
