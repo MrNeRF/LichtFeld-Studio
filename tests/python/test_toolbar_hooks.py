@@ -338,7 +338,8 @@ def test_toolbar_binds_overlay_model_fields(toolbar_module):
     assert "viewport_export_action" in model.bound_events
 
 
-def test_bottom_dock_toolbar_selection_and_dispatch_rules(toolbar_module, monkeypatch):
+@pytest.mark.parametrize("explicit_activation", [False, True])
+def test_bottom_dock_toolbar_selection_and_dispatch_rules(toolbar_module, monkeypatch, explicit_activation):
     module, _hook_calls, _remove_calls = toolbar_module
     lf_stub = sys.modules["lichtfeld"]
     spaces = {
@@ -364,7 +365,15 @@ def test_bottom_dock_toolbar_selection_and_dispatch_rules(toolbar_module, monkey
     calls = []
     set_visible = lambda value: calls.append(("visible", value))
     set_active = lambda panel_id: (calls.append(("active", panel_id)), active.__setitem__(0, panel_id))
-    monkeypatch.setattr(lf_stub.ui, "set_bottom_dock_active_tab", set_active, raising=False)
+    collapsed = [False]
+    if explicit_activation:
+        monkeypatch.setattr(lf_stub.ui, "activate_bottom_dock_tab", set_active, raising=False)
+        monkeypatch.setattr(lf_stub.ui, "is_bottom_dock_collapsed", lambda: collapsed[0], raising=False)
+        monkeypatch.setattr(
+            lf_stub.ui, "set_bottom_dock_active_tab", lambda _: pytest.fail("passive setter called")
+        )
+    else:
+        monkeypatch.setattr(lf_stub.ui, "set_bottom_dock_active_tab", set_active, raising=False)
 
     active[0] = ""
     module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, False, set_visible)
@@ -380,10 +389,21 @@ def test_bottom_dock_toolbar_selection_and_dispatch_rules(toolbar_module, monkey
     module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, True, set_visible)
     assert calls == [("visible", False)]
 
+    if explicit_activation:
+        collapsed[0] = True
+        calls.clear()
+        assert not module._bottom_dock_panel_selected(module._HISTOGRAM_PANEL_ID, True)
+        module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, True, set_visible)
+        assert calls == [("active", module._HISTOGRAM_PANEL_ID)]
+
     spaces[module._HISTOGRAM_PANEL_ID] = lf_stub.ui.PanelSpace.FLOATING
     calls.clear()
     module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, True, set_visible)
     assert calls == [("visible", False)]
+
+    calls.clear()
+    module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, False, set_visible)
+    assert calls == [("visible", True)]
 
 
 def test_toolbar_attach_handle_marks_model_dirty(toolbar_module):
@@ -2221,12 +2241,15 @@ def test_right_panel_tabs_keep_stable_boundaries_without_transparent_shell():
     assert "border-color: @{border};" in rule_body(right_panel_theme, ".tab")
     assert "border-color: @{primary};" in rule_body(right_panel_theme, ".tab:focus-visible")
 
-    for shared_token in (
-        "right_panel.tab_active_bg",
-        "right_panel.separator",
-    ):
-        assert f"@{{{shared_token}}}" in panel_tabs_theme
-        assert f'{{"{shared_token}"' in resolver
+    bottom_tabs_rcss = (resources / "panel_tabs.rcss").read_text(encoding="utf-8")
+    assert "flex-direction: row;" in rule_body(bottom_tabs_rcss, "#tab-strip-viewport")
+    assert "border-bottom-width: 0;" in rule_body(bottom_tabs_rcss, ".tab.active")
+    assert "border-color: @{border};" in rule_body(panel_tabs_theme, ".tab")
+    assert "@{dock.tab_hover_decor};" in rule_body(panel_tabs_theme, ".tab:hover")
+    assert "border-color: @{primary};" in rule_body(panel_tabs_theme, ".tab:focus-visible")
+    assert "background-color: transparent;" in rule_body(panel_tabs_theme, ".tab.active")
+    assert "border-color: @{primary};" in rule_body(panel_tabs_theme, ".tab.active")
+    assert "@{dock.tab_separator}" in panel_tabs_theme
 
     hover_rule = rule_body(right_panel_theme, ".tab:hover")
     assert "border-color:" not in hover_rule

@@ -12,14 +12,6 @@ body {
     left: 0;
     top: 0;
     width: 100%;
-    height: 8dp;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    height: 4dp;
     pointer-events: none;
-}
-
-.dock-grip-bar {
-    width: 36dp;
-    height: 3dp;
 }

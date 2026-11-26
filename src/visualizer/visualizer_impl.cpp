@@ -630,7 +630,7 @@ namespace lfs::vis {
                 if (auto* gm = python::get_gui_manager()) {
                     gm->panelLayout().setShowSequencer(visible);
                     if (visible)
-                        gm->panelLayout().setBottomDockActiveTab(std::string(
+                        gm->activateBottomDockTab(std::string(
                             gui::native_panels::SEQUENCER_PANEL_ID));
                 }
             });

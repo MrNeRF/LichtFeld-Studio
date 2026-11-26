@@ -114,6 +114,7 @@ namespace lfs::python {
             .value("IMAGE_PREVIEW_REMOVE_POINT", Action::IMAGE_PREVIEW_REMOVE_POINT)
             .value("TOGGLE_LEFT_DOCK", Action::TOGGLE_LEFT_DOCK)
             .value("TOGGLE_RIGHT_DOCK", Action::TOGGLE_RIGHT_DOCK)
+            .value("TOGGLE_BOTTOM_DOCK", Action::TOGGLE_BOTTOM_DOCK)
             .value("NONE", Action::NONE)
             .value("CAMERA_ORBIT", Action::CAMERA_ORBIT)
             .value("CAMERA_PAN", Action::CAMERA_PAN)

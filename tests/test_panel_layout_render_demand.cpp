@@ -560,6 +560,53 @@ TEST_F(PanelLayoutRenderDemandTest, BottomDockCachedDrawsOnlyLastActivePanel) {
     EXPECT_EQ(second->cached_draw_count, 1);
 }
 
+TEST_F(PanelLayoutRenderDemandTest, BottomDockCollapseKeepsActivePanelAndHeight) {
+    using namespace lfs::vis::gui;
+    auto panel = registerPanel("test.bottom.collapse", PanelSpace::BottomDock, 20.0f);
+    PanelLayoutManager layout;
+    UIContext ui;
+    PanelDrawContext draw_ctx{.ui = &ui};
+    PanelInputState input;
+    const auto s = screen();
+
+    layout.renderBottomDock(draw_ctx, true, false, input, s);
+    ASSERT_TRUE(layout.isBottomDockVisible());
+    const float expanded_height = layout.computeBottomDockReservedHeight(true, false, s);
+    const auto active = layout.getBottomDockActiveTab();
+    const int draws = panel->draw_count;
+
+    layout.setSideDockCollapsed(lfs::core::SideDock::Bottom, !layout.isBottomDockCollapsed());
+    layout.renderBottomDock(draw_ctx, true, false, input, s);
+    layout.renderBottomDockCached(draw_ctx, true, false, input, s);
+    EXPECT_TRUE(layout.isBottomDockVisible());
+    EXPECT_EQ(layout.computeBottomDockReservedHeight(true, false, s), 0.0f);
+    EXPECT_EQ(layout.computeBottomDockReservedHeight(true, true, s), 0.0f);
+    EXPECT_EQ(panel->draw_count, draws);
+    EXPECT_EQ(panel->cached_draw_count, 0);
+    auto saved = layout.captureProjectState();
+    PanelLayoutManager restored;
+    restored.applyProjectState(saved);
+    EXPECT_TRUE(restored.isBottomDockCollapsed());
+    restored.renderBottomDock(draw_ctx, true, false, input, s);
+    auto late_panel = registerPanel("test.bottom.late", PanelSpace::BottomDock, 20.0f);
+    restored.renderBottomDock(draw_ctx, true, false, input, s);
+    EXPECT_TRUE(restored.isBottomDockCollapsed());
+    EXPECT_EQ(late_panel->draw_count, 0);
+    EXPECT_EQ(restored.getBottomDockActiveTab(), active);
+
+    restored.setBottomDockActiveTab("test.bottom.late");
+    EXPECT_TRUE(restored.isBottomDockCollapsed());
+    EXPECT_EQ(restored.getBottomDockActiveTab(), "test.bottom.late");
+
+    restored.setBottomDockActiveTab(active);
+    restored.setSideDockCollapsed(lfs::core::SideDock::Bottom, false);
+    restored.renderBottomDock(draw_ctx, true, false, input, s);
+    EXPECT_FLOAT_EQ(restored.computeBottomDockReservedHeight(true, false, s), expanded_height);
+    EXPECT_EQ(restored.getBottomDockActiveTab(), active);
+    EXPECT_GT(panel->draw_count, draws);
+    EXPECT_EQ(late_panel->draw_count, 0);
+}
+
 TEST_F(PanelLayoutRenderDemandTest, VerticalTabsReserveWidthInLiveAndCachedContent) {
     using namespace lfs::vis::gui;
     auto scene = registerPanel("test.scene.vertical", PanelSpace::SceneHeader, 120.0f);

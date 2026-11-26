@@ -58,8 +58,7 @@ namespace lfs::vis::gui {
                    element->GetId() != "dm-root" &&
                    element->GetId() != "viewport-content" &&
                    !element->IsClassSet("viewport-split-divider") &&
-                   !element->IsClassSet("comparison-name") &&
-                   !element->IsClassSet("left-dock-resize-indicator");
+                   !element->IsClassSet("comparison-name");
         }
 
         [[nodiscard]] bool isViewportOverlayHoverRoot(const Rml::Element* const element) {
@@ -155,7 +154,6 @@ namespace lfs::vis::gui {
         append(RenderReason::PointerDrag, "pointer_drag");
         append(RenderReason::Keyboard, "keyboard");
         append(RenderReason::LodStats, "lod_stats");
-        append(RenderReason::LeftDockResize, "left_dock_resize");
         append(RenderReason::ProjectDrag, "project_drag");
         append(RenderReason::ThemePresentation, "theme_presentation");
         return sources.empty() ? "unknown" : sources;
@@ -275,7 +273,6 @@ namespace lfs::vis::gui {
             document_->Show();
             applyGTMetricsOverlay();
             applySplitDividerOverlay();
-            applyLeftDockResizeIndicator();
             applyLodStatsOverlay();
             applyProjectDragOverlay();
             applySideDocks();
@@ -398,7 +395,8 @@ namespace lfs::vis::gui {
 
     void RmlViewportOverlay::SideDockListener::ProcessEvent(Rml::Event& event) {
         auto* target = event.GetTargetElement();
-        while (target && target->GetId() != "left-side-dock-toggle" && target->GetId() != "right-side-dock-toggle")
+        while (target && target->GetId() != "left-side-dock-toggle" && target->GetId() != "right-side-dock-toggle" &&
+               target->GetId() != "bottom-dock-toggle")
             target = target->GetParentNode();
         if (!target)
             return;
@@ -408,19 +406,26 @@ namespace lfs::vis::gui {
                 (key != Rml::Input::KI_RETURN && key != Rml::Input::KI_SPACE))
                 return;
         }
-        lfs::core::events::ui::ToggleSideDock{.side = target->GetId() == "right-side-dock-toggle" ? lfs::core::SideDock::Right : lfs::core::SideDock::Left}.emit();
+        const auto side = target->GetId() == "bottom-dock-toggle"       ? lfs::core::SideDock::Bottom
+                          : target->GetId() == "right-side-dock-toggle" ? lfs::core::SideDock::Right
+                                                                        : lfs::core::SideDock::Left;
+        lfs::core::events::ui::ToggleSideDock{.side = side}.emit();
         event.StopPropagation();
     }
 
     void RmlViewportOverlay::setSideDocks(const bool left_visible, const bool left_collapsed,
-                                          const bool right_visible, const bool right_collapsed) {
+                                          const bool right_visible, const bool right_collapsed,
+                                          const bool bottom_visible, const bool bottom_collapsed) {
         if (left_dock_available_ == left_visible && left_dock_collapsed_ == left_collapsed &&
-            right_dock_available_ == right_visible && right_dock_collapsed_ == right_collapsed)
+            right_dock_available_ == right_visible && right_dock_collapsed_ == right_collapsed &&
+            bottom_dock_available_ == bottom_visible && bottom_dock_collapsed_ == bottom_collapsed)
             return;
         left_dock_available_ = left_visible;
         left_dock_collapsed_ = left_collapsed;
         right_dock_available_ = right_visible;
         right_dock_collapsed_ = right_collapsed;
+        bottom_dock_available_ = bottom_visible;
+        bottom_dock_collapsed_ = bottom_collapsed;
         applySideDocks();
         markRenderNeeded(RenderReason::ToolbarLayout);
     }
@@ -437,6 +442,7 @@ namespace lfs::vis::gui {
         };
         apply("left-side-dock-toggle", left_dock_available_, left_dock_collapsed_);
         apply("right-side-dock-toggle", right_dock_available_, right_dock_collapsed_);
+        apply("bottom-dock-toggle", bottom_dock_available_, bottom_dock_collapsed_);
     }
 
     void RmlViewportOverlay::setToolbarPanels(const float primary_x,
@@ -488,22 +494,6 @@ namespace lfs::vis::gui {
         split_divider_overlay_ = state;
         applySplitDividerOverlay();
         markRenderNeeded(RenderReason::SplitDivider);
-    }
-
-    void RmlViewportOverlay::setLeftDockResizeIndicator(
-        const bool visible, const bool active, const float thickness) {
-        const float clamped_thickness = std::max(thickness, 0.0f);
-        if (left_dock_resize_visible_ == visible &&
-            left_dock_resize_active_ == active &&
-            std::abs(left_dock_resize_thickness_ - clamped_thickness) <= 0.5f) {
-            return;
-        }
-
-        left_dock_resize_visible_ = visible;
-        left_dock_resize_active_ = active;
-        left_dock_resize_thickness_ = clamped_thickness;
-        applyLeftDockResizeIndicator();
-        markRenderNeeded(RenderReason::LeftDockResize);
     }
 
     void RmlViewportOverlay::setGTMetricsOverlay(GTMetricsOverlayState state) {
@@ -985,7 +975,6 @@ namespace lfs::vis::gui {
         }
         if (auto* const border = document_->GetElementById("left-frame-border"))
             border->SetProperty("left", std::format("{:.1f}px", viewport_content_offset_));
-        applyLeftDockResizeIndicator();
         applySplitDividerOverlay();
         applyProjectDragOverlay();
         viewport_content_offset_dirty_ = false;
@@ -1062,23 +1051,6 @@ namespace lfs::vis::gui {
         split_divider_toolbar_clearance_ = clearance;
         applySplitDividerOverlay();
         return true;
-    }
-
-    void RmlViewportOverlay::applyLeftDockResizeIndicator() {
-        if (!document_)
-            return;
-
-        if (auto* const indicator =
-                document_->GetElementById("left-dock-resize-indicator")) {
-            indicator->SetClass("hidden", !left_dock_resize_visible_);
-            indicator->SetClass("active", left_dock_resize_active_);
-            indicator->SetProperty(
-                "left",
-                std::format("{:.1f}px", viewport_content_offset_ - left_dock_resize_thickness_));
-            indicator->SetProperty(
-                "width",
-                std::format("{:.1f}px", left_dock_resize_thickness_));
-        }
     }
 
     void RmlViewportOverlay::applyGTMetricsOverlay() {
@@ -1505,7 +1477,6 @@ namespace lfs::vis::gui {
         updateViewportContentOffset();
         applyGTMetricsOverlay();
         applySplitDividerOverlay();
-        applyLeftDockResizeIndicator();
         applyLodStatsOverlay();
         applyProjectDragOverlay();
         applySideDocks();

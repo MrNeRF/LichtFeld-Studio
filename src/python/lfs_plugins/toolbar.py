@@ -139,7 +139,10 @@ def _bottom_dock_panel_selected(panel_id, visible):
         floating = getattr(panel_space, "FLOATING", None)
         active_getter = getattr(lf.ui, "get_bottom_dock_active_tab", None)
         active = active_getter() if callable(active_getter) else ""
-        return _bottom_dock_panel_space(panel_id) == floating or panel_id == active
+        collapsed = getattr(lf.ui, "is_bottom_dock_collapsed", None)
+        return (floating is not None and _bottom_dock_panel_space(panel_id) == floating) or (
+            panel_id == active and not (callable(collapsed) and collapsed())
+        )
     except Exception:
         return False
 
@@ -147,19 +150,17 @@ def _bottom_dock_panel_selected(panel_id, visible):
 def _toggle_bottom_dock_panel(panel_id, visible, set_visible):
     import lichtfeld as lf
 
-    active_getter = getattr(lf.ui, "get_bottom_dock_active_tab", None)
-    set_active = getattr(lf.ui, "set_bottom_dock_active_tab", None)
+    activate = getattr(lf.ui, "activate_bottom_dock_tab", None)
+    if not callable(activate):
+        activate = getattr(lf.ui, "set_bottom_dock_active_tab", None)
     floating = getattr(getattr(lf.ui, "PanelSpace", None), "FLOATING", None)
-    active = active_getter() if callable(active_getter) else ""
+    if _bottom_dock_panel_selected(panel_id, visible):
+        set_visible(False)
+        return
     if not visible:
         set_visible(True)
-        if callable(set_active):
-            set_active(panel_id)
-    elif _bottom_dock_panel_space(panel_id) != floating and active != panel_id:
-        if callable(set_active):
-            set_active(panel_id)
-    else:
-        set_visible(False)
+    if callable(activate) and (floating is None or _bottom_dock_panel_space(panel_id) != floating):
+        activate(panel_id)
 
 
 def _crop_roi_param_state():
@@ -2293,6 +2294,7 @@ class _ViewportToolbarController:
             bool(call(False, getattr(lf.ui, "is_sequencer_visible", None))),
             _bottom_dock_panel_space(_SEQUENCER_PANEL_ID),
             call("", getattr(lf.ui, "get_bottom_dock_active_tab", None)),
+            bool(call(False, getattr(lf.ui, "is_bottom_dock_collapsed", None))),
             bool(histogram_mode_available(ui_context)) if ui_context is not None else False,
             asset_manager_enabled,
             plugin_marketplace_enabled,

@@ -18,7 +18,13 @@ body {
 }
 
 #left-border {
-    display: none;
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 4dp;
+    height: 100%;
+    z-index: 5;
+    pointer-events: none;
 }
 
 #splitter {

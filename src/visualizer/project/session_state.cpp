@@ -1727,6 +1727,7 @@ namespace lfs::vis::project {
                     optional_field("left_dock_width", &gui::PanelLayoutProjectState::left_dock_width),
                     optional_field("left_dock_collapsed", &gui::PanelLayoutProjectState::left_dock_collapsed),
                     optional_field("right_dock_collapsed", &gui::PanelLayoutProjectState::right_dock_collapsed),
+                    optional_field("bottom_dock_collapsed", &gui::PanelLayoutProjectState::bottom_dock_collapsed),
                     optional_field("sequencer_visible", &gui::PanelLayoutProjectState::show_sequencer),
                     optional_field("bottom_dock_active_tab", &gui::PanelLayoutProjectState::bottom_dock_active_tab_id),
                     optional_field("tab_scroll_offset", &gui::PanelLayoutProjectState::tab_scroll_offset),
@@ -3376,6 +3377,7 @@ namespace lfs::vis::project {
             // Older projects have no collapse flags: start their docks expanded.
             layout.left_dock_collapsed = false;
             layout.right_dock_collapsed = false;
+            layout.bottom_dock_collapsed = false;
             (void)read_fields(
                 fixed,
                 layout,

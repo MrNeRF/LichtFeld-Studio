@@ -11,3 +11,6 @@
 #status-region {
     @{chrome.status_decor};
 }
+
+#left-resize-region { background-color: @{dock.resize_hover}; }
+#left-resize-region.active { background-color: @{dock.resize_active}; }

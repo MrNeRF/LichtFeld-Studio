@@ -77,9 +77,11 @@
     nav: auto;
     min-height: 28dp;
 
-    border-bottom-width: 2dp;
+    border-width: 1dp;
+}
 
-    transition: border-bottom-color background-color color 0.15s quadratic-out;
+.tab.active {
+    border-bottom-width: 0;
 }
 
 .tab.closeable {

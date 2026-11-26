@@ -921,8 +921,7 @@ namespace lfs::vis::gui::rml_theme {
                 {"panel.primary_border_faint", colorToRmlAlpha(p.primary, 0.13f)},
                 {"panel.primary_accent", colorToRmlAlpha(p.primary, 0.22f)},
                 {"right_panel.tab_hover", colorToRmlAlpha(p.surface_bright, 0.5f)},
-                {"right_panel.tab_active_bg", colorToRmlAlpha(p.surface_bright, 0.4f)},
-                {"right_panel.tab_hover_decor", right_panel_tab_hover_decor},
+                {"dock.tab_hover_decor", right_panel_tab_hover_decor},
                 {"right_panel.tab_border", colorToRmlAlpha(p.border, enhanced_panel_chrome ? 0.46f : 0.42f)},
                 {"right_panel.tab_active_border",
                  enhanced_panel_chrome ? colorToRmlAlpha(p.primary, 0.78f)
@@ -935,9 +934,10 @@ namespace lfs::vis::gui::rml_theme {
                 {"right_panel.splitter_hover", colorToRmlAlpha(p.info, 0.6f)},
                 {"right_panel.splitter_active", colorToRmlAlpha(p.info, 0.8f)},
                 {"right_panel.border", colorToRmlAlpha(p.border, 0.6f)},
-                {"right_panel.separator", colorToRmlAlpha(p.border, 0.4f)},
-                {"right_panel.resize_hover", colorToRmlAlpha(p.info, 0.3f)},
-                {"right_panel.resize_active", colorToRmlAlpha(p.info, 0.5f)},
+                {"dock.tab_separator", colorToRmlAlpha(p.border, 0.4f)},
+                {"dock.tab_idle_background", colorToRmlAlpha(p.surface_bright, 0.36f)},
+                {"dock.resize_hover", colorToRmlAlpha(p.info, 0.3f)},
+                {"dock.resize_active", colorToRmlAlpha(p.info, 0.5f)},
                 {"modal.surface", colorToRmlAlpha(p.surface, 0.98f)},
                 {"modal.border", colorToRmlAlpha(p.border, 0.4f)},
                 {"modal.backdrop", colorToRmlAlpha(is_light ? ThemeColor{0.12f, 0.14f, 0.18f, 1.0f} : p.background,
@@ -1000,6 +1000,13 @@ namespace lfs::vis::gui::rml_theme {
                 {"startup.select_bg", colorToRmlAlpha(p.background, is_light ? 0.90f : 0.78f)},
                 {"startup.selectbox_bg", colorToRmlAlpha(p.surface, is_light ? 0.95f : 0.90f)},
             };
+            // Older plugin stylesheets share this resolver. Keep their names
+            // mapped to the canonical dock values rather than duplicating formulas.
+            tokens.emplace("right_panel.tab_hover_decor", tokens.at("dock.tab_hover_decor"));
+            tokens.emplace("right_panel.separator", tokens.at("dock.tab_separator"));
+            tokens.emplace("right_panel.resize_hover", tokens.at("dock.resize_hover"));
+            tokens.emplace("right_panel.resize_active", tokens.at("dock.resize_active"));
+            tokens.emplace("right_panel.tab_active_bg", colorToRmlAlpha(p.surface_bright, 0.4f));
             return tokens;
         }
 

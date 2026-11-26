@@ -97,6 +97,13 @@ for intentionally invisible edges. Window glyphs, annotations, and timeline
 markers keep their drawing colors. Section separators use the menu background.
 Existing border tokens remain available to plugin stylesheets.
 
+Use `dock.tab_hover_decor`, `dock.tab_separator`, `dock.resize_hover`, and
+`dock.resize_active` for shared dock chrome. The previous names
+`right_panel.tab_hover_decor`, `right_panel.separator`,
+`right_panel.resize_hover`, and `right_panel.resize_active` resolve to the
+same values for existing stylesheets. `right_panel.tab_active_bg` retains
+its previous value for compatibility.
+
 These roles resolve from each loaded theme variant and participate in the
 existing theme switching and file hot reload. Shared linked stylesheets can
 supply a sibling `.theme.rcss`; hosted panels load those before their own theme

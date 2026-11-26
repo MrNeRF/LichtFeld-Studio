@@ -1957,6 +1957,7 @@
     "action.toggle_ui": "UI omschakelen",
     "action.toggle_left_dock": "Linkerzijpaneel in-/uitklappen",
     "action.toggle_right_dock": "Rechterzijpaneel in-/uitklappen",
+    "action.toggle_bottom_dock": "Onderste dock tonen of verbergen",
     "action.toggle_fullscreen": "Volledig scherm omschakelen",
     "action.open_preferences": "Voorkeuren openen",
     "action.toggle_mcp_server": "MCP-server in-/uitschakelen",

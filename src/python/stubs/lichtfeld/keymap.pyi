@@ -21,6 +21,8 @@ class Action(enum.Enum):
 
     TOGGLE_RIGHT_DOCK = 111
 
+    TOGGLE_BOTTOM_DOCK = 112
+
     NONE = 0
 
     CAMERA_ORBIT = 1

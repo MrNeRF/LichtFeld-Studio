@@ -58,17 +58,17 @@
 }
 
 .tab {
-    background-color: @{alpha(surface_bright,0.36)};
+    background-color: @{dock.tab_idle_background};
     color: @{text_dim};
     border-color: @{border};
 }
 
 .tab:hover {
-    @{right_panel.tab_hover_decor};
+    @{dock.tab_hover_decor};
 }
 
 .tab:focus-visible {
-    @{right_panel.tab_hover_decor};
+    @{dock.tab_hover_decor};
     color: @{text};
     border-color: @{primary};
     border-left-color: @{primary};
@@ -82,16 +82,16 @@
 }
 
 #left-border {
-    @{chrome.right_panel_edge_shape};
+    background-color: @{menu.background};
 }
 
 #resize-handle:hover,
 #resize-handle.hover {
-    background-color: @{right_panel.resize_hover};
+    background-color: @{dock.resize_hover};
 }
 
 #resize-handle.dragging {
-    background-color: @{right_panel.resize_active};
+    background-color: @{dock.resize_active};
 }
 
 .tab-edge { background-color: @{right_panel.tab_active_border}; }

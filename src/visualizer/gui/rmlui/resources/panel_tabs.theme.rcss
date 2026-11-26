@@ -7,32 +7,30 @@
 .tab {
     border-top-left-radius: 4dp;
     border-top-right-radius: 4dp;
-    border-bottom-color: transparent;
+    background-color: @{dock.tab_idle_background};
+    color: @{text_dim};
+    border-color: @{border};
 }
 
 .tab-close {
     border-radius: 4dp;
 }
 
-.tab {
-    background-color: transparent;
-    color: @{text_dim};
-}
-
 .tab:hover {
-    background-color: @{right_panel.tab_hover};
+    @{dock.tab_hover_decor};
 }
 
 .tab:focus-visible {
-    background-color: @{right_panel.tab_hover};
+    @{dock.tab_hover_decor};
     color: @{text};
-    border-bottom-color: @{primary};
+    border-color: @{primary};
 }
 
 .tab.active {
-    background-color: @{right_panel.tab_active_bg};
+    decorator: none;
+    background-color: transparent;
     color: @{text};
-    border-bottom-color: @{primary};
+    border-color: @{primary};
 }
 
 .tab-close {
@@ -63,5 +61,5 @@
 }
 
 #tab-separator {
-    background-color: @{right_panel.separator};
+    background-color: @{dock.tab_separator};
 }

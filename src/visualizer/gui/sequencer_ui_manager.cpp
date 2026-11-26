@@ -2005,6 +2005,9 @@ namespace lfs::vis::gui {
             if (!PanelRegistry::instance().set_panel_space("native.sequencer", target)) {
                 LOG_ERROR("Failed to move sequencer panel to {}",
                           target == PanelSpace::Floating ? "floating" : "bottom dock");
+            } else if (target == PanelSpace::BottomDock) {
+                if (auto* const gui = viewer_->getGuiManager())
+                    gui->activateBottomDockTab("native.sequencer");
             }
         }
 

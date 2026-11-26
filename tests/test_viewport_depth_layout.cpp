@@ -176,6 +176,26 @@ namespace {
         }
     };
 
+    TEST_F(ViewportDepthLayoutTest, LegacyPluginDockThemeTokensStillResolve) {
+        using lfs::vis::gui::rml_theme::generateThemeMediaFromTemplate;
+        const auto legacy = generateThemeMediaFromTemplate(
+            ".tab { @{right_panel.tab_hover_decor}; border-color: @{right_panel.separator}; }"
+            ".edge:hover { background-color: @{right_panel.resize_hover}; }"
+            ".edge:active { background-color: @{right_panel.resize_active}; }");
+        const auto canonical = generateThemeMediaFromTemplate(
+            ".tab { @{dock.tab_hover_decor}; border-color: @{dock.tab_separator}; }"
+            ".edge:hover { background-color: @{dock.resize_hover}; }"
+            ".edge:active { background-color: @{dock.resize_active}; }");
+        EXPECT_EQ(legacy, canonical);
+        EXPECT_EQ(legacy.find("@{"), std::string::npos);
+
+        const auto active = generateThemeMediaFromTemplate(
+            ".tab:active { background-color: @{right_panel.tab_active_bg}; }");
+        EXPECT_NE(active.find(lfs::vis::gui::rml_theme::colorToRmlAlpha(
+                      lfs::vis::theme().palette.surface_bright, 0.4f)),
+                  std::string::npos);
+    }
+
     TEST_F(ViewportDepthLayoutTest, NonTextControlReceivesEscapeAwayFromPointer) {
         layout(false);
         auto* field = panel()->AppendChild(document_->CreateElement("div"));

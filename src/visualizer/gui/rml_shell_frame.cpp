@@ -145,11 +145,22 @@ namespace lfs::vis::gui {
             .right_width = px(regions.right_panel.w),
             .right_height = px(regions.right_panel.h),
             .status_height = px(regions.status.h),
+            .left_resize_x = px(regions.left_resize.x - regions.screen.x),
+            .left_resize_width = px(regions.left_resize.w),
+            .left_resize_height = px(regions.left_resize.h),
+            .left_resize_active = regions.left_resize_active,
         };
         const bool layout_changed = !has_layout_signature_ || !(layout == last_layout_signature_);
         const bool refresh_cache = render_needed_ || theme_changed || layout_changed || direct_cache_.texture == 0;
 
         if (layout_changed) {
+            if (auto* edge = document_->GetElementById("left-resize-region")) {
+                edge->SetProperty("left", std::format("{}px", layout.left_resize_x));
+                edge->SetProperty("top", std::format("{}px", layout.work_top));
+                edge->SetProperty("width", std::format("{}px", layout.left_resize_width));
+                edge->SetProperty("height", std::format("{}px", layout.left_resize_height));
+                edge->SetClass("active", layout.left_resize_active);
+            }
             if (menu_region_) {
                 menu_region_->SetProperty("top", std::format("{}px", layout.menu_top));
                 menu_region_->SetProperty("height", std::format("{}px", layout.menu_height));

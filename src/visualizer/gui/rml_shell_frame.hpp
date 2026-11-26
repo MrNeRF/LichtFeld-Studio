@@ -32,6 +32,8 @@ namespace lfs::vis::gui {
         ShellRect menu;
         ShellRect right_panel;
         ShellRect status;
+        ShellRect left_resize;
+        bool left_resize_active = false;
     };
 
     class RmlShellFrame {
@@ -51,6 +53,10 @@ namespace lfs::vis::gui {
             int right_width = 0;
             int right_height = 0;
             int status_height = 0;
+            int left_resize_x = 0;
+            int left_resize_width = 0;
+            int left_resize_height = 0;
+            bool left_resize_active = false;
 
             bool operator==(const LayoutSignature&) const = default;
         };

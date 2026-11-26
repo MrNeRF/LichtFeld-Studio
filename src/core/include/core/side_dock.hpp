@@ -7,5 +7,6 @@
 
 namespace lfs::core {
     enum class SideDock : uint8_t { Left,
-                                    Right };
+                                    Right,
+                                    Bottom };
 }
