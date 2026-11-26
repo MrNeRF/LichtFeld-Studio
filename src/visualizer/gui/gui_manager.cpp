@@ -8682,6 +8682,14 @@ namespace lfs::vis::gui {
             return true;
         }
 
+        const auto bottom_tabs = panel_layout_.bottomDockTabBarRect();
+        if (panel_layout_.isBottomDockHoveringEdge() ||
+            (panel_layout_.isBottomDockVisible() && !panel_layout_.isBottomDockCollapsed() &&
+             mouse_x >= bottom_tabs.x && mouse_x < bottom_tabs.x + bottom_tabs.width &&
+             resizeHitZone(panel_layout_.bottomDockTopY(), current_ui_scale_).contains(mouse_y))) {
+            return true;
+        }
+
         // Gizmo hover is refreshed only when the gizmo is drawn. Without a frame,
         // a pointer that left the gizmo keeps claiming the next viewport press.
         if (isTransformGizmoOverOrUsing())

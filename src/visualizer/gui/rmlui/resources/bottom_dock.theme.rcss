@@ -1,21 +1,15 @@
-/* Shared border roles and shape scale. */
-
-.dock-grip-bar {
-    border-radius: 2dp;
-}
-
 #tab-bar {
     background-color: @{surface};
 }
 
-.dock-grip-bar {
+#dock-grip {
     background-color: transparent;
 }
 
-#dock-grip.hover .dock-grip-bar {
+#dock-grip.hover {
     background-color: @{right_panel.resize_hover};
 }
 
-#dock-grip.active .dock-grip-bar {
+#dock-grip.active {
     background-color: @{right_panel.resize_active};
 }
