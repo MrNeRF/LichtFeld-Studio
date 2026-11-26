@@ -17,11 +17,17 @@ struct Parameters {
     uint haveLabels;
 };
 
-uint sh_at(uint p, uint slot, uint slots) {
-    return (p / 32u) * (slots * 32u) + slot * 32u + (p % 32u);
+// A point's SH values are addressed in 64 bits: its float4 rows pass 2^32 floats at 89.5M points at SH 3. The address
+// is integer math because NVIDIA's Vulkan computes an access chain's byte offset in 32 bits without
+// VK_EXT_shader_64bit_indexing, and a float4 SH store passes 4 GiB at 22.4M points.
+float sh_value(uint64_t sh, uint64_t index) {
+    return ((Ptr<float, Access.Read>)(sh + index * 4u))[0];
 }
-float sh_dim(Ptr<float, Access.Read> data, uint p, uint dim, uint slots) {
-    return data[sh_at(p, dim / 4u, slots) * 4u + (dim % 4u)];
+uint64_t sh_at(uint p, uint slot, uint slots) {
+    return uint64_t(p / 32u) * (slots * 32u) + slot * 32u + (p % 32u);
+}
+float sh_dim(uint64_t sh, uint p, uint dim, uint slots) {
+    return sh_value(sh, sh_at(p, dim / 4u, slots) * 4u + (dim % 4u));
 }
 
 uint norm_bound(Ptr<float, Access.Read> norms, Ptr<int, Access.Read> order, uint k, float value, bool upper) {
@@ -66,7 +72,7 @@ void main(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uniform Paramete
             for (uint d = 0; d < 48u; ++d) {
                 half value = half(0);
                 if (active && point0 + lane < p.n && d < 45u)
-                    value = half(sh_dim(sh, uint(pointOrder[point0 + lane]), d, p.slots));
+                    value = half(sh_dim(p.sh, uint(pointOrder[point0 + lane]), d, p.slots));
                 packed[(warp * 16u + lane) * 48u + d] = value;
             }
         }
@@ -81,7 +87,7 @@ void main(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uniform Paramete
             [ForceUnroll] for (uint d = 0; d < 45; ++d) vals[d] = 0;
             if (point0 + pointLane < p.n) {
                 [ForceUnroll] for (uint d = 0; d < 45; ++d) {
-                    const float v = sh_dim(sh, point, d, p.slots);
+                    const float v = sh_dim(p.sh, point, d, p.slots);
                     vals[d] = v;
                     pointNorm = fma(v, v, pointNorm);
                     if (!isfinite(v) || abs(v) > 65000.0) safe = 0;

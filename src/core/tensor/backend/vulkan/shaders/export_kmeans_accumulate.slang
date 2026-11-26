@@ -20,7 +20,7 @@ void LFS_KERNEL_ENTRY(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, unif
         const int label = labels[i];
         if (label < 0 || uint(label) >= p.k) continue;
         for (uint d = 0; d < p.dims; ++d)
-            InterlockedAdd(sums[uint(label) * p.dims + d], kPhase == 3 ? sh_dim(sh, i, d, p.slots) : sh[i * p.dims + d]);
+            InterlockedAdd(sums[uint(label) * p.dims + d], kPhase == 3 ? sh_dim(p.sh, i, d, p.slots) : sh_dense(p.sh, i, p.dims, d));
         InterlockedAdd(counts[uint(label)], 1);
     }
 }

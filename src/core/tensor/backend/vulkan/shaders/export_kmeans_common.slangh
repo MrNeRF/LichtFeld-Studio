@@ -15,9 +15,19 @@ struct Parameters {
     uint padding;
 };
 
-uint sh_at(uint p, uint slot, uint slots) {
-    return (p / 32u) * (slots * 32u) + slot * 32u + (p % 32u);
+// A point's SH values are addressed in 64 bits: its float4 rows pass 2^32 floats at 89.5M points at SH 3, its dense
+// rows at 95.4M. The address is integer math because NVIDIA's Vulkan computes an access chain's byte offset in 32 bits
+// without VK_EXT_shader_64bit_indexing, and a float4 SH store passes 4 GiB at 22.4M points.
+float sh_value(uint64_t sh, uint64_t index) {
+    return ((Ptr<float, Access.Read>)(sh + index * 4u))[0];
 }
-float sh_dim(Ptr<float, Access.Read> sh, uint p, uint dim, uint slots) {
-    return sh[sh_at(p, dim / 4u, slots) * 4u + (dim % 4u)];
+uint64_t sh_at(uint p, uint slot, uint slots) {
+    return uint64_t(p / 32u) * (slots * 32u) + slot * 32u + (p % 32u);
+}
+float sh_dim(uint64_t sh, uint p, uint dim, uint slots) {
+    return sh_value(sh, sh_at(p, dim / 4u, slots) * 4u + (dim % 4u));
+}
+// A point's value d in dense [row, dims] rows.
+float sh_dense(uint64_t sh, uint p, uint dims, uint d) {
+    return sh_value(sh, uint64_t(p) * dims + d);
 }

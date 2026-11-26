@@ -73,7 +73,7 @@ void LFS_KERNEL_ENTRY(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, unif
         for (uint c = gid.x * 256u + tid.x; c < p.k; c += groups.x * 256u) {
             const uint src = uint(indices[c]);
             for (uint d = 0; d < p.dims; ++d)
-                centroids[c * p.dims + d] = sh_dim(sh, src, d, p.slots);
+                centroids[c * p.dims + d] = sh_dim(p.sh, src, d, p.slots);
         }
     } else if (kPhase == 1) {
         for (uint c = gid.x * 256u + tid.x; c < p.k; c += groups.x * 256u) {
@@ -91,7 +91,7 @@ void LFS_KERNEL_ENTRY(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, unif
             float vals[45];
             if (kPhase == 11 || kPhase == 16) {
                 [ForceUnroll] for (uint d = 0; d < 45u; ++d)
-                    vals[d] = point < p.n ? (kPhase == 16 ? sh[point * 45u + d] : sh_dim(sh, point, d, p.slots)) : 0;
+                    vals[d] = point < p.n ? (kPhase == 16 ? sh_dense(p.sh, point, 45u, d) : sh_dim(p.sh, point, d, p.slots)) : 0;
             }
             float best = 1e30;
             int bestId = int(p.k);
@@ -116,7 +116,7 @@ void LFS_KERNEL_ENTRY(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, unif
                                 dot = fma(vals[d], tile[c * 48u + d], dot);
                         } else {
                             for (uint d = 0; d < dims; ++d)
-                                dot = fma(sh_dim(sh, point, d, p.slots), tile[c * 48u + d], dot);
+                                dot = fma(sh_dim(p.sh, point, d, p.slots), tile[c * 48u + d], dot);
                         }
                         const float dist = fma(-2.0, dot, tileNorm[c]);
                         const int id = int(t * 32u + c);
@@ -141,7 +141,7 @@ void LFS_KERNEL_ENTRY(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, unif
             for (int r = begin; r < end; ++r) {
                 const uint i = uint(indices[r]);
                 for (uint d = 0; d < p.dims; ++d)
-                    acc[d] += p.seed == 0u ? sh_dim(sh, i, d, p.slots) : sh[i * p.dims + d];
+                    acc[d] += p.seed == 0u ? sh_dim(p.sh, i, d, p.slots) : sh_dense(p.sh, i, p.dims, d);
             }
             for (uint d = 0; d < p.dims; ++d) sums[c * p.dims + d] = acc[d];
             counts[c] = end - begin;
@@ -157,7 +157,7 @@ void LFS_KERNEL_ENTRY(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, unif
                 rng = rng * 1664525u + 1013904223u;
                 const uint pick = p.n == 0 ? 0 : rng % p.n;
                 for (uint d = 0; d < p.dims; ++d)
-                    centroids[c * p.dims + d] = sh_dim(sh, pick, d, p.slots);
+                    centroids[c * p.dims + d] = sh_dim(p.sh, pick, d, p.slots);
             }
         }
     } else if (kPhase == 13 || kPhase == 14) {
@@ -168,7 +168,7 @@ void LFS_KERNEL_ENTRY(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, unif
             float norm = 0;
             if (kPhase == 13) {
                 [ForceUnroll] for (uint d = 0; d < 45u; ++d) {
-                    const float v = sh_dim(sh, i, d, p.slots);
+                    const float v = sh_dim(p.sh, i, d, p.slots);
                     norm = fma(v, v, norm);
                 }
             } else {
@@ -184,7 +184,7 @@ void LFS_KERNEL_ENTRY(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, unif
             for (uint c = gid.x * 256u + tid.x; c < p.k; c += groups.x * 256u) {
                 const uint src = uint(indices[c]);
                 for (uint d = 0; d < p.dims; ++d)
-                    centroids[c * p.dims + d] = sh[src * p.dims + d];
+                    centroids[c * p.dims + d] = sh_dense(p.sh, src, p.dims, d);
             }
         } else if (kPhase == 10) {
             for (uint c = gid.x * 256u + tid.x; c < p.k; c += groups.x * 256u) {
@@ -197,7 +197,7 @@ void LFS_KERNEL_ENTRY(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, unif
                     rng = rng * 1664525u + 1013904223u;
                     const uint pick = p.n == 0 ? 0 : rng % p.n;
                     for (uint d = 0; d < p.dims; ++d)
-                        centroids[c * p.dims + d] = sh[pick * p.dims + d];
+                        centroids[c * p.dims + d] = sh_dense(p.sh, pick, p.dims, d);
                 }
             }
         } else {
@@ -222,7 +222,7 @@ void LFS_KERNEL_ENTRY(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, unif
                         for (uint c = 0; c < 32u && t * 32u + c < p.k; ++c) {
                             float dot = 0;
                             for (uint d = 0; d < p.dims; ++d)
-                                dot = fma(sh[point * p.dims + d], tile[c * 48u + d], dot);
+                                dot = fma(sh_dense(p.sh, point, p.dims, d), tile[c * 48u + d], dot);
                             const float dist = fma(-2.0, dot, tileNorm[c]);
                             const int id = int(t * 32u + c);
                             if (dist < best || (dist == best && id < bestId)) {

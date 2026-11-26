@@ -19,11 +19,17 @@ struct Parameters {
     uint slots;
 };
 
-uint sh_at(uint p, uint slot, uint slots) {
-    return (p / 32u) * (slots * 32u) + slot * 32u + (p % 32u);
+// A point's SH values are addressed in 64 bits: its float4 rows pass 2^32 floats at 89.5M points at SH 3. The address
+// is integer math because NVIDIA's Vulkan computes an access chain's byte offset in 32 bits without
+// VK_EXT_shader_64bit_indexing, and a float4 SH store passes 4 GiB at 22.4M points.
+float sh_value(uint64_t sh, uint64_t index) {
+    return ((Ptr<float, Access.Read>)(sh + index * 4u))[0];
 }
-float sh_dim(Ptr<float, Access.Read> data, uint p, uint dim, uint slots) {
-    return data[sh_at(p, dim / 4u, slots) * 4u + (dim % 4u)];
+uint64_t sh_at(uint p, uint slot, uint slots) {
+    return uint64_t(p / 32u) * (slots * 32u) + slot * 32u + (p % 32u);
+}
+float sh_dim(uint64_t sh, uint p, uint dim, uint slots) {
+    return sh_value(sh, sh_at(p, dim / 4u, slots) * 4u + (dim % 4u));
 }
 
 groupshared float tile[32 * 45];
@@ -61,7 +67,7 @@ void LFS_KERNEL_ENTRY(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, unif
         const uint point = valid ? uint(sorted[sortedPos]) : 0;
         float vals[45];
         [ForceUnroll] for (uint d = 0; d < 45; ++d)
-            vals[d] = valid ? sh_dim(sh, point, d, p.slots) : 0;
+            vals[d] = valid ? sh_dim(p.sh, point, d, p.slots) : 0;
         float best = 1e30;
         int bestId = 0x7fffffff;
         uint starts[4], lengths[4];
