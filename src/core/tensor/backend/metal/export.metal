@@ -200,13 +200,14 @@ struct ExportKmeansParams {
     uint n, k, dims, slots, seed, padding;
 };
 
+// SH offsets are 64-bit: a point's float4 rows pass 2^32 floats at 89.5M points at SH 3, its canonical rows at 95.4M.
 static float kmeans_sh_dim(device const float* sh, uint point, uint dim, uint slots) {
-    return sh[((point / 32u) * (slots * 32u) + (dim / 4u) * 32u + point % 32u) * 4u + dim % 4u];
+    return sh[(ulong(point / 32u) * (slots * 32u) + (dim / 4u) * 32u + point % 32u) * 4u + dim % 4u];
 }
 
 // A point of phase 2, 7, 11 or 16.
 static float kmeans_point_dim(constant ExportKmeansParams& p, uint point, uint dim) {
-    return kOp == 7 || kOp == 16 ? p.sh[point * (kOp == 16 ? 45u : p.dims) + dim]
+    return kOp == 7 || kOp == 16 ? p.sh[ulong(point) * (kOp == 16 ? 45u : p.dims) + dim]
                                  : kmeans_sh_dim(p.sh, point, dim, p.slots);
 }
 
@@ -296,7 +297,7 @@ kernel void export_kmeans(constant ExportKmeansParams& p [[buffer(0)]], uint gid
         for (uint c = first; c < p.k; c += stride) {
             const uint source = uint(p.indices[c]);
             for (uint d = 0; d < p.dims; ++d)
-                p.centroids[c * p.dims + d] = kOp == 9 ? p.sh[source * p.dims + d] : kmeans_sh_dim(p.sh, source, d, p.slots);
+                p.centroids[c * p.dims + d] = kOp == 9 ? p.sh[ulong(source) * p.dims + d] : kmeans_sh_dim(p.sh, source, d, p.slots);
         }
     } else if (kOp == 1) {
         for (uint c = first; c < p.k; c += stride) {
@@ -313,7 +314,7 @@ kernel void export_kmeans(constant ExportKmeansParams& p [[buffer(0)]], uint gid
             const uint pick = kmeans_reseed(p, c);
             for (uint d = 0; d < p.dims; ++d) {
                 p.centroids[c * p.dims + d] = count > 0     ? p.sums[c * p.dims + d] / float(count)
-                                              : kOp == 10 ? p.sh[pick * p.dims + d]
+                                              : kOp == 10 ? p.sh[ulong(pick) * p.dims + d]
                                                           : kmeans_sh_dim(p.sh, pick, d, p.slots);
             }
         }
@@ -377,7 +378,7 @@ kernel void export_kmeans_accumulate(constant ExportKmeansParams& p [[buffer(0)]
         if (label < 0 || uint(label) >= p.k)
             continue;
         for (uint d = 0; d < p.dims; ++d) {
-            const float value = kOp == 3 ? kmeans_sh_dim(p.sh, i, d, p.slots) : p.sh[i * p.dims + d];
+            const float value = kOp == 3 ? kmeans_sh_dim(p.sh, i, d, p.slots) : p.sh[ulong(i) * p.dims + d];
             atomic_fetch_add_explicit((device atomic_float*)&p.sums[uint(label) * p.dims + d], value,
                                       memory_order_relaxed);
         }
@@ -1010,7 +1011,7 @@ kernel void export_decimate(constant ExportDecimateParams& p [[buffer(0)]], uint
                     ++node;
             }
             for (uint a = 0; a < 16; ++a)
-                p.neighbors[i * 16u + a] = heap.ids[a];
+                p.neighbors[ulong(i) * 16u + a] = heap.ids[a];
         }
     }
 }
@@ -1154,8 +1155,8 @@ static float edge_cost(constant ExportCostParams& p, thread const GCache& a, thr
                      df_mul(df_from(0.5f), df_add(df_add(df_mul(df_from(3), kDfLog2Pi), df_log(df_floor(df_det(s), 1e-30f))),
                                                   df_from(3))));
     for (uint c = 0; c < 3 + p.rest * 3; ++c) {
-        const float left = c < 3 ? p.dc[i * 3 + c] : p.sh[i * p.rest * 3 + c - 3];
-        const float right = c < 3 ? p.dc[j * 3 + c] : p.sh[j * p.rest * 3 + c - 3];
+        const float left = c < 3 ? p.dc[i * 3 + c] : p.sh[ulong(i) * (p.rest * 3) + c - 3];
+        const float right = c < 3 ? p.dc[j * 3 + c] : p.sh[ulong(j) * (p.rest * 3) + c - 3];
         const float delta = left - right;
         cost = df_add(cost, df_from(delta * delta));
     }
@@ -1199,19 +1200,19 @@ kernel void export_decimate_cost(constant ExportCostParams& p [[buffer(0)]], uin
         if (kOp == 0) {
             GCache built;
             cache_one(p, i, built);
-            store_cache(p.cache + i * 32, built);
+            store_cache(p.cache + ulong(i) * 32, built);
             continue;
         }
         GCache mine;
-        load_cache(p.cache + i * 32, mine);
+        load_cache(p.cache + ulong(i) * 32, mine);
         float best[4] = {INFINITY, INFINITY, INFINITY, INFINITY};
         uint chosen[4] = {0xffffffffu, 0xffffffffu, 0xffffffffu, 0xffffffffu};
         for (uint a = 0; a < 16; ++a) {
-            const uint j = p.neighbors[i * 16 + a];
+            const uint j = p.neighbors[ulong(i) * 16 + a];
             if (j == 0xffffffffu)
                 continue;
             GCache other;
-            load_cache(p.cache + j * 32, other);
+            load_cache(p.cache + ulong(j) * 32, other);
             const float value = edge_cost(p, mine, other, i, j);
             if (!isfinite(value) || value > best[3] || (value == best[3] && j >= chosen[3]))
                 continue;
@@ -1389,7 +1390,7 @@ static void copy_one(Splats in, MergedSplats out, uint rest, uint i, uint row) {
         out.rot[row * 4 + a] = in.rot[i * 4 + a];
     out.opacity[row] = in.opacity[i];
     for (uint a = 0; a < rest * 3; ++a)
-        out.sh[row * rest * 3 + a] = in.sh[i * rest * 3 + a];
+        out.sh[ulong(row) * (rest * 3) + a] = in.sh[ulong(i) * (rest * 3) + a];
 }
 
 static void merge_one(Splats in, MergedSplats out, device const uint* members, uint rest, uint begin, uint count,
@@ -1443,12 +1444,12 @@ static void merge_one(Splats in, MergedSplats out, device const uint* members, u
         Df acc = df_from(0);
         for (uint m = 0; m < count; ++m) {
             const uint id = members[begin + m];
-            acc = df_add(acc, df_mul(weights[m], df_from(c < 3 ? in.dc[id * 3 + c] : in.sh[id * rest * 3 + c - 3])));
+            acc = df_add(acc, df_mul(weights[m], df_from(c < 3 ? in.dc[id * 3 + c] : in.sh[ulong(id) * (rest * 3) + c - 3])));
         }
         if (c < 3)
             out.dc[row * 3 + c] = df_as(acc);
         else
-            out.sh[row * rest * 3 + c - 3] = df_as(acc);
+            out.sh[ulong(row) * (rest * 3) + c - 3] = df_as(acc);
     }
 }
 
