@@ -20,17 +20,18 @@ struct Parameters {
 
 groupshared float reductions[256 * 4];
 
+// Swizzled slot indices are 64-bit: with 12 SH slots (degree 3) a 32-bit slot index wraps past 357.9M rows.
 uint64_t cellIndex(uint primitive, uint attribute, uint component, uniform Parameters p) {
     if (p.swizzled == 0u) return uint64_t(primitive) * p.width + attribute;
-    const uint slot = (primitive / 32u) * (p.width * 32u) + attribute * 32u + (primitive % 32u);
-    return uint64_t(slot) * 4u + component;
+    const uint64_t slot = uint64_t(primitive / 32u) * (p.width * 32u) + attribute * 32u + (primitive % 32u);
+    return slot * 4u + component;
 }
 
 uint64_t destinationCellIndex(uint primitive, uint attribute, uint component, uniform Parameters p) {
     if (p.swizzled == 0u) return uint64_t(primitive) * p.width + attribute;
     const uint groupWidth = p.slotEnd - p.slotBegin;
-    const uint slot = (primitive / 32u) * (groupWidth * 32u) + attribute * 32u + (primitive % 32u);
-    return uint64_t(slot) * 4u + component;
+    const uint64_t slot = uint64_t(primitive / 32u) * (groupWidth * 32u) + attribute * 32u + (primitive % 32u);
+    return slot * 4u + component;
 }
 
 float2 decode(uint64_t cell, uint sourceRow, uniform Parameters p) {

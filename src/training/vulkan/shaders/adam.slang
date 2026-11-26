@@ -135,12 +135,15 @@ void storeUS(Params p, uint64_t cell, float2 us, float4 mm) {
         packed[cell * 2] = uint8_t(u); packed[cell * 2 + 1] = uint8_t(s);
     }
 }
-uint shSlot(uint row, uint k, uint slots) { return (row / 32 * slots + k) * 32 + row % 32; }
+// A row's float4 slot 0 in swizzled storage; slot k is k * 32 past it. 64-bit: with 12 slots (degree 3) a 32-bit
+// slot index wraps past 357.9M rows. Offsets within a row stay below 12 * 32, so the loops add them in 32 bits.
+uint64_t shSlotStart(uint row, uint slots) { return uint64_t(row / 32) * (slots * 32) + row % 32; }
+uint64_t shSlot(uint row, uint k, uint slots) { return shSlotStart(row, slots) + k * 32; }
 uint64_t shQ16Index(Params p, uint row, uint k, uint c) {
     uint cell = k * 4 + c;
     return ((uint64_t(row / 32) * p.valueCells + cell) * 32 + row % 32);
 }
-float loadShValue(Params p, uint row, uint slot, uint k, uint c, float2 bounds) {
+float loadShValue(Params p, uint row, uint64_t slot, uint k, uint c, float2 bounds) {
     if (p.valueBits == 16 && p.valueBounds != 0 && p.valueCells > 0) {
         uint cell = k * 4 + c;
         if (cell >= p.valueCells) return 0.0f;
@@ -148,19 +151,19 @@ float loadShValue(Params p, uint row, uint slot, uint k, uint c, float2 bounds) 
         return fma(bounds.y - bounds.x, float(code) * (1.0f / 65535.0f), bounds.x);
     }
     if (p.valueBits == 16)
-        return f16tof32(((Ptr<uint16_t, Access.Read>)p.parameter)[uint64_t(slot) * 4 + c]);
-    return ((Ptr<float, Access.Read>)p.parameter)[uint64_t(slot) * 4 + c];
+        return f16tof32(((Ptr<uint16_t, Access.Read>)p.parameter)[slot * 4 + c]);
+    return ((Ptr<float, Access.Read>)p.parameter)[slot * 4 + c];
 }
-void storeShValue(Params p, uint row, uint slot, uint k, uint c, float value, float2 bounds) {
+void storeShValue(Params p, uint row, uint64_t slot, uint k, uint c, float value, float2 bounds) {
     if (p.valueBits == 16 && p.valueBounds != 0 && p.valueCells > 0) {
         uint cell = k * 4 + c;
         if (cell >= p.valueCells) return;
         uint code = qCode(value, bounds.x, bounds.y, 16);
         ((Ptr<uint16_t, Access.ReadWrite>)p.parameter)[shQ16Index(p, row, k, c)] = uint16_t(code);
     } else if (p.valueBits == 16) {
-        ((Ptr<uint16_t, Access.ReadWrite>)p.parameter)[uint64_t(slot) * 4 + c] = uint16_t(f32tof16(value));
+        ((Ptr<uint16_t, Access.ReadWrite>)p.parameter)[slot * 4 + c] = uint16_t(f32tof16(value));
     } else {
-        ((Ptr<float, Access.ReadWrite>)p.parameter)[uint64_t(slot) * 4 + c] = value;
+        ((Ptr<float, Access.ReadWrite>)p.parameter)[slot * 4 + c] = value;
     }
 }
 float rowScale(Params p, uint row, bool sh) {
@@ -250,7 +253,7 @@ void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uniform Push pu
         uint n=p.layout==0?p.attributes:p.slots*4;
         bool selected=((Ptr<uint,Access.Read>)p.scratch)[row]!=0;
         for(uint a=0;a<n;++a) {
-            uint64_t cell=p.layout==0?uint64_t(row)*n+a:uint64_t(shSlot(row,a/4,p.slots))*4+a%4;
+            uint64_t cell=p.layout==0?uint64_t(row)*n+a:shSlot(row,a/4,p.slots)*4+a%4;
             if(selected) storeUS(p,cell,float2(0),newMomentBounds);
             else if (any(oldmm != newMomentBounds)) storeUS(p,cell,loadUS(p,cell,oldmm),newMomentBounds);
         }
@@ -268,9 +271,10 @@ void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uniform Push pu
     if(valid&&p.frozenMask!=0&&row<p.frozenCount&&((Ptr<uint8_t,Access.Read>)p.frozenMask)[row]!=0&&p.frozenScale==0) apply=false;
     if(valid&&p.cropMask!=0&&row<p.cropCount&&((Ptr<uint8_t,Access.Read>)p.cropMask)[row]!=0&&p.cropScale==0) apply=false;
     float step=rowScale(p,row,true);
+    const uint64_t slot0=shSlotStart(row,slots);
     float umin=1e30f,umax=-1e30f,smin=1e30f,smax=-1e30f,vmin=1e30f,vmax=-1e30f;
     if(valid) for(uint k=0;k<slots;++k) for(uint c=0;c<4;++c) {
-        uint slot=shSlot(row,k,slots); uint64_t cell=uint64_t(slot)*4+c;
+        uint64_t slot=slot0+k*32; uint64_t cell=slot*4+c;
         float2 mv=decodeMV(loadUS(p,cell,oldmm));
         float value=loadShValue(p,row,slot,k,c,oldvb);
         float g=k<activeSlots?((Ptr<float,Access.Read>)p.gradient)[cell]:0.0f;
@@ -293,7 +297,7 @@ void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uniform Push pu
     }
     GroupMemoryBarrierWithGroupSync();
     if(valid) for(uint k=0;k<slots;++k) for(uint c=0;c<4;++c){
-        uint slot=shSlot(row,k,slots);uint64_t cell=uint64_t(slot)*4+c;float2 mv=decodeMV(loadUS(p,cell,oldmm));
+        uint64_t slot=slot0+k*32;uint64_t cell=slot*4+c;float2 mv=decodeMV(loadUS(p,cell,oldmm));
         float value=loadShValue(p,row,slot,k,c,oldvb);float g=k<activeSlots?((Ptr<float,Access.Read>)p.gradient)[cell]:0.0f;
         if (apply) {
             mv.x = fma(p.beta1, mv.x, (1 - p.beta1) * g);

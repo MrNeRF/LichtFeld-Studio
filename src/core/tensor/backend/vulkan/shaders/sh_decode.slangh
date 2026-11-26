@@ -9,6 +9,12 @@ uint64_t shOffset(uint row, uint cell, uint rest, bool q16) {
         return (uint64_t(row / 32) * (rest * 3) + cell) * 32 + row % 32;
     return ((uint64_t(row / 32) * ((rest * 3 + 3) / 4) + cell / 4) * 32 + row % 32) * 4 + cell % 4;
 }
+// Index of a row's float4 slot 0 in swizzled storage with `slots` per row; slot k is k * 32 past it. 64-bit: with
+// 12 slots (degree 3) a 32-bit slot index wraps past 357.9M rows. Offsets within a row stay below 12 * 32, so loops
+// add them to the start in 32 bits.
+uint64_t shSlotStart(uint row, uint slots) {
+    return uint64_t(row / 32) * (slots * 32) + row % 32;
+}
 float shReadCell(uint64_t source, uint64_t bounds, uint format, uint rest, uint rows, uint row, uint c) {
     uint width = format == 1 || format == 2 ? (rest * 3 + 3) / 4 * 4 : rest * 3;
     if (row >= rows || c >= width)
