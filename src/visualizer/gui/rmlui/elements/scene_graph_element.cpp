@@ -2876,6 +2876,12 @@ namespace lfs::vis::gui {
     }
 
     void SceneGraphElement::cancelDrag() {
+        if (drag_payload_token_ != 0) {
+            if (auto* const gui = services().guiOrNull()) {
+                gui->rmluiManager().cancelDragPayload(drag_payload_token_);
+            }
+            drag_payload_token_ = 0;
+        }
         drag_cancelled_ = true;
         drag_source_id_ = core::NULL_NODE;
         drag_node_ids_.clear();
@@ -3356,6 +3362,16 @@ namespace lfs::vis::gui {
                     !items.empty()));
             }
 
+            if (isNodeComparableForSplitView(*scene, node_id)) {
+                items.push_back(makeAction(
+                    tr(string_keys::Scene::COMPARE_LEFT),
+                    prefixedAction(std::format("compare_left:{}", node_id)),
+                    !items.empty()));
+                items.push_back(makeAction(
+                    tr(string_keys::Scene::COMPARE_RIGHT),
+                    prefixedAction(std::format("compare_right:{}", node_id))));
+            }
+
             if (node_snapshots_.at(node_id).rename_enabled) {
                 items.push_back(makeAction(
                     tr(string_keys::Scene::RENAME),
@@ -3536,6 +3552,18 @@ namespace lfs::vis::gui {
             if (!rm || !rm->isGTComparisonActive())
                 cmd::ToggleGTComparison{}.emit();
             Blur();
+        } else if ((kind == "compare_left" || kind == "compare_right") && parts.size() >= 2) {
+            core::NodeId node_id = core::NULL_NODE;
+            if (auto* const rm = services().renderingOrNull(); rm && parseNodeId(parts[1], node_id)) {
+                const auto panel = kind == "compare_left"
+                                       ? SplitViewPanelId::Left
+                                       : SplitViewPanelId::Right;
+                if (rm->setSplitViewNode(panel, node_id, true)) {
+                    if (auto* const viewer = lfs::python::get_visualizer()) {
+                        viewer->projectMarkSessionChapterCommitted("VIEW");
+                    }
+                }
+            }
         } else if (kind == "show_in_file_manager" && parts.size() >= 2) {
             core::NodeId node_id = core::NULL_NODE;
             if (parseNodeId(parts[1], node_id)) {
@@ -3931,6 +3959,23 @@ namespace lfs::vis::gui {
                 return;
             }
             drag_node_ids_ = draggedNodeIds();
+            if (drag_payload_token_ != 0) {
+                if (auto* const gui = services().guiOrNull()) {
+                    gui->rmluiManager().cancelDragPayload(drag_payload_token_);
+                }
+                drag_payload_token_ = 0;
+            }
+            if (drag_node_ids_.size() == 1) {
+                if (const auto* const scene_manager = services().sceneOrNull();
+                    scene_manager && isNodeComparableForSplitView(scene_manager->getScene(), drag_source_id_)) {
+                    if (auto* const gui = services().guiOrNull()) {
+                        drag_payload_token_ = gui->rmluiManager().beginDragPayload(
+                            "application/x-lichtfeld-scene-node",
+                            std::to_string(drag_source_id_),
+                            source_it->second.name);
+                    }
+                }
+            }
             if (source_it->second.type == core::NodeType::SPLAT || source_it->second.type == core::NodeType::GROUP) {
                 // External copies include the full selected hierarchy, even when
                 // rows are collapsed or locked. Keep internal reparenting rules.
@@ -3953,6 +3998,12 @@ namespace lfs::vis::gui {
                           event.GetParameter("mouse_y", 0.0f));
             markStateDirty();
         } else if (type == "dragend") {
+            if (drag_payload_token_ != 0) {
+                if (auto* const gui = services().guiOrNull()) {
+                    gui->rmluiManager().endDragPayload(drag_payload_token_);
+                }
+                drag_payload_token_ = 0;
+            }
             external_armed_ = false;
             if (!external_native_active_) {
                 external_provider_ = {};
@@ -3998,6 +4049,12 @@ namespace lfs::vis::gui {
                 clearDropState();
             }
         } else if (type == "dragdrop") {
+            if (drag_payload_token_ != 0) {
+                if (auto* const gui = services().guiOrNull()) {
+                    gui->rmluiManager().cancelDragPayload(drag_payload_token_);
+                }
+                drag_payload_token_ = 0;
+            }
             if (drag_cancelled_) {
                 hideDragGhost();
                 return;

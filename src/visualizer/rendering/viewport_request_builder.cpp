@@ -816,8 +816,29 @@ namespace lfs::vis {
         return request;
     }
 
-    std::vector<PlyComparisonNode> plyComparisonNodes(const core::Scene& scene) {
-        std::vector<PlyComparisonNode> nodes;
+    bool isNodeComparable(const core::Scene& scene, const core::SceneNode& node) {
+        switch (node.type) {
+        case core::NodeType::SPLAT:
+            if (hasRenderableGaussians(node.model.get())) {
+                return true;
+            }
+            for (const auto& slot : scene.getVisibleSplatNodeSlots()) {
+                if (slot.node && slot.node->id == node.id) {
+                    return true;
+                }
+            }
+            return false;
+        case core::NodeType::POINTCLOUD:
+            return node.point_cloud && node.point_cloud->size() > 0;
+        case core::NodeType::MESH:
+            return node.mesh != nullptr;
+        default:
+            return false;
+        }
+    }
+
+    std::vector<NodeComparisonNode> nodeComparisonNodes(const core::Scene& scene) {
+        std::vector<NodeComparisonNode> nodes;
         for (const auto& slot : scene.getVisibleSplatNodeSlots()) {
             nodes.push_back({.node = slot.node, .splat_slot = slot.slot_index});
         }
@@ -834,7 +855,7 @@ namespace lfs::vis {
         }
         // Match the scene tree's depth-first order, independent of model type
         // and of the retained Gaussian render-slot order.
-        std::unordered_map<core::NodeId, PlyComparisonNode> by_id;
+        std::unordered_map<core::NodeId, NodeComparisonNode> by_id;
         for (const auto& entry : nodes)
             by_id.emplace(entry.node->id, entry);
         nodes.clear();
@@ -852,20 +873,102 @@ namespace lfs::vis {
         return nodes;
     }
 
-    const core::SceneNode* plyComparisonNodeForPanel(
+    std::optional<NodeComparisonPair> resolveNodeComparisonPair(
         const core::Scene& scene,
         const size_t split_view_offset,
-        const SplitViewPanelId panel) {
-        const auto visible_nodes = plyComparisonNodes(scene);
-        const auto pair = plyComparisonPairForOffset(visible_nodes.size(), split_view_offset);
+        const std::optional<core::NodeId> left_node_id,
+        const std::optional<core::NodeId> right_node_id) {
+        const auto visible_nodes = nodeComparisonNodes(scene);
+        const auto auto_pair = nodeComparisonPairForOffset(visible_nodes.size(), split_view_offset);
+
+        const auto resolve_pinned = [&](const std::optional<core::NodeId> id)
+            -> std::optional<NodeComparisonNode> {
+            if (!id || *id == core::NULL_NODE) {
+                return std::nullopt;
+            }
+            for (const auto& entry : visible_nodes) {
+                if (entry.node && entry.node->id == *id) {
+                    return entry;
+                }
+            }
+            const auto* const node = scene.getNodeById(*id);
+            if (!node) {
+                return std::nullopt;
+            }
+            // Explicitly pinned splats with owned storage and point clouds can be
+            // compared even when hidden; meshes rely on the visible mesh pass.
+            if (node->type == core::NodeType::SPLAT && hasRenderableGaussians(node->model.get())) {
+                return NodeComparisonNode{.node = node, .splat_slot = std::nullopt};
+            }
+            if (node->type == core::NodeType::POINTCLOUD &&
+                node->point_cloud && node->point_cloud->size() > 0) {
+                return NodeComparisonNode{.node = node, .splat_slot = std::nullopt};
+            }
+            return std::nullopt;
+        };
+
+        const auto pinned_left = resolve_pinned(left_node_id);
+        const auto pinned_right = resolve_pinned(right_node_id);
+
+        if (pinned_left && pinned_right) {
+            return NodeComparisonPair{.left = *pinned_left, .right = *pinned_right};
+        }
+
+        const auto pick_partner = [&](const core::NodeId exclude_id, const bool prefer_second)
+            -> std::optional<NodeComparisonNode> {
+            if (auto_pair) {
+                const size_t first_choice = prefer_second ? auto_pair->second : auto_pair->first;
+                const size_t second_choice = prefer_second ? auto_pair->first : auto_pair->second;
+                if (visible_nodes[first_choice].node && visible_nodes[first_choice].node->id != exclude_id) {
+                    return visible_nodes[first_choice];
+                }
+                if (visible_nodes[second_choice].node && visible_nodes[second_choice].node->id != exclude_id) {
+                    return visible_nodes[second_choice];
+                }
+            }
+            for (const auto& entry : visible_nodes) {
+                if (entry.node && entry.node->id != exclude_id) {
+                    return entry;
+                }
+            }
+            return std::nullopt;
+        };
+
+        if (pinned_left) {
+            if (const auto partner = pick_partner(pinned_left->node->id, true)) {
+                return NodeComparisonPair{.left = *pinned_left, .right = *partner};
+            }
+            return std::nullopt;
+        }
+        if (pinned_right) {
+            if (const auto partner = pick_partner(pinned_right->node->id, false)) {
+                return NodeComparisonPair{.left = *partner, .right = *pinned_right};
+            }
+            return std::nullopt;
+        }
+
+        if (!auto_pair) {
+            return std::nullopt;
+        }
+        return NodeComparisonPair{
+            .left = visible_nodes[auto_pair->first],
+            .right = visible_nodes[auto_pair->second]};
+    }
+
+    const core::SceneNode* nodeComparisonNodeForPanel(
+        const core::Scene& scene,
+        const size_t split_view_offset,
+        const SplitViewPanelId panel,
+        const std::optional<core::NodeId> left_node_id,
+        const std::optional<core::NodeId> right_node_id) {
+        const auto pair = resolveNodeComparisonPair(scene, split_view_offset, left_node_id, right_node_id);
         if (!pair) {
             return nullptr;
         }
-        const size_t index = panel == SplitViewPanelId::Right ? pair->second : pair->first;
-        return visible_nodes[index].node;
+        return panel == SplitViewPanelId::Right ? pair->right.node : pair->left.node;
     }
 
-    void applyPlyComparisonNodeScope(
+    void applyNodeComparisonNodeScope(
         lfs::rendering::GaussianSceneState& scene,
         lfs::rendering::GaussianFilterState& filters,
         lfs::rendering::GaussianOverlayState& overlay,
@@ -957,27 +1060,27 @@ namespace lfs::vis {
             effect.reset();
     }
 
-    PlyComparisonDepthSample resolvePlyComparisonDepthSample(
+    NodeComparisonDepthSample resolveNodeComparisonDepthSample(
         const core::Scene& scene,
         const size_t split_view_offset,
-        const SplitViewPanelId panel) {
-        PlyComparisonDepthSample sample;
-        const auto visible_nodes = plyComparisonNodes(scene);
-        const auto pair = plyComparisonPairForOffset(visible_nodes.size(), split_view_offset);
+        const SplitViewPanelId panel,
+        const std::optional<core::NodeId> left_node_id,
+        const std::optional<core::NodeId> right_node_id) {
+        NodeComparisonDepthSample sample;
+        const auto pair = resolveNodeComparisonPair(scene, split_view_offset, left_node_id, right_node_id);
         if (!pair) {
             return sample;
         }
-        const size_t index = panel == SplitViewPanelId::Right ? pair->second : pair->first;
-        const auto& slot = visible_nodes[index];
+        const auto& slot = panel == SplitViewPanelId::Right ? pair->right : pair->left;
         sample.node = slot.node;
-        if (!slot.splat_slot) {
+        if (!slot.node || slot.node->type != core::NodeType::SPLAT) {
             return sample;
         }
-        sample.visible_index = static_cast<int>(*slot.splat_slot);
-        if (slot.node && hasRenderableGaussians(slot.node->model.get())) {
+        sample.visible_index = slot.splat_slot ? static_cast<int>(*slot.splat_slot) : -1;
+        if (hasRenderableGaussians(slot.node->model.get())) {
             sample.model = slot.node->model.get();
             sample.uses_owned_node_model = true;
-        } else {
+        } else if (slot.splat_slot) {
             sample.model = scene.peekCombinedModel();
         }
         return sample;

@@ -3139,7 +3139,7 @@ namespace lfs::vis {
     }
 
     TEST_F(InputControllerFocusTest, SetPivotCentersSharedComparisonCamera) {
-        for (const auto mode : {SplitViewMode::Disabled, SplitViewMode::PLYComparison,
+        for (const auto mode : {SplitViewMode::Disabled, SplitViewMode::NodeComparison,
                                 SplitViewMode::IndependentDual}) {
             for (const double click_x : {60.0, 160.0}) {
                 SCOPED_TRACE(static_cast<int>(mode));

@@ -412,10 +412,16 @@ namespace lfs::vis {
         [[nodiscard]] bool isSplitViewActive() const;
         [[nodiscard]] bool isGTComparisonActive() const;
         [[nodiscard]] bool hasGTComparisonAvailable() const;
-        [[nodiscard]] bool isPLYComparisonActive() const;
+        [[nodiscard]] bool isNodeComparisonActive() const;
         [[nodiscard]] bool isIndependentSplitViewActive() const;
         [[nodiscard]] GTComparisonMode getGTComparisonMode() const;
         [[nodiscard]] SplitViewMode getSplitViewMode() const;
+        bool setSplitViewMode(SplitViewMode mode, const Viewport* primary_viewport = nullptr);
+        bool setSplitViewNode(SplitViewPanelId panel, std::optional<int32_t> node_id, bool enter_comparison = true);
+        bool setSplitViewNodes(std::optional<int32_t> left_node_id,
+                               std::optional<int32_t> right_node_id,
+                               bool enter_comparison = true);
+        [[nodiscard]] std::pair<std::optional<int32_t>, std::optional<int32_t>> getSplitViewNodes() const;
         // Project restore may only enter/leave split modes through the service
         // transition path; it must never assign RenderSettings::split_view_mode.
         void restoreSplitViewMode(SplitViewMode mode,

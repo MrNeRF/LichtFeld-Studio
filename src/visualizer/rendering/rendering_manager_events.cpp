@@ -88,9 +88,9 @@ namespace lfs::vis {
     void RenderingManager::handleToggleSplitView() {
         if (independent_panel_overrides_)
             return;
-        if (!isPLYComparisonActive()) {
+        if (!isNodeComparisonActive()) {
             const auto* const scene_manager = services().sceneOrNull();
-            if (!scene_manager || plyComparisonNodes(scene_manager->getScene()).size() < 2) {
+            if (!scene_manager || nodeComparisonNodes(scene_manager->getScene()).size() < 2) {
                 lfs::ErrorBus::instance().publish(lfs::ErrorNotification{
                     .error = lfs::make_error({
                         .code = lfs::ErrorCode::FailedPrecondition,
@@ -110,11 +110,11 @@ namespace lfs::vis {
         SplitViewService::ModeChangeResult result;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
-            result = split_view_service_.toggleMode(settings_, SplitViewMode::PLYComparison);
+            result = split_view_service_.toggleMode(settings_, SplitViewMode::NodeComparison);
             markDirty(DirtyFlag::SPLIT_VIEW, lfs::vis::FrameReason::SettingsChange);
         }
         applySplitModeChange(result);
-        LOG_INFO("Split view: {}", result.current_mode == SplitViewMode::PLYComparison ? "PLY comparison mode" : "disabled");
+        LOG_INFO("Split view: {}", result.current_mode == SplitViewMode::NodeComparison ? "node comparison mode" : "disabled");
     }
 
     void RenderingManager::handleToggleIndependentSplitView(const cmd::ToggleIndependentSplitView& event) {
@@ -316,14 +316,15 @@ namespace lfs::vis {
         auto dirty = dirtyMaskForSceneMutations(mutation_flags);
         using Mutation = lfs::core::Scene::MutationType;
         if (hasSceneMutation(mutation_flags, Mutation::VISIBILITY_CHANGED) ||
-            hasSceneMutation(mutation_flags, Mutation::NODE_REPARENTED)) {
+            hasSceneMutation(mutation_flags, Mutation::NODE_REPARENTED) ||
+            hasSceneMutation(mutation_flags, Mutation::NODE_REMOVED)) {
             SplitViewService::ModeChangeResult result;
             {
                 std::lock_guard<std::mutex> lock(settings_mutex_);
-                result = split_view_service_.handleVisiblePLYsChanged(settings_, services().sceneOrNull());
+                result = split_view_service_.handleComparableNodesChanged(settings_, services().sceneOrNull());
             }
             applySplitModeChange(result);
-            if (result.mode_changed) {
+            if (result.mode_changed || result.render_settings_changed) {
                 dirty |= DirtyFlag::SPLIT_VIEW;
             }
         }
@@ -359,12 +360,12 @@ namespace lfs::vis {
         SplitViewService::ModeChangeResult result;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
-            result = split_view_service_.handleVisiblePLYsChanged(settings_, services().sceneOrNull());
+            result = split_view_service_.handleComparableNodesChanged(settings_, services().sceneOrNull());
             markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY | DirtyFlag::SPLIT_VIEW, lfs::vis::FrameReason::SceneChange);
         }
         applySplitModeChange(result);
         if (result.mode_changed) {
-            LOG_DEBUG("PLY removed, disabling split view (not enough PLYs)");
+            LOG_DEBUG("Comparable node removed, disabling split view (not enough comparable nodes)");
         }
     }
 

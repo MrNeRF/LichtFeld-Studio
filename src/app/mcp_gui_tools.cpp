@@ -1310,7 +1310,19 @@ namespace lfs::app {
             set_float("camera_frustum_scale", settings.camera_frustum_scale);
             set_bool("hide_disabled_camera_frustums", settings.hide_disabled_camera_frustums);
             set_bool("show_pivot", settings.show_pivot);
-            set_int("split_view_mode", settings.split_view_mode);
+            if (args.contains("split_view_mode")) {
+                if (args["split_view_mode"].is_string()) {
+                    const auto parsed = lfs::vis::parseSplitViewModeName(args["split_view_mode"].get<std::string>());
+                    if (!parsed) {
+                        return std::unexpected(
+                            "Field 'split_view_mode' must be 'none', 'node_comparison', 'ply_comparison', 'gt_comparison', or 'independent_dual'");
+                    }
+                    settings.split_view_mode = static_cast<int>(*parsed);
+                    touched = true;
+                } else {
+                    set_int("split_view_mode", settings.split_view_mode);
+                }
+            }
             set_float("split_position", settings.split_position);
             if (args.contains("split_view_offset")) {
                 settings.split_view_offset = args["split_view_offset"].get<size_t>();

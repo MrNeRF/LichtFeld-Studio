@@ -199,8 +199,12 @@ namespace lfs::vis {
         result.mode_changed = true;
         result.clear_viewport_output = splitViewEnabled(previous_mode) && !splitViewEnabled(target_mode);
 
-        if (splitViewUsesPLYComparison(target_mode) || splitViewUsesPLYComparison(previous_mode)) {
+        if (splitViewUsesNodeComparison(target_mode) || splitViewUsesNodeComparison(previous_mode)) {
             settings.split_view_offset = 0;
+        }
+        if (splitViewUsesNodeComparison(previous_mode) && !splitViewUsesNodeComparison(target_mode)) {
+            settings.split_view_left_node_id.reset();
+            settings.split_view_right_node_id.reset();
         }
 
         if (target_mode == SplitViewMode::IndependentDual) {
@@ -225,12 +229,116 @@ namespace lfs::vis {
         return transitionToMode(settings, next_mode, primary_viewport, GTExitBehavior::RestorePrevious);
     }
 
+    SplitViewService::ModeChangeResult SplitViewService::setMode(RenderSettings& settings,
+                                                                 const SplitViewMode target_mode,
+                                                                 const Viewport* const primary_viewport) {
+        return transitionToMode(settings, target_mode, primary_viewport, GTExitBehavior::RestorePrevious);
+    }
+
+    SplitViewService::ModeChangeResult SplitViewService::setNodeComparisonNodes(
+        RenderSettings& settings,
+        SceneManager* const scene_manager,
+        const std::optional<int32_t> left_node_id,
+        const std::optional<int32_t> right_node_id,
+        const bool enter_comparison) {
+        const auto sanitize = [](const std::optional<int32_t> id) -> std::optional<int32_t> {
+            return (id && *id != core::NULL_NODE) ? id : std::nullopt;
+        };
+        const auto next_left = sanitize(left_node_id);
+        const auto next_right = sanitize(right_node_id);
+
+        const bool slots_changed = settings.split_view_left_node_id != next_left ||
+                                   settings.split_view_right_node_id != next_right;
+        settings.split_view_left_node_id = next_left;
+        settings.split_view_right_node_id = next_right;
+
+        ModeChangeResult result{
+            .previous_mode = settings.split_view_mode,
+            .current_mode = settings.split_view_mode,
+            .render_settings_changed = slots_changed,
+        };
+
+        if (enter_comparison && scene_manager &&
+            !splitViewUsesNodeComparison(settings.split_view_mode) &&
+            resolveNodeComparisonPair(
+                scene_manager->getScene(),
+                settings.split_view_offset,
+                settings.split_view_left_node_id,
+                settings.split_view_right_node_id)
+                .has_value()) {
+            const auto saved_left = settings.split_view_left_node_id;
+            const auto saved_right = settings.split_view_right_node_id;
+            result = transitionToMode(
+                settings,
+                SplitViewMode::NodeComparison,
+                nullptr,
+                GTExitBehavior::RestorePrevious);
+            settings.split_view_left_node_id = saved_left;
+            settings.split_view_right_node_id = saved_right;
+            result.render_settings_changed = result.render_settings_changed || slots_changed;
+        }
+        return result;
+    }
+
+    SplitViewService::ModeChangeResult SplitViewService::setNodeComparisonNode(
+        RenderSettings& settings,
+        SceneManager* const scene_manager,
+        const SplitViewPanelId panel,
+        const std::optional<int32_t> node_id,
+        const bool enter_comparison) {
+        const auto sanitized = (node_id && *node_id != core::NULL_NODE) ? node_id : std::nullopt;
+        std::optional<int32_t> next_left = settings.split_view_left_node_id;
+        std::optional<int32_t> next_right = settings.split_view_right_node_id;
+
+        if (sanitized && scene_manager) {
+            const auto current_pair = resolveNodeComparisonPair(
+                scene_manager->getScene(),
+                settings.split_view_offset,
+                settings.split_view_left_node_id,
+                settings.split_view_right_node_id);
+            const std::optional<int32_t> current_left =
+                current_pair && current_pair->left.node
+                    ? std::optional<int32_t>(current_pair->left.node->id)
+                    : next_left;
+            const std::optional<int32_t> current_right =
+                current_pair && current_pair->right.node
+                    ? std::optional<int32_t>(current_pair->right.node->id)
+                    : next_right;
+
+            if (panel == SplitViewPanelId::Left) {
+                next_left = sanitized;
+                if (current_right == sanitized) {
+                    next_right = (current_left && current_left != sanitized) ? current_left : std::nullopt;
+                } else if (!next_right && current_right) {
+                    next_right = current_right;
+                }
+            } else {
+                next_right = sanitized;
+                if (current_left == sanitized) {
+                    next_left = (current_right && current_right != sanitized) ? current_right : std::nullopt;
+                } else if (!next_left && current_left) {
+                    next_left = current_left;
+                }
+            }
+        } else {
+            if (panel == SplitViewPanelId::Left) {
+                next_left = sanitized;
+            } else {
+                next_right = sanitized;
+            }
+        }
+
+        return setNodeComparisonNodes(settings, scene_manager, next_left, next_right, enter_comparison);
+    }
+
     SplitViewService::ModeChangeResult SplitViewService::handleSceneLoaded(RenderSettings& settings) {
         auto result = transitionToMode(
             settings,
             isGTComparisonActive(settings) ? SplitViewMode::Disabled : settings.split_view_mode,
             nullptr,
             GTExitBehavior::PreserveCurrent);
+        settings.split_view_left_node_id.reset();
+        settings.split_view_right_node_id.reset();
         {
             std::lock_guard<std::mutex> lock(info_mutex_);
             const SplitViewInfo empty_info{};
@@ -251,19 +359,54 @@ namespace lfs::vis {
             GTExitBehavior::PreserveCurrent);
         clear();
         settings.split_view_offset = 0;
+        settings.split_view_left_node_id.reset();
+        settings.split_view_right_node_id.reset();
         result.current_mode = SplitViewMode::Disabled;
         result.clear_viewport_output = result.clear_viewport_output || splitViewEnabled(result.previous_mode);
         return result;
     }
 
-    SplitViewService::ModeChangeResult SplitViewService::handleVisiblePLYsChanged(RenderSettings& settings,
-                                                                                  SceneManager* scene_manager) {
-        if (!splitViewUsesPLYComparison(settings.split_view_mode) || !scene_manager) {
+    SplitViewService::ModeChangeResult SplitViewService::handleComparableNodesChanged(
+        RenderSettings& settings,
+        SceneManager* scene_manager) {
+        if (!scene_manager) {
             return {};
         }
 
-        if (plyComparisonNodes(scene_manager->getScene()).size() >= 2) {
-            return {};
+        const auto& scene = scene_manager->getScene();
+        const auto is_valid_pinned = [&scene](const std::optional<int32_t> id) {
+            if (!id || *id == core::NULL_NODE) {
+                return true;
+            }
+            const auto* const node = scene.getNodeById(*id);
+            return node && isNodeComparable(scene, *node);
+        };
+
+        bool pruned = false;
+        if (!is_valid_pinned(settings.split_view_left_node_id)) {
+            settings.split_view_left_node_id.reset();
+            pruned = true;
+        }
+        if (!is_valid_pinned(settings.split_view_right_node_id)) {
+            settings.split_view_right_node_id.reset();
+            pruned = true;
+        }
+
+        if (!splitViewUsesNodeComparison(settings.split_view_mode)) {
+            return {.previous_mode = settings.split_view_mode,
+                    .current_mode = settings.split_view_mode,
+                    .render_settings_changed = pruned};
+        }
+
+        if (resolveNodeComparisonPair(
+                scene,
+                settings.split_view_offset,
+                settings.split_view_left_node_id,
+                settings.split_view_right_node_id)
+                .has_value()) {
+            return {.previous_mode = settings.split_view_mode,
+                    .current_mode = settings.split_view_mode,
+                    .render_settings_changed = pruned};
         }
 
         auto result = transitionToMode(
@@ -272,10 +415,14 @@ namespace lfs::vis {
             nullptr,
             GTExitBehavior::PreserveCurrent);
         settings.split_view_offset = 0;
+        settings.split_view_left_node_id.reset();
+        settings.split_view_right_node_id.reset();
         return result;
     }
 
     void SplitViewService::advanceSplitOffset(RenderSettings& settings) {
+        settings.split_view_left_node_id.reset();
+        settings.split_view_right_node_id.reset();
         ++settings.split_view_offset;
     }
 

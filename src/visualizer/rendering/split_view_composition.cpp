@@ -28,6 +28,7 @@ namespace lfs::vis {
             lfs::rendering::SplitViewPanelContent content{
                 .type = lfs::rendering::PanelContentType::Model3D,
                 .model = &model,
+                .point_cloud = nullptr,
                 .model_transform = model_transform,
                 .gaussian_render = std::nullopt,
                 .point_cloud_render = std::nullopt,
@@ -50,7 +51,7 @@ namespace lfs::vis {
             return content;
         }
 
-        [[nodiscard]] lfs::rendering::SplitViewPanelContent buildMaskedPLYComparisonPanelContent(
+        [[nodiscard]] lfs::rendering::SplitViewPanelContent buildMaskedNodeComparisonPanelContent(
             const FrameContext& ctx,
             const Viewport& viewport,
             const glm::ivec2 render_size,
@@ -58,13 +59,13 @@ namespace lfs::vis {
             const size_t visible_node_index) {
             LFS_VK_DEBUG_ASSERT(
                 ctx.model != nullptr,
-                "PLY comparison panel requires a combined scene model (model={:#x}, visible_node_index={}, visible_node_count={})",
+                "Node comparison panel requires a combined scene model (model={:#x}, visible_node_index={}, visible_node_count={})",
                 reinterpret_cast<std::uintptr_t>(ctx.model),
                 visible_node_index,
                 visible_node_count);
             LFS_VK_DEBUG_ASSERT(
                 visible_node_index < visible_node_count,
-                "PLY comparison panel node index must be inside the visibility mask (visible_node_index={}, visible_node_count={})",
+                "Node comparison panel node index must be inside the visibility mask (visible_node_index={}, visible_node_count={})",
                 visible_node_index,
                 visible_node_count);
 
@@ -140,6 +141,7 @@ namespace lfs::vis {
                             {.content =
                                  {.type = lfs::rendering::PanelContentType::Image2D,
                                   .model = nullptr,
+                                  .point_cloud = nullptr,
                                   .model_transform = glm::mat4(1.0f),
                                   .gaussian_render = std::nullopt,
                                   .point_cloud_render = std::nullopt,
@@ -156,6 +158,7 @@ namespace lfs::vis {
                             {.content =
                                  {.type = lfs::rendering::PanelContentType::CachedRender,
                                   .model = nullptr,
+                                  .point_cloud = nullptr,
                                   .model_transform = glm::mat4(1.0f),
                                   .gaussian_render = std::nullopt,
                                   .point_cloud_render = std::nullopt,
@@ -174,7 +177,7 @@ namespace lfs::vis {
             return plan;
         }
 
-        [[nodiscard]] lfs::rendering::SplitViewPanelContent buildOwnedPLYComparisonPanelContent(
+        [[nodiscard]] lfs::rendering::SplitViewPanelContent buildOwnedNodeComparisonPanelContent(
             const FrameContext& ctx,
             const Viewport& viewport,
             const glm::ivec2 render_size,
@@ -183,7 +186,7 @@ namespace lfs::vis {
             const int visible_index) {
             LFS_VK_DEBUG_ASSERT(
                 node.model != nullptr,
-                "PLY comparison node must own a renderable model (node_id={}, model={:#x})",
+                "Node comparison splat node must own a renderable model (node_id={}, model={:#x})",
                 node.id,
                 reinterpret_cast<std::uintptr_t>(node.model.get()));
 
@@ -197,7 +200,7 @@ namespace lfs::vis {
                 std::nullopt);
 
             if (content.gaussian_render.has_value()) {
-                applyPlyComparisonNodeScope(
+                applyNodeComparisonNodeScope(
                     content.gaussian_render->scene,
                     content.gaussian_render->filters,
                     content.gaussian_render->overlay,
@@ -208,105 +211,115 @@ namespace lfs::vis {
             return content;
         }
 
-        [[nodiscard]] std::optional<SplitViewCompositionPlan> buildPLYComparisonPlan(
+        [[nodiscard]] lfs::rendering::SplitViewPanelContent buildPointCloudNodeComparisonPanelContent(
+            const FrameContext& ctx,
+            const glm::ivec2 render_size,
+            const core::Scene& scene,
+            const core::SceneNode& node) {
+            const glm::mat4 world_transform = scene_coords::nodeVisualizerWorldTransform(scene, node.id);
+            const std::vector<glm::mat4> transforms{world_transform};
+            auto request = buildPointCloudNodeRenderRequest(ctx, scene, node, render_size, transforms);
+            request.scene = {};
+            return lfs::rendering::SplitViewPanelContent{
+                .type = lfs::rendering::PanelContentType::Model3D,
+                .model = node.point_cloud ? nullptr : node.model.get(),
+                .point_cloud = node.point_cloud.get(),
+                .model_transform = world_transform,
+                .gaussian_render = std::nullopt,
+                .point_cloud_render =
+                    lfs::rendering::SplitViewPointCloudPanelRenderState{
+                        .frame_view = std::move(request.frame_view),
+                        .render = request.render,
+                        .scene = std::move(request.scene),
+                        .filters = std::move(request.filters),
+                        .overlay = std::move(request.overlay),
+                    },
+                .image_handle = 0};
+        }
+
+        [[nodiscard]] std::optional<SplitViewCompositionPlan> buildNodeComparisonPlan(
             const FrameContext& ctx) {
             if (!ctx.scene_manager) {
                 return std::nullopt;
             }
 
             const auto& scene = ctx.scene_manager->getScene();
-            const auto visible_nodes = scene.getVisibleSplatNodeSlots();
-            const auto pair = plyComparisonPairForOffset(visible_nodes.size(), ctx.settings.split_view_offset);
-            if (!pair) {
+            const auto resolved = resolveNodeComparisonPair(
+                scene,
+                ctx.settings.split_view_offset,
+                ctx.settings.split_view_left_node_id,
+                ctx.settings.split_view_right_node_id);
+            if (!resolved || !resolved->left.node || !resolved->right.node) {
                 return std::nullopt;
             }
 
-            const auto& left_slot = visible_nodes[pair->first];
-            const auto& right_slot = visible_nodes[pair->second];
-            if (!left_slot.node || !right_slot.node) {
-                return std::nullopt;
-            }
-
-            const bool left_owns_model = left_slot.node->model != nullptr;
-            const bool right_owns_model = right_slot.node->model != nullptr;
-            // Prefer owned node models so comparison does not require a concatenated
-            // combined model. Fall back to combined-scene masks only when the nodes
-            // no longer own storage (consolidated scenes) and a model is already
-            // present on the frame — never start a combined build from here.
-            const bool use_combined_scene_masks =
-                ctx.model && !ctx.settings.point_cloud_mode &&
-                (!left_owns_model || !right_owns_model);
-            if ((use_combined_scene_masks && !ctx.model) ||
-                (!use_combined_scene_masks && (!left_owns_model || !right_owns_model))) {
-                return std::nullopt;
-            }
-            if (use_combined_scene_masks) {
-                LFS_VK_DEBUG_ASSERT(
-                    ctx.model != nullptr,
-                    "PLY comparison mask path requires a prepared combined model");
-            } else {
-                LFS_VK_DEBUG_ASSERT(
-                    left_slot.node->model != nullptr,
-                    "PLY comparison left node must own a renderable model (left_index={}, visible_node_count={}, node_id={}, model={:#x})",
-                    pair->first,
-                    visible_nodes.size(),
-                    left_slot.node->id,
-                    reinterpret_cast<std::uintptr_t>(left_slot.node->model.get()));
-                LFS_VK_DEBUG_ASSERT(
-                    right_slot.node->model != nullptr,
-                    "PLY comparison right node must own a renderable model (right_index={}, visible_node_count={}, node_id={}, model={:#x})",
-                    pair->second,
-                    visible_nodes.size(),
-                    right_slot.node->id,
-                    reinterpret_cast<std::uintptr_t>(right_slot.node->model.get()));
-            }
-
-            const size_t mask_slot_count = std::max(visible_nodes.size(),
+            const auto visible_splats = scene.getVisibleSplatNodeSlots();
+            const size_t mask_slot_count = std::max(visible_splats.size(),
                                                     ctx.scene_state.node_visibility_mask.size());
+
+            const auto build_panel_content = [&](const NodeComparisonNode& entry)
+                -> std::optional<lfs::rendering::SplitViewPanelContent> {
+                const auto& node = *entry.node;
+                if (node.type == core::NodeType::POINTCLOUD) {
+                    if (!node.point_cloud || node.point_cloud->size() == 0) {
+                        return std::nullopt;
+                    }
+                    return buildPointCloudNodeComparisonPanelContent(ctx, ctx.render_size, scene, node);
+                }
+
+                if (node.type == core::NodeType::SPLAT) {
+                    if (node.point_cloud_source && node.model && node.model->size() > 0) {
+                        return buildPointCloudNodeComparisonPanelContent(ctx, ctx.render_size, scene, node);
+                    }
+                    if (node.model && node.model->size() > 0) {
+                        const int visible_index = entry.splat_slot ? static_cast<int>(*entry.splat_slot) : -1;
+                        return buildOwnedNodeComparisonPanelContent(
+                            ctx, ctx.viewport, ctx.render_size, scene, node, visible_index);
+                    }
+                    // Consolidated splat node without owned storage: use combined-scene mask.
+                    if (!ctx.model || ctx.settings.point_cloud_mode || !entry.splat_slot ||
+                        *entry.splat_slot >= mask_slot_count) {
+                        return std::nullopt;
+                    }
+                    return buildMaskedNodeComparisonPanelContent(
+                        ctx, ctx.viewport, ctx.render_size, mask_slot_count, *entry.splat_slot);
+                }
+
+                if (node.type == core::NodeType::MESH && node.mesh) {
+                    return lfs::rendering::SplitViewPanelContent{
+                        .type = lfs::rendering::PanelContentType::Model3D,
+                        .model = nullptr,
+                        .point_cloud = nullptr,
+                        .model_transform = scene_coords::nodeVisualizerWorldTransform(scene, node.id),
+                        .gaussian_render = std::nullopt,
+                        .point_cloud_render = std::nullopt,
+                        .image_handle = 0};
+                }
+
+                return std::nullopt;
+            };
+
+            auto left_content = build_panel_content(resolved->left);
+            auto right_content = build_panel_content(resolved->right);
+            if (!left_content || !right_content) {
+                return std::nullopt;
+            }
 
             auto plan = makePlan(
                 std::array<SplitViewPanelPlan, 2>{
                     SplitViewPanelPlan{
-                        .label = left_slot.node->name,
+                        .label = resolved->left.node->name,
                         .panel =
-                            {.content =
-                                 use_combined_scene_masks
-                                     ? buildMaskedPLYComparisonPanelContent(
-                                           ctx,
-                                           ctx.viewport,
-                                           ctx.render_size,
-                                           mask_slot_count,
-                                           left_slot.slot_index)
-                                     : buildOwnedPLYComparisonPanelContent(
-                                           ctx,
-                                           ctx.viewport,
-                                           ctx.render_size,
-                                           scene,
-                                           *left_slot.node,
-                                           static_cast<int>(left_slot.slot_index)),
+                            {.content = std::move(*left_content),
                              .presentation =
                                  {.start_position = 0.0f,
                                   .end_position = ctx.settings.split_position,
                                   .texcoord_scale = glm::vec2(1.0f, 1.0f),
                                   .flip_y = std::nullopt}}},
                     SplitViewPanelPlan{
-                        .label = right_slot.node->name,
+                        .label = resolved->right.node->name,
                         .panel =
-                            {.content =
-                                 use_combined_scene_masks
-                                     ? buildMaskedPLYComparisonPanelContent(
-                                           ctx,
-                                           ctx.viewport,
-                                           ctx.render_size,
-                                           mask_slot_count,
-                                           right_slot.slot_index)
-                                     : buildOwnedPLYComparisonPanelContent(
-                                           ctx,
-                                           ctx.viewport,
-                                           ctx.render_size,
-                                           scene,
-                                           *right_slot.node,
-                                           static_cast<int>(right_slot.slot_index)),
+                            {.content = std::move(*right_content),
                              .presentation =
                                  {.start_position = ctx.settings.split_position,
                                   .end_position = 1.0f,
@@ -383,8 +396,8 @@ namespace lfs::vis {
         switch (ctx.settings.split_view_mode) {
         case SplitViewMode::GTComparison:
             return buildGTComparisonPlan(ctx, res);
-        case SplitViewMode::PLYComparison:
-            return buildPLYComparisonPlan(ctx);
+        case SplitViewMode::NodeComparison:
+            return buildNodeComparisonPlan(ctx);
         case SplitViewMode::IndependentDual:
             return buildIndependentDualPlan(ctx);
         case SplitViewMode::Disabled:

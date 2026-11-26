@@ -1426,7 +1426,7 @@ namespace lfs::vis::gui {
             if (split_enabled) {
                 split_mode_rml = split_info_cache_.mode_label;
                 // Model names are already shown inside their comparison panels.
-                if (!splitViewUsesPLYComparison(rm->getSettings().split_view_mode))
+                if (!splitViewUsesNodeComparison(rm->getSettings().split_view_mode))
                     split_detail_rml = split_info_cache_.detail_label;
             }
         }

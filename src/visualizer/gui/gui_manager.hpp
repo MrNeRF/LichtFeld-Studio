@@ -143,6 +143,7 @@ namespace lfs::vis {
                 return rmlui_manager_.requestNativeWindowCapture(panel_id, std::move(callback));
             }
             RmlUIManager::InputDispatchResult dispatchInputEvent(const SDL_Event& event);
+            [[nodiscard]] RmlUIManager& rmluiManager() { return rmlui_manager_; }
             void ensureCjkFontsLoaded() { rmlui_manager_.ensureCjkFontsLoaded(); }
 
             // Sub-manager access

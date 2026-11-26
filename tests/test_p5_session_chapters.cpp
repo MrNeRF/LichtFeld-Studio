@@ -1871,7 +1871,7 @@ namespace {
     }
 
     TEST(P5SessionChapterTest,
-         SplitViewOffsetSurvivesPlyComparisonRestore) {
+         SplitViewOffsetSurvivesNodeComparisonRestore) {
         lfs::event::EventBridge::instance().clear_all();
         lfs::vis::ViewerOptions options;
         options.show_startup_overlay = false;
@@ -1886,7 +1886,7 @@ namespace {
         staged.split_view_offset = saved_offset;
         rendering->updateSettings(staged);
         rendering->restoreSplitViewMode(
-            lfs::vis::SplitViewMode::PLYComparison,
+            lfs::vis::SplitViewMode::NodeComparison,
             viewer.getViewport());
         EXPECT_EQ(
             rendering->getSettings().split_view_offset,
@@ -1897,7 +1897,7 @@ namespace {
         rendering->updateSettings(restored);
         EXPECT_EQ(
             rendering->getSettings().split_view_mode,
-            lfs::vis::SplitViewMode::PLYComparison);
+            lfs::vis::SplitViewMode::NodeComparison);
         EXPECT_EQ(
             rendering->getSettings().split_view_offset,
             saved_offset);

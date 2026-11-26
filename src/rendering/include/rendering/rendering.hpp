@@ -408,6 +408,7 @@ namespace lfs::rendering {
     struct SplitViewPanelContent {
         PanelContentType type = PanelContentType::Model3D;
         const lfs::core::SplatData* model = nullptr;
+        const lfs::core::PointCloud* point_cloud = nullptr;
         glm::mat4 model_transform{1.0f};
         std::optional<SplitViewGaussianPanelRenderState> gaussian_render;
         std::optional<SplitViewPointCloudPanelRenderState> point_cloud_render;

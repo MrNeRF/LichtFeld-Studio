@@ -3,9 +3,35 @@
 
 #pragma once
 
+#include "core/point_cloud.hpp"
 #include "core/scene.hpp"
 
 namespace lfs::vis::gui {
+
+    [[nodiscard]] inline bool isNodeComparableForSplitView(const core::Scene& scene, const core::NodeId id) {
+        const auto* node = scene.getNodeById(id);
+        if (!node) {
+            return false;
+        }
+        switch (node->type) {
+        case core::NodeType::SPLAT:
+            if (node->model && node->model->size() > 0) {
+                return true;
+            }
+            for (const auto& slot : scene.getVisibleSplatNodeSlots()) {
+                if (slot.node && slot.node->id == node->id) {
+                    return true;
+                }
+            }
+            return false;
+        case core::NodeType::POINTCLOUD:
+            return node->point_cloud && node->point_cloud->size() > 0;
+        case core::NodeType::MESH:
+            return node->mesh != nullptr;
+        default:
+            return false;
+        }
+    }
 
     [[nodiscard]] inline bool showGroupMergeAction(const core::Scene& scene, const core::NodeId id) {
         const auto* node = scene.getNodeById(id);

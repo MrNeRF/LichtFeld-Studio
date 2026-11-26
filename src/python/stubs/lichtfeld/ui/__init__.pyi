@@ -3370,7 +3370,22 @@ def get_current_camera_id() -> int:
 
 def get_split_view_mode() -> str:
     """
-    Get split view mode (none, gt_comparison, ply_comparison, independent_dual)
+    Get split view mode (none, gt_comparison, node_comparison, independent_dual)
+    """
+
+def set_split_view_mode(mode: str) -> bool:
+    """
+    Set split view mode (none, node_comparison, gt_comparison, independent_dual; 'ply_comparison' accepted as alias)
+    """
+
+def set_split_view_nodes(left: object | None = None, right: object | None = None, enter_mode: bool = True) -> bool:
+    """
+    Pin explicit left and/or right scene nodes (by node ID or name, or None for automatic) for node comparison split view
+    """
+
+def get_split_view_nodes() -> tuple[int | None, int | None]:
+    """
+    Get pinned (left_node_id, right_node_id) for node comparison split view
     """
 
 def get_speed_overlay() -> tuple[float, float, float, float]:

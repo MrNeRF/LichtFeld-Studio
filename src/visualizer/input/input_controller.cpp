@@ -2290,7 +2290,7 @@ namespace lfs::vis {
                     rendering && (rendering->isGTComparisonActive() || rendering->hasGTComparisonAvailable())) {
                     cmd::ToggleGTComparison{}.emit();
                 } else if (const auto* const scene_manager = services().sceneOrNull();
-                           scene_manager && plyComparisonNodes(scene_manager->getScene()).size() >= 2) {
+                           scene_manager && nodeComparisonNodes(scene_manager->getScene()).size() >= 2) {
                     cmd::ToggleSplitView{}.emit();
                 }
                 return;

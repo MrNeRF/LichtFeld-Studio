@@ -19,6 +19,7 @@
 #include "rendering/rendering.hpp"
 #include "rendering/scene_upscaler_registry.hpp"
 #include "rendering/selection_ops.hpp"
+#include "rendering/viewport_request_builder.hpp"
 #include "scene/scene_manager.hpp"
 #include "sequencer/timeline.hpp"
 #include "theme/theme.hpp"
@@ -1011,9 +1012,9 @@ namespace lfs::vis {
                });
     }
 
-    bool RenderingManager::isPLYComparisonActive() const {
+    bool RenderingManager::isNodeComparisonActive() const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        return splitViewUsesPLYComparison(settings_.split_view_mode);
+        return splitViewUsesNodeComparison(settings_.split_view_mode);
     }
 
     GTComparisonMode RenderingManager::getGTComparisonMode() const {
@@ -1024,6 +1025,107 @@ namespace lfs::vis {
     SplitViewMode RenderingManager::getSplitViewMode() const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
         return settings_.split_view_mode;
+    }
+
+    bool RenderingManager::setSplitViewMode(const SplitViewMode mode, const Viewport* const primary_viewport) {
+        if (independent_panel_overrides_) {
+            return false;
+        }
+        if (splitViewUsesNodeComparison(mode)) {
+            const auto* const scene_manager = services().sceneOrNull();
+            std::optional<int32_t> left_id;
+            std::optional<int32_t> right_id;
+            size_t offset = 0;
+            {
+                std::lock_guard<std::mutex> lock(settings_mutex_);
+                left_id = settings_.split_view_left_node_id;
+                right_id = settings_.split_view_right_node_id;
+                offset = settings_.split_view_offset;
+            }
+            if (!scene_manager ||
+                !resolveNodeComparisonPair(scene_manager->getScene(), offset, left_id, right_id).has_value()) {
+                return false;
+            }
+        }
+        SplitViewService::ModeChangeResult result;
+        {
+            std::lock_guard<std::mutex> lock(settings_mutex_);
+            result = split_view_service_.setMode(settings_, mode, primary_viewport);
+            if (result.mode_changed || result.render_settings_changed) {
+                markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SettingsChange);
+            }
+        }
+        applySplitModeChange(result);
+        return true;
+    }
+
+    bool RenderingManager::setSplitViewNode(const SplitViewPanelId panel,
+                                            const std::optional<int32_t> node_id,
+                                            const bool enter_comparison) {
+        if (independent_panel_overrides_) {
+            return false;
+        }
+        auto* const scene_manager = services().sceneOrNull();
+        if (node_id && *node_id != core::NULL_NODE) {
+            if (!scene_manager) {
+                return false;
+            }
+            const auto& scene = scene_manager->getScene();
+            const auto* const node = scene.getNodeById(*node_id);
+            if (!node || !isNodeComparable(scene, *node)) {
+                return false;
+            }
+        }
+        SplitViewService::ModeChangeResult result;
+        {
+            std::lock_guard<std::mutex> lock(settings_mutex_);
+            result = split_view_service_.setNodeComparisonNode(
+                settings_, scene_manager, panel, node_id, enter_comparison);
+            if (result.mode_changed || result.render_settings_changed) {
+                markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SettingsChange);
+            }
+        }
+        applySplitModeChange(result);
+        return true;
+    }
+
+    bool RenderingManager::setSplitViewNodes(const std::optional<int32_t> left_node_id,
+                                             const std::optional<int32_t> right_node_id,
+                                             const bool enter_comparison) {
+        if (independent_panel_overrides_) {
+            return false;
+        }
+        auto* const scene_manager = services().sceneOrNull();
+        const auto validate_id = [scene_manager](const std::optional<int32_t> id) {
+            if (!id || *id == core::NULL_NODE) {
+                return true;
+            }
+            if (!scene_manager) {
+                return false;
+            }
+            const auto& scene = scene_manager->getScene();
+            const auto* const node = scene.getNodeById(*id);
+            return node && isNodeComparable(scene, *node);
+        };
+        if (!validate_id(left_node_id) || !validate_id(right_node_id)) {
+            return false;
+        }
+        SplitViewService::ModeChangeResult result;
+        {
+            std::lock_guard<std::mutex> lock(settings_mutex_);
+            result = split_view_service_.setNodeComparisonNodes(
+                settings_, scene_manager, left_node_id, right_node_id, enter_comparison);
+            if (result.mode_changed || result.render_settings_changed) {
+                markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SettingsChange);
+            }
+        }
+        applySplitModeChange(result);
+        return true;
+    }
+
+    std::pair<std::optional<int32_t>, std::optional<int32_t>> RenderingManager::getSplitViewNodes() const {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        return {settings_.split_view_left_node_id, settings_.split_view_right_node_id};
     }
 
     bool RenderingManager::isIndependentSplitViewActive() const {

@@ -119,7 +119,7 @@ namespace lfs::vis {
         settings.environment_mode = EnvironmentBackgroundMode::Equirectangular;
         settings.environment_map_path = "sky.hdr";
         for (const auto mode : {SplitViewMode::Disabled, SplitViewMode::IndependentDual,
-                                SplitViewMode::PLYComparison}) {
+                                SplitViewMode::NodeComparison}) {
             settings.split_view_mode = mode;
             EXPECT_TRUE(environmentBackgroundUsesTransparentViewerCompositing(settings));
         }
@@ -128,7 +128,7 @@ namespace lfs::vis {
     TEST(EnvironmentCompositingTest, SolidEmptyAndGroundTruthKeepOpaqueRendering) {
         RenderSettings settings;
         for (const auto mode : {SplitViewMode::Disabled, SplitViewMode::IndependentDual,
-                                SplitViewMode::PLYComparison, SplitViewMode::GTComparison}) {
+                                SplitViewMode::NodeComparison, SplitViewMode::GTComparison}) {
             settings.split_view_mode = mode;
             settings.environment_mode = EnvironmentBackgroundMode::SolidColor;
             settings.environment_map_path = "sky.hdr";
@@ -746,14 +746,18 @@ namespace lfs::vis {
     TEST(SplitViewServiceTest, SceneClearedDisablesSplitViewAndResetsOffset) {
         SplitViewService service;
         RenderSettings settings;
-        settings.split_view_mode = SplitViewMode::PLYComparison;
+        settings.split_view_mode = SplitViewMode::NodeComparison;
         settings.split_view_offset = 3;
+        settings.split_view_left_node_id = 11;
+        settings.split_view_right_node_id = 22;
 
         const auto result = service.handleSceneCleared(settings);
 
         EXPECT_TRUE(result.mode_changed);
         EXPECT_EQ(settings.split_view_mode, SplitViewMode::Disabled);
         EXPECT_EQ(settings.split_view_offset, 0);
+        EXPECT_FALSE(settings.split_view_left_node_id.has_value());
+        EXPECT_FALSE(settings.split_view_right_node_id.has_value());
     }
 
     TEST(SplitViewServiceTest, IndependentDualCopiesPrimaryViewportAndResetsFocus) {
@@ -1445,7 +1449,7 @@ namespace lfs::vis {
         EXPECT_FLOAT_EQ(acc(1, 2), 9.0f);
     }
 
-    TEST_F(SceneManagerRenderStateTest, PlyComparisonRendersFromOwnedNodeModelsWithoutCombinedPrep) {
+    TEST_F(SceneManagerRenderStateTest, NodeComparisonRendersFromOwnedNodeModelsWithoutCombinedPrep) {
         SceneManager manager;
         manager.changeContentType(SceneManager::ContentType::SplatFiles);
 
@@ -1463,7 +1467,7 @@ namespace lfs::vis {
         EXPECT_FALSE(scene.combinedModelBuildPending());
 
         RenderSettings settings;
-        settings.split_view_mode = SplitViewMode::PLYComparison;
+        settings.split_view_mode = SplitViewMode::NodeComparison;
         settings.split_position = 0.35f;
         settings.show_rings = true;
         settings.depth_filter_enabled = true;
@@ -1533,7 +1537,7 @@ namespace lfs::vis {
                 {static_cast<int>(i) * 320, 0}, ctx.render_size);
             ASSERT_EQ(request.scene.node_active_sh_degrees, (std::vector<int>{1, 2}));
             ASSERT_EQ(request.scene.model_transforms->size(), 2u);
-            applyPlyComparisonNodeScope(
+            applyNodeComparisonNodeScope(
                 request.scene, request.filters, request.overlay, ctx, node, static_cast<int>(i));
             const std::vector<glm::mat4> transforms{panel.content.model_transform};
             request.scene.model_transforms = &transforms;
@@ -1586,7 +1590,7 @@ namespace lfs::vis {
         EXPECT_FALSE(observe().changed);
     }
 
-    TEST_F(SceneManagerRenderStateTest, SwitchToEditModePlyComparisonScopesCropAndSelectionToOwnedNodes) {
+    TEST_F(SceneManagerRenderStateTest, SwitchToEditModeNodeComparisonScopesCropAndSelectionToOwnedNodes) {
         using lfs::core::DataType;
         using lfs::core::Device;
         using lfs::core::Tensor;
@@ -1621,7 +1625,7 @@ namespace lfs::vis {
             Tensor::zeros({size_t{3}}, Device::CPU, DataType::Bool);
 
         RenderSettings settings;
-        settings.split_view_mode = SplitViewMode::PLYComparison;
+        settings.split_view_mode = SplitViewMode::NodeComparison;
         settings.split_position = 0.4f;
         settings.show_rings = true;
         settings.depth_filter_enabled = true;
@@ -1845,7 +1849,7 @@ namespace lfs::vis {
         EXPECT_TRUE(aggregate.expired());
     }
 
-    TEST_F(SceneManagerRenderStateTest, PlyComparisonMetadataCacheIsDistinctFromFullCombinedState) {
+    TEST_F(SceneManagerRenderStateTest, NodeComparisonMetadataCacheIsDistinctFromFullCombinedState) {
         SceneManager manager;
         manager.changeContentType(SceneManager::ContentType::SplatFiles);
         auto& scene = manager.getScene();
@@ -1887,15 +1891,15 @@ namespace lfs::vis {
         }
     }
 
-    TEST_F(SceneManagerRenderStateTest, PlyComparisonPivotSamplesClickedOwnedNode) {
+    TEST_F(SceneManagerRenderStateTest, NodeComparisonPivotSamplesClickedOwnedNode) {
         SceneManager manager;
         manager.changeContentType(SceneManager::ContentType::SplatFiles);
         auto& scene = manager.getScene();
         const auto left_id = scene.addSplat("left", makeTestSplat(0.0f));
         const auto right_id = scene.addSplat("right", makeTestSplat(1.0f));
 
-        const auto left = resolvePlyComparisonDepthSample(scene, 0, SplitViewPanelId::Left);
-        const auto right = resolvePlyComparisonDepthSample(scene, 0, SplitViewPanelId::Right);
+        const auto left = resolveNodeComparisonDepthSample(scene, 0, SplitViewPanelId::Left);
+        const auto right = resolveNodeComparisonDepthSample(scene, 0, SplitViewPanelId::Right);
         ASSERT_NE(left.node, nullptr);
         ASSERT_NE(right.node, nullptr);
         EXPECT_EQ(left.node->id, left_id);
@@ -1972,7 +1976,7 @@ namespace lfs::vis {
         EXPECT_EQ(scene.getDatasetPointCloudNode(), nullptr);
     }
 
-    TEST_F(SceneManagerRenderStateTest, PlyComparisonUsesSceneTreeOrder) {
+    TEST_F(SceneManagerRenderStateTest, NodeComparisonUsesSceneTreeOrder) {
         SceneManager manager;
         manager.changeContentType(SceneManager::ContentType::SplatFiles);
         auto& scene = manager.getScene();
@@ -1985,33 +1989,33 @@ namespace lfs::vis {
         scene.setNodeVisibility(scene.addMesh("hidden", mesh), false);
         const auto splat_id = scene.addSplat("splat", makeTestSplat(0.0f));
 
-        const auto nodes = plyComparisonNodes(scene);
+        const auto nodes = nodeComparisonNodes(scene);
         ASSERT_EQ(nodes.size(), 2u);
         EXPECT_EQ(nodes[0].node->id, mesh_id);
         EXPECT_FALSE(nodes[0].splat_slot.has_value());
         EXPECT_EQ(nodes[1].node->id, splat_id);
         EXPECT_TRUE(nodes[1].splat_slot.has_value());
 
-        const auto left = resolvePlyComparisonDepthSample(scene, 0, SplitViewPanelId::Left);
+        const auto left = resolveNodeComparisonDepthSample(scene, 0, SplitViewPanelId::Left);
         ASSERT_NE(left.node, nullptr);
         EXPECT_EQ(left.node->id, mesh_id);
         EXPECT_EQ(left.model, nullptr);
         EXPECT_EQ(left.visible_index, -1);
 
         ASSERT_TRUE(scene.moveNode(splat_id, core::NULL_NODE, 0));
-        const auto reordered = plyComparisonNodes(scene);
+        const auto reordered = nodeComparisonNodes(scene);
         ASSERT_EQ(reordered.size(), 2u);
         EXPECT_EQ(reordered[0].node->id, splat_id);
         EXPECT_EQ(reordered[1].node->id, mesh_id);
         ASSERT_TRUE(reordered[0].splat_slot.has_value());
         EXPECT_EQ(reordered[0].splat_slot, nodes[1].splat_slot);
         EXPECT_FALSE(reordered[1].splat_slot.has_value());
-        const auto moved = resolvePlyComparisonDepthSample(scene, 0, SplitViewPanelId::Left);
+        const auto moved = resolveNodeComparisonDepthSample(scene, 0, SplitViewPanelId::Left);
         EXPECT_EQ(moved.node->id, splat_id);
         EXPECT_EQ(moved.visible_index, static_cast<int>(*reordered[0].splat_slot));
     }
 
-    TEST_F(SceneManagerRenderStateTest, PlyComparisonConsolidatedUsesPreparedCombinedWithoutRebuild) {
+    TEST_F(SceneManagerRenderStateTest, NodeComparisonConsolidatedUsesPreparedCombinedWithoutRebuild) {
         SceneManager manager;
         manager.changeContentType(SceneManager::ContentType::SplatFiles);
         auto& scene = manager.getScene();
@@ -2035,7 +2039,7 @@ namespace lfs::vis {
 
         Viewport viewport(640, 480);
         RenderSettings settings;
-        settings.split_view_mode = SplitViewMode::PLYComparison;
+        settings.split_view_mode = SplitViewMode::NodeComparison;
         const FrameContext ctx{
             .viewport = viewport,
             .scene_manager = &manager,
@@ -2055,21 +2059,157 @@ namespace lfs::vis {
         EXPECT_FALSE(plan->panels[1].panel.content.gaussian_render->scene.node_visibility_mask[0]);
         EXPECT_TRUE(plan->panels[1].panel.content.gaussian_render->scene.node_visibility_mask[1]);
 
-        const auto left = resolvePlyComparisonDepthSample(scene, 0, SplitViewPanelId::Left);
+        const auto left = resolveNodeComparisonDepthSample(scene, 0, SplitViewPanelId::Left);
         EXPECT_FALSE(left.uses_owned_node_model);
         EXPECT_EQ(left.model, prepared);
         EXPECT_EQ(left.node->id, left_id);
     }
 
-    TEST(SplitViewServiceTest, PlyComparisonPairOffsetWalksUniquePairs) {
-        EXPECT_FALSE(plyComparisonPairForOffset(0, 0).has_value());
-        EXPECT_FALSE(plyComparisonPairForOffset(1, 0).has_value());
-        ASSERT_TRUE(plyComparisonPairForOffset(2, 0).has_value());
-        EXPECT_EQ(*plyComparisonPairForOffset(2, 0), (std::pair<size_t, size_t>{0, 1}));
-        EXPECT_EQ(*plyComparisonPairForOffset(3, 0), (std::pair<size_t, size_t>{0, 1}));
-        EXPECT_EQ(*plyComparisonPairForOffset(3, 1), (std::pair<size_t, size_t>{0, 2}));
-        EXPECT_EQ(*plyComparisonPairForOffset(3, 2), (std::pair<size_t, size_t>{1, 2}));
-        EXPECT_EQ(*plyComparisonPairForOffset(3, 3), (std::pair<size_t, size_t>{0, 1}));
+    TEST_F(SceneManagerRenderStateTest, NodeComparisonDispatchesTwoPointCloudsIndependently) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::SplatFiles);
+        auto& scene = manager.getScene();
+        const auto left_id = scene.addPointCloud("cloud_left", makeTestPointCloud());
+        const auto right_id = scene.addPointCloud("cloud_right", makeTestPointCloud());
+        scene.setNodeTransform(
+            left_id, glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 0.0f, 0.0f)));
+        scene.setNodeTransform(
+            right_id, glm::translate(glm::mat4(1.0f), glm::vec3(-2.0f, 3.0f, 0.0f)));
+
+        const auto nodes = nodeComparisonNodes(scene);
+        ASSERT_EQ(nodes.size(), 2u);
+        EXPECT_EQ(nodes[0].node->id, left_id);
+        EXPECT_EQ(nodes[1].node->id, right_id);
+
+        Viewport viewport(640, 480);
+        RenderSettings settings;
+        settings.split_view_mode = SplitViewMode::NodeComparison;
+        const FrameContext ctx{
+            .viewport = viewport,
+            .scene_manager = &manager,
+            .model = nullptr,
+            .scene_state = manager.buildRenderState({.metadata_only = true}),
+            .settings = settings,
+            .render_size = {640, 480},
+        };
+
+        const auto plan = buildSplitViewCompositionPlan(ctx, FrameResources{});
+        ASSERT_TRUE(plan.has_value());
+        ASSERT_EQ(plan->panels.size(), 2u);
+        EXPECT_EQ(plan->panels[0].label, "cloud_left");
+        EXPECT_EQ(plan->panels[1].label, "cloud_right");
+
+        const auto* const left_node = scene.getNodeById(left_id);
+        const auto* const right_node = scene.getNodeById(right_id);
+        ASSERT_NE(left_node, nullptr);
+        ASSERT_NE(right_node, nullptr);
+
+        EXPECT_EQ(plan->panels[0].panel.content.model, nullptr);
+        EXPECT_EQ(plan->panels[1].panel.content.model, nullptr);
+        EXPECT_FALSE(plan->panels[0].panel.content.gaussian_render.has_value());
+        EXPECT_FALSE(plan->panels[1].panel.content.gaussian_render.has_value());
+        ASSERT_TRUE(plan->panels[0].panel.content.point_cloud_render.has_value());
+        ASSERT_TRUE(plan->panels[1].panel.content.point_cloud_render.has_value());
+        EXPECT_EQ(plan->panels[0].panel.content.point_cloud, left_node->point_cloud.get());
+        EXPECT_EQ(plan->panels[1].panel.content.point_cloud, right_node->point_cloud.get());
+        EXPECT_EQ(
+            plan->panels[0].panel.content.model_transform,
+            scene_coords::nodeVisualizerWorldTransform(scene, left_id));
+        EXPECT_EQ(
+            plan->panels[1].panel.content.model_transform,
+            scene_coords::nodeVisualizerWorldTransform(scene, right_id));
+    }
+
+    TEST_F(SceneManagerRenderStateTest, NodeComparisonDispatchesMixedSplatAndPointCloud) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::SplatFiles);
+        auto& scene = manager.getScene();
+        const auto splat_id = scene.addSplat("splat_node", makeTestSplat(0.0f));
+        const auto cloud_id = scene.addPointCloud("cloud_node", makeTestPointCloud());
+
+        Viewport viewport(640, 480);
+        RenderSettings settings;
+        settings.split_view_mode = SplitViewMode::NodeComparison;
+        const FrameContext auto_ctx{
+            .viewport = viewport,
+            .scene_manager = &manager,
+            .model = nullptr,
+            .scene_state = manager.buildRenderState({.metadata_only = true}),
+            .settings = settings,
+            .render_size = {640, 480},
+        };
+
+        const auto auto_plan = buildSplitViewCompositionPlan(auto_ctx, FrameResources{});
+        ASSERT_TRUE(auto_plan.has_value());
+        ASSERT_EQ(auto_plan->panels.size(), 2u);
+        EXPECT_EQ(auto_plan->panels[0].label, "splat_node");
+        EXPECT_EQ(auto_plan->panels[1].label, "cloud_node");
+        EXPECT_TRUE(auto_plan->panels[0].panel.content.gaussian_render.has_value());
+        EXPECT_FALSE(auto_plan->panels[0].panel.content.point_cloud_render.has_value());
+        EXPECT_EQ(auto_plan->panels[0].panel.content.model, scene.getNodeById(splat_id)->model.get());
+        EXPECT_FALSE(auto_plan->panels[1].panel.content.gaussian_render.has_value());
+        EXPECT_TRUE(auto_plan->panels[1].panel.content.point_cloud_render.has_value());
+        EXPECT_EQ(auto_plan->panels[1].panel.content.point_cloud, scene.getNodeById(cloud_id)->point_cloud.get());
+
+        // Pin reversed order: PointCloud on Left, Splat on Right.
+        settings.split_view_left_node_id = cloud_id;
+        settings.split_view_right_node_id = splat_id;
+        const FrameContext pinned_ctx{
+            .viewport = viewport,
+            .scene_manager = &manager,
+            .model = nullptr,
+            .scene_state = manager.buildRenderState({.metadata_only = true}),
+            .settings = settings,
+            .render_size = {640, 480},
+        };
+
+        const auto pinned_plan = buildSplitViewCompositionPlan(pinned_ctx, FrameResources{});
+        ASSERT_TRUE(pinned_plan.has_value());
+        EXPECT_EQ(pinned_plan->panels[0].label, "cloud_node");
+        EXPECT_EQ(pinned_plan->panels[1].label, "splat_node");
+        EXPECT_TRUE(pinned_plan->panels[0].panel.content.point_cloud_render.has_value());
+        EXPECT_FALSE(pinned_plan->panels[0].panel.content.gaussian_render.has_value());
+        EXPECT_EQ(pinned_plan->panels[0].panel.content.point_cloud, scene.getNodeById(cloud_id)->point_cloud.get());
+        EXPECT_TRUE(pinned_plan->panels[1].panel.content.gaussian_render.has_value());
+        EXPECT_FALSE(pinned_plan->panels[1].panel.content.point_cloud_render.has_value());
+        EXPECT_EQ(pinned_plan->panels[1].panel.content.model, scene.getNodeById(splat_id)->model.get());
+
+        const auto left_sample = resolveNodeComparisonDepthSample(
+            scene, 0, SplitViewPanelId::Left, settings.split_view_left_node_id, settings.split_view_right_node_id);
+        const auto right_sample = resolveNodeComparisonDepthSample(
+            scene, 0, SplitViewPanelId::Right, settings.split_view_left_node_id, settings.split_view_right_node_id);
+        ASSERT_NE(left_sample.node, nullptr);
+        ASSERT_NE(right_sample.node, nullptr);
+        EXPECT_EQ(left_sample.node->id, cloud_id);
+        EXPECT_EQ(left_sample.model, nullptr);
+        EXPECT_EQ(right_sample.node->id, splat_id);
+        EXPECT_EQ(right_sample.model, scene.getNodeById(splat_id)->model.get());
+    }
+
+    TEST(SplitViewServiceTest, NodeComparisonPairOffsetWalksUniquePairs) {
+        EXPECT_FALSE(nodeComparisonPairForOffset(0, 0).has_value());
+        EXPECT_FALSE(nodeComparisonPairForOffset(1, 0).has_value());
+        ASSERT_TRUE(nodeComparisonPairForOffset(2, 0).has_value());
+        EXPECT_EQ(*nodeComparisonPairForOffset(2, 0), (std::pair<size_t, size_t>{0, 1}));
+        EXPECT_EQ(*nodeComparisonPairForOffset(3, 0), (std::pair<size_t, size_t>{0, 1}));
+        EXPECT_EQ(*nodeComparisonPairForOffset(3, 1), (std::pair<size_t, size_t>{0, 2}));
+        EXPECT_EQ(*nodeComparisonPairForOffset(3, 2), (std::pair<size_t, size_t>{1, 2}));
+        EXPECT_EQ(*nodeComparisonPairForOffset(3, 3), (std::pair<size_t, size_t>{0, 1}));
+    }
+
+    TEST(SplitViewServiceTest, SplitViewModeNameAndBackwardsCompatibleAlias) {
+        EXPECT_EQ(splitViewModeName(SplitViewMode::Disabled), "none");
+        EXPECT_EQ(splitViewModeName(SplitViewMode::NodeComparison), "node_comparison");
+        EXPECT_EQ(splitViewModeName(SplitViewMode::GTComparison), "gt_comparison");
+        EXPECT_EQ(splitViewModeName(SplitViewMode::IndependentDual), "independent_dual");
+
+        EXPECT_EQ(parseSplitViewModeName("none"), SplitViewMode::Disabled);
+        EXPECT_EQ(parseSplitViewModeName("disabled"), SplitViewMode::Disabled);
+        EXPECT_EQ(parseSplitViewModeName("node_comparison"), SplitViewMode::NodeComparison);
+        EXPECT_EQ(parseSplitViewModeName("ply_comparison"), SplitViewMode::NodeComparison);
+        EXPECT_EQ(parseSplitViewModeName("gt_comparison"), SplitViewMode::GTComparison);
+        EXPECT_EQ(parseSplitViewModeName("independent_dual"), SplitViewMode::IndependentDual);
+        EXPECT_FALSE(parseSplitViewModeName("unknown_mode").has_value());
     }
 
     TEST_F(SceneManagerRenderStateTest, HiddenEnabledCropBoxStillFiltersRender) {
@@ -3921,10 +4061,10 @@ namespace lfs::vis {
             service.requiredDirtyMask(false, true, SplitViewMode::Disabled),
             DirtyFlag::ALL);
         EXPECT_EQ(
-            service.requiredDirtyMask(false, false, SplitViewMode::PLYComparison),
+            service.requiredDirtyMask(false, false, SplitViewMode::NodeComparison),
             DirtyFlag::ALL | DirtyFlag::SPLIT_VIEW);
         EXPECT_EQ(
-            service.requiredDirtyMask(true, true, SplitViewMode::PLYComparison),
+            service.requiredDirtyMask(true, true, SplitViewMode::NodeComparison),
             0u);
     }
 
@@ -4209,7 +4349,7 @@ namespace lfs::vis {
         EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
     }
 
-    TEST_F(RenderingManagerEventsTest, PlyComparisonRequiresTwoVisibleModelsAndExplainsWhy) {
+    TEST_F(RenderingManagerEventsTest, NodeComparisonRequiresTwoVisibleModelsAndExplainsWhy) {
         struct Consumer : lfs::NativeErrorConsumer {
             int notices = 0;
             void on_error(const lfs::ErrorNotification& notification,
@@ -4245,7 +4385,7 @@ namespace lfs::vis {
         reject();
     }
 
-    TEST_F(RenderingManagerEventsTest, PlyComparisonStillTogglesAndCanAlwaysExit) {
+    TEST_F(RenderingManagerEventsTest, NodeComparisonStillTogglesAndCanAlwaysExit) {
         SceneManager scene_manager;
         services().set(&scene_manager);
         RenderingManager manager;
@@ -4257,7 +4397,7 @@ namespace lfs::vis {
         settings.split_view_offset = 7;
         manager.updateSettings(settings);
         lfs::core::events::cmd::ToggleSplitView{}.emit();
-        EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::PLYComparison);
+        EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::NodeComparison);
         EXPECT_FLOAT_EQ(manager.getSettings().split_position, 0.35f);
         EXPECT_EQ(manager.getSettings().split_view_offset, 0u);
         lfs::core::events::cmd::ToggleSplitView{}.emit();
@@ -4292,7 +4432,7 @@ namespace lfs::vis {
         scene.setNodeVisibility(second, true);
         EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
         lfs::core::events::cmd::ToggleSplitView{}.emit();
-        EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::PLYComparison);
+        EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::NodeComparison);
     }
 
     TEST_F(RenderingManagerEventsTest, ComparisonUsesEffectiveVisibilityAfterGroupChanges) {
@@ -4310,7 +4450,7 @@ namespace lfs::vis {
 
         ASSERT_TRUE(scene.reparent(second, lfs::core::NULL_NODE));
         lfs::core::events::cmd::ToggleSplitView{}.emit();
-        ASSERT_EQ(manager.getSettings().split_view_mode, SplitViewMode::PLYComparison);
+        ASSERT_EQ(manager.getSettings().split_view_mode, SplitViewMode::NodeComparison);
         ASSERT_TRUE(scene.reparent(second, group));
         EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
     }
@@ -4330,16 +4470,75 @@ namespace lfs::vis {
         manager.updateSettings(settings);
         for (const bool visible : {false, true}) {
             scene.setNodeVisibility(third, visible);
-            EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::PLYComparison);
+            EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::NodeComparison);
             EXPECT_EQ(manager.getSettings().split_view_offset, 1u);
             EXPECT_FLOAT_EQ(manager.getSettings().split_position, 0.35f);
         }
         scene.removeNode("third");
         lfs::core::events::state::PLYRemoved{}.emit();
-        EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::PLYComparison);
+        EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::NodeComparison);
         scene.removeNode("second");
         lfs::core::events::state::PLYRemoved{}.emit();
         EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
+    }
+
+    TEST_F(RenderingManagerEventsTest, ExplicitNodeComparisonSlotsAndRemovalFallback) {
+        SceneManager scene_manager;
+        services().set(&scene_manager);
+        RenderingManager manager;
+        auto& scene = scene_manager.getScene();
+        const auto splat_id = scene.addSplat("splat_a", makeTestSplat(0.0f));
+        const auto cloud_a = scene.addPointCloud("cloud_a", makeTestPointCloud());
+        const auto cloud_b = scene.addPointCloud("cloud_b", makeTestPointCloud());
+
+        // Single-side pin enters NodeComparison and preserves the opposite resolved node.
+        ASSERT_TRUE(manager.setSplitViewNode(SplitViewPanelId::Right, cloud_b, true));
+        EXPECT_TRUE(manager.isNodeComparisonActive());
+        auto [pinned_left, pinned_right] = manager.getSplitViewNodes();
+        EXPECT_EQ(pinned_left, std::optional<core::NodeId>{splat_id});
+        EXPECT_EQ(pinned_right, std::optional<core::NodeId>{cloud_b});
+        auto pair = resolveNodeComparisonPair(scene, manager.getSettings().split_view_offset, pinned_left, pinned_right);
+        ASSERT_TRUE(pair.has_value());
+        EXPECT_EQ(pair->left.node->id, splat_id);
+        EXPECT_EQ(pair->right.node->id, cloud_b);
+
+        // Partial pin (only right pinned) automatically pairs left from visible comparable nodes.
+        ASSERT_TRUE(manager.setSplitViewNodes(std::nullopt, cloud_b, true));
+        std::tie(pinned_left, pinned_right) = manager.getSplitViewNodes();
+        EXPECT_FALSE(pinned_left.has_value());
+        EXPECT_EQ(pinned_right, std::optional<core::NodeId>{cloud_b});
+        pair = resolveNodeComparisonPair(scene, manager.getSettings().split_view_offset, pinned_left, pinned_right);
+        ASSERT_TRUE(pair.has_value());
+        EXPECT_EQ(pair->left.node->id, splat_id);
+        EXPECT_EQ(pair->right.node->id, cloud_b);
+
+        // Pin both slots explicitly (mixed PointCloud vs Splat).
+        ASSERT_TRUE(manager.setSplitViewNodes(cloud_a, splat_id, true));
+        std::tie(pinned_left, pinned_right) = manager.getSplitViewNodes();
+        EXPECT_EQ(pinned_left, std::optional<core::NodeId>{cloud_a});
+        EXPECT_EQ(pinned_right, std::optional<core::NodeId>{splat_id});
+        pair = resolveNodeComparisonPair(scene, manager.getSettings().split_view_offset, pinned_left, pinned_right);
+        ASSERT_TRUE(pair.has_value());
+        EXPECT_EQ(pair->left.node->id, cloud_a);
+        EXPECT_EQ(pair->right.node->id, splat_id);
+
+        // Removing the pinned left point cloud clears the stale pin and falls back to the remaining pair.
+        scene.removeNodeById(cloud_a);
+        EXPECT_TRUE(manager.isNodeComparisonActive());
+        std::tie(pinned_left, pinned_right) = manager.getSplitViewNodes();
+        EXPECT_FALSE(pinned_left.has_value());
+        EXPECT_EQ(pinned_right, std::optional<core::NodeId>{splat_id});
+        pair = resolveNodeComparisonPair(scene, manager.getSettings().split_view_offset, pinned_left, pinned_right);
+        ASSERT_TRUE(pair.has_value());
+        EXPECT_EQ(pair->left.node->id, cloud_b);
+        EXPECT_EQ(pair->right.node->id, splat_id);
+
+        // Removing a second node leaves fewer than 2 comparable nodes, disabling NodeComparison.
+        scene.removeNodeById(cloud_b);
+        EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
+        std::tie(pinned_left, pinned_right) = manager.getSplitViewNodes();
+        EXPECT_FALSE(pinned_left.has_value());
+        EXPECT_FALSE(pinned_right.has_value());
     }
 
     TEST_F(RenderingManagerEventsTest, VisibilityPreservesOtherViewModes) {
@@ -4367,7 +4566,7 @@ namespace lfs::vis {
         }
     }
 
-    TEST_F(RenderingManagerEventsTest, RejectedPlyComparisonPreservesIndependentView) {
+    TEST_F(RenderingManagerEventsTest, RejectedNodeComparisonPreservesIndependentView) {
         SceneManager scene_manager;
         services().set(&scene_manager);
         scene_manager.getScene().addSplat("model", makeTestSplat(0.0f));
@@ -4378,7 +4577,7 @@ namespace lfs::vis {
         EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::IndependentDual);
     }
 
-    TEST_F(RenderingManagerEventsTest, RejectedPlyComparisonPreservesGroundTruthView) {
+    TEST_F(RenderingManagerEventsTest, RejectedNodeComparisonPreservesGroundTruthView) {
         SceneManager scene_manager;
         addDatasetCameraWithImage(scene_manager);
         services().set(&scene_manager);

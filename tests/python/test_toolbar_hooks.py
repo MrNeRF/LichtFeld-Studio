@@ -2762,7 +2762,7 @@ def test_align_toolbar_signature_tracks_can_apply(toolbar_module):
     assert signature_disabled[-4:-1] == (False, True, False)
     assert signature_enabled[-4:-1] == (True, True, False)
 
-    split_mode["value"] = "ply_comparison"
+    split_mode["value"] = "node_comparison"
     assert controller._toolbar_signature(None) != signature_enabled
     split_mode["value"] = "none"
 
@@ -2906,7 +2906,7 @@ def test_align_toolbar_buttons_follow_native_state(toolbar_module):
     assert buttons[3]["selected"] is False
     assert buttons[4]["selected"] is True
 
-    lf_stub.ui.get_split_view_mode = lambda: "ply_comparison"
+    lf_stub.ui.get_split_view_mode = lambda: "node_comparison"
     assert controller._build_align_action_records("builtin.align") == buttons
 
 

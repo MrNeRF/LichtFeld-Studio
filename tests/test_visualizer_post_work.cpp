@@ -8123,11 +8123,11 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
 
     TEST(ImportComparisonTest, ProvisionalThirdUsesItsOwnSlotWithoutChangingDisplayedPair) {
         const size_t displayed_offset = 0;
-        const auto validation_offset = plyComparisonImportOffset(3, displayed_offset, 2);
-        EXPECT_EQ(plyComparisonPairForOffset(3, validation_offset), (std::pair<size_t, size_t>{0, 2}));
-        EXPECT_EQ(plyComparisonPairForOffset(3, displayed_offset), (std::pair<size_t, size_t>{0, 1}));
-        EXPECT_EQ(plyComparisonImportOffset(3, displayed_offset, 1), displayed_offset);
-        EXPECT_EQ(plyComparisonImportOffset(1, displayed_offset, 0), displayed_offset);
+        const auto validation_offset = nodeComparisonImportOffset(3, displayed_offset, 2);
+        EXPECT_EQ(nodeComparisonPairForOffset(3, validation_offset), (std::pair<size_t, size_t>{0, 2}));
+        EXPECT_EQ(nodeComparisonPairForOffset(3, displayed_offset), (std::pair<size_t, size_t>{0, 1}));
+        EXPECT_EQ(nodeComparisonImportOffset(3, displayed_offset, 1), displayed_offset);
+        EXPECT_EQ(nodeComparisonImportOffset(1, displayed_offset, 0), displayed_offset);
     }
 
     TEST_F(VisualizerImplResetTest, ImportValidationReusesResidentMeshAllocations) {
@@ -8197,7 +8197,7 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
         viewer.getSceneManager()->addSplatFile(makeSplatFixture("display-right"));
         auto* rendering = viewer.getRenderingManager();
         auto settings = rendering->getSettings();
-        settings.split_view_mode = SplitViewMode::PLYComparison;
+        settings.split_view_mode = SplitViewMode::NodeComparison;
         rendering->updateSettings(settings);
         Viewport viewport(640, 480);
         viewport.frameBufferSize = {640, 480};
@@ -8260,7 +8260,7 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
         viewer.getSceneManager()->loadSplatFile(makeSplatFixture("comparison-existing"));
         auto* rendering = viewer.getRenderingManager();
         auto settings = rendering->getSettings();
-        settings.split_view_mode = SplitViewMode::PLYComparison;
+        settings.split_view_mode = SplitViewMode::NodeComparison;
         rendering->updateSettings(settings);
         std::atomic<int> allocations{0};
         core::events::state::PLYAdded::when([&](const auto&) {

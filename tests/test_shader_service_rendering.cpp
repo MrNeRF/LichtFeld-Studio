@@ -264,7 +264,7 @@ namespace lfs::test::service_rendering {
     TEST_P(ShaderComparisonTest, PanelsKeepTheirNodeBindings) {
         const bool consolidated = GetParam();
         auto settings = settings_;
-        settings.split_view_mode = lfs::vis::SplitViewMode::PLYComparison;
+        settings.split_view_mode = lfs::vis::SplitViewMode::NodeComparison;
         if (consolidated) {
             ASSERT_EQ(scene().consolidateNodeModels(), nodes_.size());
             apply(settings);

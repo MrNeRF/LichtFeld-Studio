@@ -709,10 +709,10 @@ namespace lfs::vis {
 
         // Handle PLY cycling with proper event emission for UI updates
         event_handlers_.subscribe<cmd::CyclePLY>([this](const auto&) {
-            // Check if rendering manager has split view enabled (in PLY comparison mode)
+            // Check if rendering manager has split view enabled (in node comparison mode)
             if (services().renderingOrNull()) {
                 auto settings = services().renderingOrNull()->getSettings();
-                if (lfs::vis::splitViewUsesPLYComparison(settings.split_view_mode)) {
+                if (lfs::vis::splitViewUsesNodeComparison(settings.split_view_mode)) {
                     // In split mode: advance the offset
                     services().renderingOrNull()->advanceSplitOffset();
                     LOG_DEBUG("Advanced split view offset");
