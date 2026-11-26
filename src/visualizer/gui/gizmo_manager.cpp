@@ -960,7 +960,10 @@ namespace lfs::vis::gui {
             viewer_->getEditorContext().clearActiveOperator();
         UnifiedToolRegistry::instance().setActiveTool("");
 
-        sm->removePLY(node_name);
+        // A point cloud's ROI and Crop sit side by side; recording the whole scene lets undo put the
+        // removed volume back in its place, so the crop entry before it in the same action still replays.
+        if (const auto removed = sm->removeNodeWithResult(volume_node_id); !removed)
+            LOG_WARN("Cannot remove crop volume '{}': {}", node_name, removed.error());
         if (parent_node_id != core::NULL_NODE && sm->getScene().getNodeById(parent_node_id)) {
             sm->selectNode(parent_node_id);
         }
@@ -1237,6 +1240,23 @@ namespace lfs::vis::gui {
             gui->enqueueToast({.title = LOC("tool_defs.roi"),
                                .message = LOC("toolbar.roi_ellipsoid_unsupported"),
                                .level = ErrorNoticeLevel::Warning});
+    }
+
+    // Undo or the scene tree can select the dataset point cloud's other volume; the crop tool follows its role.
+    void GizmoManager::followSelectedCropRole(const std::string& gizmo_type) {
+        auto* const sm = viewer_ ? viewer_->getSceneManager() : nullptr;
+        if (!sm)
+            return;
+        const auto& scene = sm->getScene();
+        const auto selected = sm->getSelectedNodeIds();
+        const auto* const volume = selected.size() == 1 ? scene.getNodeById(selected.front()) : nullptr;
+        const auto* const owner = volume && isCropVolumeType(volume->type) ? scene.getNodeById(volume->parent_id) : nullptr;
+        const auto role = volume ? volume->cropRole() : std::nullopt;
+        if (!owner || !role || !isPreTrainingPointCloud(scene, *owner) || *role == activeCropRole(owner))
+            return;
+        const char* const tool_id = cropToolIdForRole(*role);
+        viewer_->getEditorContext().setActiveOperator(tool_id, gizmo_type.empty() ? "translate" : gizmo_type);
+        UnifiedToolRegistry::instance().setActiveTool(tool_id);
     }
 
     bool GizmoManager::activateCropTool(const std::string& tool_id) {
@@ -1937,6 +1957,7 @@ namespace lfs::vis::gui {
                 clearSelectionVolumeState();
 
             if (is_crop_tool && has_selected_node) {
+                followSelectedCropRole(gizmo_type);
                 if (ensureCropToolState())
                     updateCropToolOverlayState();
             } else if (is_selection_volume_tool) {

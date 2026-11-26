@@ -5318,9 +5318,11 @@ namespace lfs::app {
                         auto* gui = viewer_impl->getGuiManager();
                         if (!gui)
                             return json{{"error", "GUI manager not initialized"}};
-                        // Selecting the Crop enters its tool; applying crops the points and removes only it.
+                        // The Crop tool edits this volume whichever tool was active; applying crops the points
+                        // and removes only the Crop.
                         manager->selectNode(*id);
-                        if (!gui->gizmo().ensureCropToolStateForRestore() || gui->gizmo().cropToolVolumeNodeId() != *id)
+                        if (!gui->gizmo().activateCropTool(vis::cropToolIdForRole(core::CropRole::Secondary)) ||
+                            gui->gizmo().cropToolVolumeNodeId() != *id)
                             return json{{"error", "The requested crop could not be activated"}};
                         gui->gizmo().applyActiveCropTool();
                         if (scene.getNodeByUuid(uuid))

@@ -301,6 +301,7 @@ namespace lfs::vis {
             bool commitCropPolygonOutline(std::vector<glm::vec2> vertices);
             [[nodiscard]] bool isCropToolActive() const;
             void showRoiEllipsoidUnsupported();
+            void followSelectedCropRole(const std::string& gizmo_type);
             [[nodiscard]] bool isSelectionVolumeMode() const;
             [[nodiscard]] bool isVolumeGizmoToolActive() const;
             [[nodiscard]] std::optional<core::NodeId> selectedCropTargetNodeId() const;
