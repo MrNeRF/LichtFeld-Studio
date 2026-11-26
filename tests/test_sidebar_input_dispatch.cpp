@@ -108,6 +108,7 @@ namespace lfs::vis {
                 manager().native_windows_.erase(context);
             }
             gui::PanelRegistry::instance().unregister_panel("test.input_float");
+            gui::PanelRegistry::instance().unregister_panel("test.input_float_front");
             revert_.clear();
             gui_->startup_overlay_.shutdown();
             controller_.reset();
@@ -233,10 +234,18 @@ namespace lfs::vis {
         }
         std::vector<std::string> sidebar_picks_;
         std::vector<Rml::Context*> desktop_contexts_;
-        void registerInputFloat(float x = 100.f, std::function<void()> suspend = {}) {
+        void registerInputFloat(float x = 100.f, std::function<void()> suspend = {},
+                                const char* id = "test.input_float", gui::RmlPanelHost* host = nullptr) {
             class Panel final : public gui::IPanel {
             public:
-                explicit Panel(std::function<void()> suspend) : suspend_(std::move(suspend)) {}
+                explicit Panel(std::function<void()> suspend, std::function<void(const gui::PanelDirectRenderRequest&)> draw)
+                    : suspend_(std::move(suspend)), forward_(std::move(draw)) {}
+                gui::PanelDirectRenderResult renderDirect(const gui::PanelDirectRenderRequest& request,
+                                                          const gui::PanelDrawContext&) override {
+                    if (forward_ && request.mode == gui::PanelDirectRenderMode::Draw)
+                        forward_(request);
+                    return {.handled = true, .height = 100.f};
+                }
                 void suspendInput() override {
                     if (suspend_)
                         suspend_();
@@ -246,15 +255,24 @@ namespace lfs::vis {
 
             private:
                 std::function<void()> suspend_;
+                std::function<void(const gui::PanelDirectRenderRequest&)> forward_;
             };
             gui::PanelInfo info;
-            info.id = "test.input_float";
+            info.id = id;
             info.label = "Input float";
             info.space = gui::PanelSpace::Floating;
-            info.panel = std::make_shared<Panel>(std::move(suspend));
+            info.initial_width = 180.f;
+            info.panel = std::make_shared<Panel>(std::move(suspend), [this, host](const auto& request) {
+                if (host && request.input)
+                    forwardHost(*host, request.x, request.y, *request.input);
+            });
             ASSERT_TRUE(gui::PanelRegistry::instance().register_panel(std::move(info)));
-            gui::PanelRegistry::instance().apply_project_state({{
-                .id = "test.input_float",
+            auto state = gui::PanelRegistry::instance().capture_project_state();
+            std::erase_if(state, [id](const auto& panel) {
+                return panel.id == id || (panel.id != "test.input_float" && panel.id != "test.input_float_front");
+            });
+            state.push_back({
+                .id = id,
                 .space = gui::PanelSpace::Floating,
                 .enabled = true,
                 .float_x = x,
@@ -266,7 +284,8 @@ namespace lfs::vis {
                 .float_last_w = 180.f,
                 .float_last_h = 100.f,
                 .float_auto_center = false,
-            }});
+            });
+            gui::PanelRegistry::instance().apply_project_state(state);
             ASSERT_TRUE(gui::PanelRegistry::instance().isPositionOverFloatingPanel(x + 40, 100));
         }
         RenderInterface_VK input_renderer_;
@@ -772,6 +791,66 @@ namespace lfs::vis {
         EXPECT_EQ(sidebar_picks_[1], "test.sidebar.2");
         EXPECT_TRUE(sidebarKey(SDL_SCANCODE_TAB, SDL_KMOD_CTRL | SDL_KMOD_SHIFT).consumed);
         EXPECT_EQ(sidebar_picks_.back(), "test.sidebar.1");
+    }
+
+    TEST_F(SidebarInputDispatchTest, SidebarOverlappingFloatingPanelsOnlyGiveTheFrontPanelThePress) {
+        gui::RmlPanelHost back(&manager(), "test.input_float", "");
+        gui::RmlPanelHost front(&manager(), "test.input_float_front", "");
+        constexpr auto markup =
+            "<rml><head><style>body,div { width:180px; height:100px; margin:0; }</style></head>"
+            "<body><div/></body></rml>";
+        attachInputHost(back, 180, 100, markup);
+        attachInputHost(front, 180, 100, markup);
+        back.setFloating(true);
+        front.setFloating(true);
+        registerInputFloat(100.f, {}, "test.input_float", &back);
+        registerInputFloat(130.f, {}, "test.input_float_front", &front);
+
+        auto& registry = gui::PanelRegistry::instance();
+        gui::PanelInputState input;
+        input.screen_w = 400;
+        input.screen_h = 300;
+        gui::PanelDrawContext ctx;
+        ctx.screen_bounds = gui::PanelDrawBounds{0, 0, 400, 300};
+        const auto draw = [&](const float x) {
+            input.mouse_x = x;
+            input.mouse_y = 100;
+            manager().beginFrameCursorTracking();
+            registry.render_panels({.target = gui::PanelRenderTarget::for_space(gui::PanelSpace::Floating),
+                                    .input = &input},
+                                   ctx);
+        };
+
+        // Render back-to-front, including the per-frame reset of live bounds.
+        draw(115);
+        EXPECT_NE(back.getContext()->GetHoverElement(), nullptr);
+        draw(160);
+        EXPECT_EQ(back.getContext()->GetHoverElement(), nullptr);
+        EXPECT_NE(front.getContext()->GetHoverElement(), nullptr);
+
+        SDL_Event event{};
+        event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        event.button.button = SDL_BUTTON_LEFT;
+        event.button.x = 160;
+        event.button.y = 100;
+        dispatch(event);
+        EXPECT_TRUE(hostOwnsPointer(front));
+        EXPECT_FALSE(hostOwnsPointer(back));
+
+        event.type = SDL_EVENT_MOUSE_BUTTON_UP;
+        dispatch(event);
+        EXPECT_FALSE(hostOwnsPointer(front));
+        ASSERT_TRUE(registry.bring_panel_to_front("test.input_float"));
+        draw(160);
+        EXPECT_EQ(front.getContext()->GetHoverElement(), nullptr);
+        EXPECT_NE(back.getContext()->GetHoverElement(), nullptr);
+        event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        dispatch(event);
+        EXPECT_FALSE(hostOwnsPointer(front));
+        EXPECT_TRUE(hostOwnsPointer(back));
+        event.type = SDL_EVENT_MOUSE_BUTTON_UP;
+        dispatch(event);
+        EXPECT_FALSE(hostOwnsPointer(back));
     }
 
     TEST_F(SidebarInputDispatchTest, SidebarFloatingOcclusionBlocksNewGesturesButKeepsOwnedDrag) {

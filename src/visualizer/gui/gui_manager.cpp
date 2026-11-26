@@ -4845,6 +4845,9 @@ namespace lfs::vis::gui {
         ops.set_foreground = [](void* host, bool fg) {
             static_cast<RmlPanelHost*>(host)->setForeground(fg);
         };
+        ops.set_panel_id = [](void* host, const char* panel_id) {
+            static_cast<RmlPanelHost*>(host)->setPanelId(panel_id);
+        };
         ops.set_floating = [](void* host, bool floating) {
             static_cast<RmlPanelHost*>(host)->setFloating(floating);
         };
