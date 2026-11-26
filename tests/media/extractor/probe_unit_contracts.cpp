@@ -455,12 +455,12 @@ namespace {
         reject({}, lfs::ErrorCode::DataLoss, "Empty DJI packet");
         for (std::size_t size = 1; size < timestamp.size(); ++size)
             reject(std::vector<std::uint8_t>(timestamp.begin(), timestamp.begin() + size), lfs::ErrorCode::DataLoss, "Truncated");
-        reject({0}, lfs::ErrorCode::DataLoss, "Invalid DJI protobuf field number");
+        reject({0}, lfs::ErrorCode::DataLoss, "DJI: Invalid protobuf field number");
         reject({0x1a, 13, 0x0a, 11, 0x10, 255, 255, 255, 255, 255, 255, 255, 255, 255, 2},
-               lfs::ErrorCode::DataLoss, "Overflowing DJI protobuf varint");
-        reject({10, 255, 255, 255, 255, 127}, lfs::ErrorCode::DataLoss, "Truncated DJI protobuf field");
-        reject({0x1a, 2, 0x12, 4}, lfs::ErrorCode::DataLoss, "Truncated DJI protobuf field");
-        reject({0x1a, 9, 0x12, 7, 0x1a, 5, 0x0d, 0, 0, 0x80, 0x7f}, lfs::ErrorCode::DataLoss, "Nonfinite DJI scalar");
+               lfs::ErrorCode::DataLoss, "DJI: Overflowing protobuf varint");
+        reject({10, 255, 255, 255, 255, 127}, lfs::ErrorCode::DataLoss, "DJI: Truncated protobuf field");
+        reject({0x1a, 2, 0x12, 4}, lfs::ErrorCode::DataLoss, "DJI: Truncated protobuf field");
+        reject({0x1a, 9, 0x12, 7, 0x1a, 5, 0x0d, 0, 0, 0x80, 0x7f}, lfs::ErrorCode::DataLoss, "DJI: Nonfinite protobuf scalar");
         reject({0x1a, 8, 0x12, 6, 0x22, 4, 0x0a, 2, 1, 0}, lfs::ErrorCode::DataLoss, "nonzero denominator");
         reject({0x1a, 9, 0x12, 7, 0x22, 5, 0x0a, 3, 1, 2, 3}, lfs::ErrorCode::DataLoss, "Too many DJI exposure operands");
         reject({0x1a, 6, 0x12, 4, 0x1a, 2, 8, 1}, lfs::ErrorCode::DataLoss, "Wrong wire type");

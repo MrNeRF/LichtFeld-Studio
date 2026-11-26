@@ -15,8 +15,11 @@ extern "C" {
 namespace lfs::media {
     namespace {
         using detail::protobuf::Bytes;
-        using detail::protobuf::Failure;
-        constexpr detail::protobuf::Reader wire{"DJI"};
+        constexpr detail::protobuf::Reader wire;
+        struct Failure {
+            ErrorCode code;
+            std::string detail;
+        };
 
         [[noreturn]] void malformed(std::string_view detail) {
             throw Failure{ErrorCode::DataLoss, std::string(detail)};
@@ -100,6 +103,8 @@ namespace lfs::media {
                 result.push_back(std::move(sample));
             }
             return result;
+        } catch (const detail::protobuf::WireFailure& error) {
+            return make_error({.code = error.code, .domain = ErrorDomain::IO, .detail = "DJI: " + std::string(error.detail), .detection = LFS_SOURCE_SITE_CURRENT()});
         } catch (Failure& error) {
             return make_error({.code = error.code, .domain = ErrorDomain::IO, .detail = std::move(error.detail), .detection = LFS_SOURCE_SITE_CURRENT()});
         } catch (const std::bad_alloc&) {

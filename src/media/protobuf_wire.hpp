@@ -8,46 +8,42 @@
 #include <cstdint>
 #include <optional>
 #include <span>
-#include <string>
 #include <string_view>
 
 namespace lfs::media::detail::protobuf {
     using Bytes = std::span<const std::uint8_t>;
-    struct Failure {
+    struct WireFailure {
         ErrorCode code;
-        std::string detail;
+        std::string_view detail;
     };
     class Reader {
     public:
-        constexpr explicit Reader(std::string_view format) : format_(format) {}
-
-        [[noreturn]] static void fail(ErrorCode code, std::string_view before, std::string_view format, std::string_view after) {
-            throw Failure{code, std::string(before) + std::string(format) + std::string(after)};
+        [[noreturn]] static void fail(ErrorCode code, std::string_view detail) {
+            throw WireFailure{code, detail};
         }
         std::uint64_t varint(Bytes& bytes) const {
             std::uint64_t value = 0;
             for (unsigned i = 0; i < 10; ++i) {
                 if (bytes.empty())
-                    fail(ErrorCode::DataLoss, "Truncated ", format_, " protobuf varint");
+                    fail(ErrorCode::DataLoss, "Truncated protobuf varint");
                 const auto byte = bytes.front();
                 bytes = bytes.subspan(1);
                 if (i == 9 && byte > 1)
-                    fail(ErrorCode::DataLoss, "Overflowing ", format_, " protobuf varint");
+                    fail(ErrorCode::DataLoss, "Overflowing protobuf varint");
                 value |= std::uint64_t(byte & 127) << (7 * i);
                 if (!(byte & 128))
                     return value;
             }
-            fail(ErrorCode::DataLoss, "Unterminated ", format_, " protobuf varint");
+            fail(ErrorCode::DataLoss, "Unterminated protobuf varint");
         }
         struct Field {
             std::uint32_t number;
             unsigned wire;
             std::uint64_t integer = 0;
             Bytes bytes{};
-            std::string_view format;
             void expect(unsigned type) const {
                 if (wire != type)
-                    fail(ErrorCode::DataLoss, "Wrong wire type for supported ", format, " field");
+                    fail(ErrorCode::DataLoss, "Wrong wire type for supported protobuf field");
             }
             std::uint64_t uint() const {
                 expect(0);
@@ -59,7 +55,7 @@ namespace lfs::media::detail::protobuf {
                                   std::uint32_t(bytes[2]) << 16 | std::uint32_t(bytes[3]) << 24;
                 const auto value = std::bit_cast<float>(bits);
                 if (!std::isfinite(value))
-                    fail(ErrorCode::DataLoss, "Nonfinite ", format, " scalar");
+                    fail(ErrorCode::DataLoss, "Nonfinite protobuf scalar");
                 return value;
             }
             bool text(std::string_view expected) const {
@@ -71,8 +67,8 @@ namespace lfs::media::detail::protobuf {
         Field next(Bytes& bytes) const {
             const auto tag = varint(bytes);
             if (!(tag >> 3) || (tag >> 3) > 0x1fffffff)
-                fail(ErrorCode::DataLoss, "Invalid ", format_, " protobuf field number");
-            Field field{.number = static_cast<std::uint32_t>(tag >> 3), .wire = static_cast<unsigned>(tag & 7), .format = format_};
+                fail(ErrorCode::DataLoss, "Invalid protobuf field number");
+            Field field{.number = static_cast<std::uint32_t>(tag >> 3), .wire = static_cast<unsigned>(tag & 7)};
             if (field.wire == 0) {
                 field.integer = varint(bytes);
                 return field;
@@ -83,11 +79,11 @@ namespace lfs::media::detail::protobuf {
             case 2: size = varint(bytes); break;
             case 5: size = 4; break;
             case 3:
-            case 4: fail(ErrorCode::Unsupported, "", format_, " protobuf groups are unsupported");
-            default: fail(ErrorCode::DataLoss, "Invalid ", format_, " protobuf wire type");
+            case 4: fail(ErrorCode::Unsupported, "protobuf groups are unsupported");
+            default: fail(ErrorCode::DataLoss, "Invalid protobuf wire type");
             }
             if (size > bytes.size())
-                fail(ErrorCode::DataLoss, "Truncated ", format_, " protobuf field");
+                fail(ErrorCode::DataLoss, "Truncated protobuf field");
             field.bytes = bytes.first(static_cast<std::size_t>(size));
             bytes = bytes.subspan(static_cast<std::size_t>(size));
             return field;
@@ -101,8 +97,5 @@ namespace lfs::media::detail::protobuf {
             }
             return result;
         }
-
-    private:
-        std::string_view format_;
     };
 } // namespace lfs::media::detail::protobuf

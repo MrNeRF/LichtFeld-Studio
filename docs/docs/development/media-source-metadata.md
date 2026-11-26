@@ -1271,5 +1271,7 @@ This path reads the declared compact 20-byte sample layout in sequential
 v3 trailers, as observed on ONE R and ONE RS. Trailer metadata selects the
 layout before samples are decoded. An indexed trailer reports an unsupported
 format. The probe applies its timeout and caps the walk at 4,096 records,
-layout metadata at 1 MiB and retained IMU samples at 32 MiB. JSON output is
-serialized one sample at a time into the response string.
+layout metadata at 1 MiB and retained IMU observations at 6 million samples.
+This covers a 90-minute segment at 1 kHz with headroom. JSON is serialized
+one sample at a time into the response string. Its memory use grows with the
+number of samples and is separate from the retained sample count.
