@@ -707,8 +707,8 @@ namespace lfs::vis {
             prepareTrainingFromScene();
         });
 
-        // Handle PLY cycling with proper event emission for UI updates
-        event_handlers_.subscribe<cmd::CyclePLY>([this](const auto&) {
+        // Handle node cycling with proper event emission for UI updates
+        event_handlers_.subscribe<cmd::CycleNode>([this](const auto&) {
             // Check if rendering manager has split view enabled (in node comparison mode)
             if (services().renderingOrNull()) {
                 auto settings = services().renderingOrNull()->getSettings();

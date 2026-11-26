@@ -2390,8 +2390,8 @@ namespace lfs::vis {
                 }
                 return;
 
-            case input::Action::CYCLE_PLY:
-                cmd::CyclePLY{}.emit();
+            case input::Action::CYCLE_NODE:
+                cmd::CycleNode{}.emit();
                 return;
 
             case input::Action::CYCLE_SELECTION_VIS:

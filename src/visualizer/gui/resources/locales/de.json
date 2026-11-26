@@ -1909,7 +1909,7 @@
     "action.toggle_scene_selection_visibility": "Sichtbarkeit ausgewählter Elemente umschalten",
     "action.toggle_scene_selection_training": "Ausgewählte Kameras für Training umschalten",
     "action.toggle_depth_mode": "Tiefenbox umschalten",
-    "action.cycle_ply": "PLY durchschalten",
+    "action.cycle_node": "Knoten durchschalten",
     "action.delete_selected": "Ausgewählte Gaussians löschen",
     "action.delete_node": "Knoten löschen",
     "action.undo": "Rückgängig",

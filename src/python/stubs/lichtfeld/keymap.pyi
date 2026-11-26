@@ -75,7 +75,7 @@ class Action(enum.Enum):
 
     TOGGLE_DEPTH_MODE = 23
 
-    CYCLE_PLY = 24
+    CYCLE_NODE = 24
 
     DELETE_SELECTED = 25
 

@@ -154,7 +154,7 @@ namespace lfs::core {
             EVENT(FitCropBoxToScene, bool use_percentile;);
             EVENT(FitEllipsoidToScene, bool use_percentile;);
             EVENT(ToggleCropInverse, );
-            EVENT(CyclePLY, );
+            EVENT(CycleNode, );
             EVENT(CycleSelectionVisualization, );
             EVENT(ToggleSplitView, );
             EVENT(ToggleIndependentSplitView, const Viewport* viewport;);

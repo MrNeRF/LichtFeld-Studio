@@ -1909,7 +1909,7 @@
     "action.toggle_scene_selection_visibility": "Alternar visibilidad de elementos seleccionados",
     "action.toggle_scene_selection_training": "Alternar cámaras seleccionadas para entrenamiento",
     "action.toggle_depth_mode": "Alternar caja de profundidad",
-    "action.cycle_ply": "Recorrer PLY",
+    "action.cycle_node": "Recorrer nodo",
     "action.delete_selected": "Eliminar gaussianas seleccionadas",
     "action.delete_node": "Eliminar nodo",
     "action.undo": "Deshacer",

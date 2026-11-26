@@ -1909,7 +1909,7 @@
     "action.toggle_scene_selection_visibility": "Przełącz widoczność wybranych elementów",
     "action.toggle_scene_selection_training": "Przełącz wybrane kamery do treningu",
     "action.toggle_depth_mode": "Przełącz pudełko głębi",
-    "action.cycle_ply": "Przełączaj PLY",
+    "action.cycle_node": "Przełączaj węzły",
     "action.delete_selected": "Usuń wybrane gaussiany",
     "action.delete_node": "Usuń węzeł",
     "action.undo": "Cofnij",

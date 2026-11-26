@@ -1909,7 +1909,7 @@
     "action.toggle_scene_selection_visibility": "選択項目の表示を切り替え",
     "action.toggle_scene_selection_training": "選択カメラのトレーニング使用を切り替え",
     "action.toggle_depth_mode": "深度ボックス切替",
-    "action.cycle_ply": "PLY切替",
+    "action.cycle_node": "ノード切替",
     "action.delete_selected": "選択したガウシアンを削除",
     "action.delete_node": "ノードを削除",
     "action.undo": "元に戻す",

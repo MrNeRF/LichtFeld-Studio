@@ -1922,7 +1922,7 @@
     "action.toggle_scene_selection_visibility": "Toggle selected items visibility",
     "action.toggle_scene_selection_training": "Toggle selected cameras for training",
     "action.toggle_depth_mode": "Toggle Depth Box",
-    "action.cycle_ply": "Cycle PLY",
+    "action.cycle_node": "Cycle Node",
     "action.delete_selected": "Delete Selected Gaussians",
     "action.delete_node": "Delete Node",
     "action.undo": "Undo",

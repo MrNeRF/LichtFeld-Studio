@@ -1909,7 +1909,7 @@
     "action.toggle_scene_selection_visibility": "切换所选项目的可见性",
     "action.toggle_scene_selection_training": "切换所选相机的训练状态",
     "action.toggle_depth_mode": "切换深度框",
-    "action.cycle_ply": "循环 PLY",
+    "action.cycle_node": "循环节点",
     "action.delete_selected": "删除选中的高斯",
     "action.delete_node": "删除节点",
     "action.undo": "撤销",

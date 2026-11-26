@@ -1909,7 +1909,7 @@
     "action.toggle_scene_selection_visibility": "Zichtbaarheid van geselecteerde items omschakelen",
     "action.toggle_scene_selection_training": "Geselecteerde camera’s voor training omschakelen",
     "action.toggle_depth_mode": "Diepteboog omschakelen",
-    "action.cycle_ply": "PLY doorlopen",
+    "action.cycle_node": "Knooppunt doorlopen",
     "action.delete_selected": "Geselecteerde gaussians verwijderen",
     "action.delete_node": "Knoop verwijderen",
     "action.undo": "Ongedaan maken",

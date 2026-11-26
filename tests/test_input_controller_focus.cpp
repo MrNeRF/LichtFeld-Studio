@@ -1177,7 +1177,7 @@ namespace lfs::vis {
         EXPECT_EQ(toolbar_tool_count, 0);
         EXPECT_EQ(input::shortcutScopeForAction(input::Action::TOOL_TRANSLATE),
                   input::ShortcutScope::GlobalWhenNotTextEditing);
-        EXPECT_EQ(input::shortcutScopeForAction(input::Action::CYCLE_PLY),
+        EXPECT_EQ(input::shortcutScopeForAction(input::Action::CYCLE_NODE),
                   input::ShortcutScope::GlobalWhenNotTextEditing);
     }
 
@@ -2754,7 +2754,7 @@ namespace lfs::vis {
         EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL,
                                          input::KEY_C,
                                          input::MODIFIER_ALT),
-                  input::Action::CYCLE_PLY);
+                  input::Action::CYCLE_NODE);
         EXPECT_FALSE(loaded.getTriggerForAction(input::Action::TOGGLE_CAMERA_FRUSTUMS,
                                                 input::ToolMode::GLOBAL)
                          .has_value());
@@ -2812,7 +2812,7 @@ namespace lfs::vis {
         EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL,
                                          input::KEY_G,
                                          input::MODIFIER_ALT),
-                  input::Action::CYCLE_PLY);
+                  input::Action::CYCLE_NODE);
         EXPECT_FALSE(loaded.getTriggerForAction(input::Action::TOGGLE_GRID,
                                                 input::ToolMode::GLOBAL)
                          .has_value());

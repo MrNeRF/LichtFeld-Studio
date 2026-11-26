@@ -92,7 +92,7 @@ def _install_recording_lf(monkeypatch):
         "TOGGLE_INDEPENDENT_SPLIT_VIEW",
         "TOGGLE_GT_COMPARISON",
         "TOGGLE_DEPTH_MODE",
-        "CYCLE_PLY",
+        "CYCLE_NODE",
         "DELETE_SELECTED",
         "DELETE_NODE",
         "UNDO",

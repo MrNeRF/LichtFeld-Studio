@@ -1909,7 +1909,7 @@
     "action.toggle_scene_selection_visibility": "선택 항목 표시 전환",
     "action.toggle_scene_selection_training": "선택 카메라 훈련 사용 전환",
     "action.toggle_depth_mode": "깊이 상자 전환",
-    "action.cycle_ply": "PLY 순환",
+    "action.cycle_node": "노드 순환",
     "action.delete_selected": "선택한 가우시안 삭제",
     "action.delete_node": "노드 삭제",
     "action.undo": "실행 취소",

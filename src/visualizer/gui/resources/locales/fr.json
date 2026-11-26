@@ -1909,7 +1909,7 @@
     "action.toggle_scene_selection_visibility": "Basculer la visibilité des éléments sélectionnés",
     "action.toggle_scene_selection_training": "Basculer les caméras sélectionnées pour l’entraînement",
     "action.toggle_depth_mode": "Basculer la boîte de profondeur",
-    "action.cycle_ply": "Parcourir les PLY",
+    "action.cycle_node": "Parcourir les nœuds",
     "action.delete_selected": "Supprimer les gaussiennes sélectionnées",
     "action.delete_node": "Supprimer le nœud",
     "action.undo": "Annuler",
