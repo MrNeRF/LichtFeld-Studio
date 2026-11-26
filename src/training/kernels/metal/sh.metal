@@ -256,8 +256,8 @@ kernel void sh_gather_swizzled(constant ShGatherParams& p [[buffer(0)]], uint i 
                                              : uint(static_cast<device const int*>(p.indices)[i]);
     const uint destination = p.destination_offset + i;
     for (uint k = 0; k < p.slots; ++k) {
-        const uint from = sh_slot_index(source, k, p.slots);
-        const uint to = sh_slot_index(destination, k, p.slots);
+        const ulong from = sh_slot_index(source, k, p.slots);
+        const ulong to = sh_slot_index(destination, k, p.slots);
         if (p.slot_bytes == 16u)
             static_cast<device float4*>(p.destination)[to] = static_cast<device const float4*>(p.source)[from];
         else

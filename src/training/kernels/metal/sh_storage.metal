@@ -16,13 +16,20 @@ static uint sh_float4_slots(const uint coeffs_rest) {
     return coeffs_rest == 0u ? 0u : min(kShMaxSlots, (min(coeffs_rest, kShMaxRest) * 3u + 3u) / 4u);
 }
 
+// Index of a primitive's float4 slot 0 in swizzled storage with `slots` per primitive; slot k is at k * kShReorder
+// from it. 64-bit: with 12 slots (degree 3) a 32-bit slot index wraps past 357.9M primitives. Only the start needs
+// 64 bits; offsets within a primitive stay below 12 * 32, so hot loops add them to it in 32 bits.
+static ulong sh_slot_start(const uint primitive, const uint slots) {
+    return ulong(primitive / kShReorder) * ulong(slots * kShReorder) + primitive % kShReorder;
+}
+
 // Index of a primitive's float4 slot in swizzled storage with `slots` per primitive.
-static uint sh_slot_index(const uint primitive, const uint slot, const uint slots) {
-    return (primitive / kShReorder) * (slots * kShReorder) + slot * kShReorder + primitive % kShReorder;
+static ulong sh_slot_index(const uint primitive, const uint slot, const uint slots) {
+    return sh_slot_start(primitive, slots) + slot * kShReorder;
 }
 
 // Index of a primitive's float4 slot in swizzled float storage.
-static uint sh_swizzled_index(const uint primitive, const uint slot, const uint layout_rest) {
+static ulong sh_swizzled_index(const uint primitive, const uint slot, const uint layout_rest) {
     return sh_slot_index(primitive, slot, sh_float4_slots(layout_rest));
 }
 

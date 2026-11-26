@@ -521,7 +521,7 @@ static float2 fast_slot_codes(const uint2 packed, const uint c) {
 }
 
 static float4 fast_shN_load(constant FastAdamGroup& g, const bool q16, const bool f16, const uint p, const uint k,
-                            const uint slot, const uint cells, const float2 vmm) {
+                            const ulong slot, const uint cells, const float2 vmm) {
     if (q16) {
         device const ushort* codes = sh_q16_cells(reinterpret_cast<device const ushort*>(g.param), p, cells);
         float4 v = float4(0.0f);
@@ -568,6 +568,7 @@ static void fast_adam_shN(constant FastAdamGroup& g, const uint p, const uint pa
     const bool f16 = kFastShStorage == kFastShFloat16;
     const uint cells = q16 ? uint(g.value_cells) : 0u;
     const uint layout_slots = sh_float4_slots(layout_rest);
+    const ulong slot0 = sh_slot_start(p, layout_slots);
     if (g.gradient != nullptr) {
         if (p >= uint(g.primitives))
             return;
@@ -579,7 +580,7 @@ static void fast_adam_shN(constant FastAdamGroup& g, const uint p, const uint pa
             const uint k = part * kFastShSlotsPerThread + j;
             if (k >= layout_slots)
                 continue;
-            const uint slot = sh_swizzled_index(p, k, layout_rest);
+            const ulong slot = slot0 + k * kShReorder;
             float4 grad = fast_shN_slot_grad(k, compute, basis, grad_color);
             if (sh_weight > 0.0f) {
                 const float4 values = fast_shN_load(g, q16, f16, p, k, slot, cells, vmm);
@@ -616,7 +617,7 @@ static void fast_adam_shN(constant FastAdamGroup& g, const uint p, const uint pa
         const uint k = part * kFastShSlotsPerThread + j;
         if (!touch || k >= layout_slots)
             continue;
-        const uint slot = sh_swizzled_index(p, k, layout_rest);
+        const ulong slot = slot0 + k * kShReorder;
         const bool active_slot = k < active_slots;
         float4 grad = fast_shN_slot_grad(k, compute && active_slot, basis, grad_color);
         float4 values = fast_shN_load(g, q16, f16, p, k, slot, cells, old_vmm);
@@ -668,7 +669,7 @@ static void fast_adam_shN(constant FastAdamGroup& g, const uint p, const uint pa
         const uint k = part * kFastShSlotsPerThread + j;
         if (k >= layout_slots)
             continue;
-        const uint slot = sh_swizzled_index(p, k, layout_rest);
+        const ulong slot = slot0 + k * kShReorder;
         uint2 encoded = uint2(0u);
         for (uint c = 0; c < 4u; ++c) {
             const float2 q = JointCodec<8>::encode_codes(us_u[j][c], us_s[j][c], mm.x, mm.z, inv.x, inv.y);

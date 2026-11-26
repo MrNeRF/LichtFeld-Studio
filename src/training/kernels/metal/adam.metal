@@ -157,7 +157,7 @@ struct AdamShParams {
 constant constexpr uint kShValueHalf = 1u;
 constant constexpr uint kShValueQ16 = 2u;
 
-static float4 adam_sh_load_slot(constant AdamShParams& p, const uint prim, const uint k, const uint slot,
+static float4 adam_sh_load_slot(constant AdamShParams& p, const uint prim, const uint k, const ulong slot,
                                 const float2 vmm) {
     if (p.value_mode == kShValueQ16) {
         device const ushort* codes = sh_q16_cells(static_cast<device const ushort*>(p.parameter), prim, p.value_cells);
@@ -203,6 +203,7 @@ kernel void adam_step_sh(constant AdamShParams& p [[buffer(0)]], uint group [[th
     const bool touch = prim < uint(p.primitives);
     const bool q16 = p.value_mode == kShValueQ16;
     const uint slots = min(p.layout_slots, kShMaxSlots);
+    const ulong slot0 = sh_slot_start(prim, p.layout_slots);
 
     float row_step = p.step_size;
     const bool apply_step = adam_row_rate(p.rows, int(prim), row_step);
@@ -214,7 +215,7 @@ kernel void adam_step_sh(constant AdamShParams& p [[buffer(0)]], uint group [[th
     float v_hi = -kAdamInf;
     if (touch) {
         for (uint k = 0; k < slots; ++k) {
-            const uint slot = sh_slot_index(prim, k, p.layout_slots);
+            const ulong slot = slot0 + k * kShReorder;
             const bool active = k < p.active_slots;
             const float4 grad = active ? p.gradient[slot] : float4(0.0f);
             float4 value = adam_sh_load_slot(p, prim, k, slot, old_vmm);
@@ -252,7 +253,7 @@ kernel void adam_step_sh(constant AdamShParams& p [[buffer(0)]], uint group [[th
     const float inv_s = 1.0f / fmax(new_mm.w - new_mm.z, kJointEps);
     device ushort* codes = sh_q16_cells(static_cast<device ushort*>(p.parameter), prim, p.value_cells);
     for (uint k = 0; k < slots; ++k) {
-        const uint slot = sh_slot_index(prim, k, p.layout_slots);
+        const ulong slot = slot0 + k * kShReorder;
         const bool active = k < p.active_slots;
         const float4 grad = active ? p.gradient[slot] : float4(0.0f);
         const float4 value = q16 ? adam_sh_load_slot(p, prim, k, slot, old_vmm) : float4(0.0f);
