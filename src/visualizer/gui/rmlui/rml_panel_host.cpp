@@ -1385,11 +1385,15 @@ namespace lfs::vis::gui {
         if (!input_ || !manager_ || !manager_->getVulkanRenderInterface())
             return false;
 
+        const auto pointer_blocked = [this](float x, float y) {
+            return !nativeWindow() && PanelRegistry::instance().isPositionOverFloatingPanel(
+                                          x, y, floating_ ? panelId() : std::string_view{});
+        };
         if (manager_->routeInput(rml_context_, *input_, [this, panel_x, panel_y](const PanelInputState& event) {
                 const auto* saved = input_;
                 input_ = &event;
                 render_needed_ |= forwardInput(panel_x, panel_y);
-                input_ = saved; }, false, [this](float x, float y) { return !floating_ && PanelRegistry::instance().isPositionOverFloatingPanel(x, y); }))
+                input_ = saved; }, false, pointer_blocked))
             return false;
         bindCloseButton();
         bool had_input = false;
