@@ -172,12 +172,17 @@ float3 portal_covariance(float3 covariance, float2 extent) {
 
 // Same cell swizzle and per-256 bounds as core/sh_value_codec.cuh. Q16 holds
 // integer codes, never IEEE half.
+// Each value is loaded at the store's address plus its byte offset in 64-bit integer math, not as an index from the
+// store's pointer: NVIDIA's Vulkan computes an access chain's byte offset in 32 bits without
+// VK_EXT_shader_64bit_indexing, so a store past 4 GiB would be read at wrong addresses there. The address and the bytes
+// loaded are the ones the index gave, so every backend computes the same values.
 float sh_component(uint primitive, uint component, uint rest, uint page_splats) {
     const uint block = primitive / 32u, lane = primitive % 32u;
+    const uint64_t store = uint64_t(p.rest);
     if (p.sh_storage == 3u) {
         const uint64_t index = uint64_t(block) * (rest * 3u * 32u) + component * 32u + lane;
         const float2 mm = p.bounds[primitive / 256u];
-        const uint16_t q = ((Ptr<uint16_t, Access.Read>)p.rest)[index];
+        const uint16_t q = ((Ptr<uint16_t, Access.Read>)(store + index * 2u))[0];
         return fma(mm.y - mm.x, float(q) * (1.0f / 65535.0f), mm.x);
     }
     const uint slots = (rest * 3u + 3u) / 4u;
@@ -187,11 +192,11 @@ float sh_component(uint primitive, uint component, uint rest, uint page_splats) 
         // RAD: signed bytes in the float4 cell swizzle, one scale per SH band.
         const float4 maxima = ((Ptr<float4, Access.Read>)p.bounds)[(primitive / page_splats) * 4u];
         const uint band = component < 9u ? 0u : component < 24u ? 1u : 2u;
-        return (float(((Ptr<int8_t, Access.Read>)p.rest)[index]) / 127.f) * maxima[band];
+        return (float(((Ptr<int8_t, Access.Read>)(store + index))[0]) / 127.f) * maxima[band];
     }
     if (p.sh_storage == 2u)
-        return float(((Ptr<half, Access.Read>)p.rest)[index]);
-    return ((Ptr<float, Access.Read>)p.rest)[index];
+        return float(((Ptr<half, Access.Read>)(store + index * 2u))[0]);
+    return ((Ptr<float, Access.Read>)(store + index * 4u))[0];
 }
 
 float3 evaluate_sh(float3 dc, float3 direction, uint primitive, uint layout_rest, uint active_degree, uint page_splats) {
