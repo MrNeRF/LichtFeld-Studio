@@ -218,14 +218,17 @@ void gsplat_accumulate(GsplatAccumulateParams p, uint g) {
     Ptr<float, Access.ReadWrite> v = gsplat_grad_row(p.grads, g);
     const float3 scale = exp(gsplat_load3(p.scales, g));
     const float3 scaleChain = p.mip != 0 ? scale * scale / gsplat_filtered_scale(scale, p.mip, g) : scale;
+    const Ptr<float, Access.ReadWrite> means_grad = gsplat_row(p.means_grad, g, 3u);
+    const Ptr<float, Access.ReadWrite> scaling_grad = gsplat_row(p.scaling_grad, g, 3u);
+    const Ptr<float, Access.ReadWrite> rotation_grad = gsplat_row(p.rotation_grad, g, 4u);
     for (uint k = 0; k < 3u; ++k) {
-        p.means_grad[g * 3u + k] += v[k];
-        p.scaling_grad[g * 3u + k] += v[3u + k] * scaleChain[k];
+        means_grad[k] += v[k];
+        scaling_grad[k] += v[3u + k] * scaleChain[k];
     }
     uint axis=gsplat_normal_axis(scale);
-    p.scaling_grad[g*3+axis] += p.flatten_weight*scale[axis]/float(p.count);
+    scaling_grad[axis] += p.flatten_weight*scale[axis]/float(p.count);
     for (uint k = 0; k < 4u; ++k)
-        p.rotation_grad[g * 4u + k] += v[6u + k];
+        rotation_grad[k] += v[6u + k];
     p.opacity_grad[g] += v[10] * gsplat_filter_compensation(p.mip, g) * gsplat_sigmoid_derivative_from_logit(p.opacities[g]);
 
     float basis[16];
@@ -233,9 +236,10 @@ void gsplat_accumulate(GsplatAccumulateParams p, uint g) {
     const uint bases = (p.degree + 1u) * (p.degree + 1u);
     // The SH-rest gradient row's 64-bit address (see shRowAddress), with its values as small indices.
     Ptr<float, Access.ReadWrite> sh_rest_row = (Ptr<float, Access.ReadWrite>)shRowAddress(uint64_t(p.sh_rest_grad), 1, p.layout_rest, g);
+    const Ptr<float, Access.ReadWrite> sh0_grad = gsplat_row(p.sh0_grad, g, 3u);
     for (uint c = 0; c < 3u; ++c) {
         const float v_color = v[11u + c];
-        p.sh0_grad[g * 3u + c] += basis[0] * v_color;
+        sh0_grad[c] += basis[0] * v_color;
         for (uint k = 1; k < bases && p.sh_rest_grad != 0; ++k)
             sh_rest_row[shRowIndex(1, (k - 1u) * 3u + c)] += basis[k] * v_color;
     }

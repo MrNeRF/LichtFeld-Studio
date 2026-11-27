@@ -453,12 +453,22 @@ void gsplat_camera_setup(GsplatSetupParams p) {
 // ---------------------------------------------------------------------------
 // Gaussian math (Utils.cuh)
 
+// Row i of `width` floats at its 64-bit byte address, its values as small indices from there: NVIDIA's Vulkan computes
+// an access chain's byte offset in 32 bits without VK_EXT_shader_64bit_indexing, and a per-Gaussian buffer of 3 floats
+// (means, scales, sh0, colours and their gradients) passes 4 GiB at 357.9M Gaussians, one of 4 (quaternions and their
+// gradient) at 268.4M.
+static Ptr<float, Access.ReadWrite> gsplat_row(Ptr<float, Access.ReadWrite> p, const uint i, const uint width) {
+    return (Ptr<float, Access.ReadWrite>)(uint64_t(p) + uint64_t(i) * width * 4u);
+}
+
 static float3 gsplat_load3(Ptr<float, Access.ReadWrite> p, const uint i) {
-    return float3(p[i * 3u], p[i * 3u + 1u], p[i * 3u + 2u]);
+    const Ptr<float, Access.ReadWrite> r = gsplat_row(p, i, 3u);
+    return float3(r[0], r[1], r[2]);
 }
 
 static float4 gsplat_load4(Ptr<float, Access.ReadWrite> p, const uint i) {
-    return float4(p[i * 4u], p[i * 4u + 1u], p[i * 4u + 2u], p[i * 4u + 3u]);
+    const Ptr<float, Access.ReadWrite> r = gsplat_row(p, i, 4u);
+    return float4(r[0], r[1], r[2], r[3]);
 }
 
 static float gsplat_sigmoid(const float raw) {
@@ -741,13 +751,14 @@ void gsplat_project(GsplatProjectParams p, uint g) {
     float basis[16];
     gsplat_sh_basis(mean - cam.origin, p.degree, basis);
     const uint bases = (p.degree + 1u) * (p.degree + 1u);
+    const Ptr<float, Access.ReadWrite> sh0_row = gsplat_row(p.sh0, g, 3u), color_row = gsplat_row(p.colors, g, 3u);
     for (uint c = 0; c < 3u; ++c) {
-        float color = basis[0] * p.sh0[g * 3u + c];
+        float color = basis[0] * sh0_row[c];
         for (uint k = 1; k < bases; ++k) {
             color += basis[k] * shReadCell(p.sh_rest, p.sh_bounds, p.sh_format,
                                            p.layout_rest, p.count, g, (k - 1u) * 3u + c);
         }
-        p.colors[g * 3u + c] = color + 0.5f;
+        color_row[c] = color + 0.5f;
     }
 }
 
