@@ -10,6 +10,8 @@
 #include "core/rad_dequant_math.hpp"
 #include "core/sh_layout.hpp"
 #include "core/sh_value_quant.hpp"
+#include "core/splat_data.hpp"
+#include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/backend/facade_trace.hpp"
 #include "core/tensor/backend/gpu_backend_ops.hpp"
@@ -30,6 +32,7 @@
 #include "core/tensor_splat.hpp"
 #include "core/tensor_upload.hpp"
 
+#include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -37,6 +40,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <functional>
@@ -2737,6 +2741,62 @@ namespace {
         static_assert(expected > std::numeric_limits<std::uint32_t>::max());
         EXPECT_EQ(lfs::core::sh_swizzled_index(row, 11, 15), expected);
         EXPECT_EQ(lfs::core::sh_swizzled_index(row + 31, 0), (row + 31) / 32 * (12 * 32) + (row + 31) % 32);
+    }
+
+    // A GPU SH rotation goes in chunks of INT32_MAX / (15 * 3 * 7) = 6,817,408 rows at SH 3. The views of the third
+    // chunk start 2.45e9 bytes into the coefficients, which the expression launcher refused before. Runs on Metal and,
+    // where available, on Vulkan. Opt-in, about 8 GB per backend.
+    TEST_F(TensorMetal, ShRotationReachesRowsPastTwoGigabytesOfCoefficients) {
+        if (std::getenv("LFS_TEST_LARGE_SH") == nullptr)
+            GTEST_SKIP() << "Set LFS_TEST_LARGE_SH=1 for this 8 GB test";
+        constexpr size_t third_chunk = 2 * 6'817'408, n = third_chunk + 4096;
+        const std::array<size_t, 6> probes{0, 6'817'407, 6'817'408, third_chunk, third_chunk + 1, n - 1};
+        constexpr size_t probed = probes.size();
+        std::vector<float> values(probed * 45), rotations(probed * 4, 0.0f);
+        std::mt19937 random(4202);
+        std::uniform_real_distribution<float> coefficient(-0.4f, 0.4f);
+        for (float& value : values)
+            value = coefficient(random);
+        for (size_t p = 0; p < probed; ++p)
+            rotations[4 * p] = 1.0f;
+        const glm::mat4 rotation = glm::rotate(glm::mat4(1.0f), 0.7f, glm::normalize(glm::vec3(0.3f, -0.5f, 0.8f)));
+
+        // The probed rows alone, rotated on the CPU.
+        SplatData reference(3, Tensor::zeros({probed, 3}, Device::CPU), Tensor::zeros({probed, 1, 3}, Device::CPU),
+                            Tensor::from_vector(values, {probed, 15, 3}, Device::CPU),
+                            Tensor::zeros({probed, 3}, Device::CPU), Tensor::from_vector(rotations, {probed, 4}, Device::CPU),
+                            Tensor::zeros({probed, 1}, Device::CPU), 1.0f);
+        transform(reference, rotation);
+        const auto expected = reference.shN_canonical().cpu().contiguous();
+
+        for (const GpuBackend backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+            if (!gpu_backend_available(backend))
+                continue;
+            SCOPED_TRACE(gpu_backend_name(backend));
+            GpuBackendScope scope(backend);
+            auto coefficients = Tensor::zeros({n, 15, 3}, Device::GPU);
+            for (size_t p = 0; p < probed; ++p)
+                coefficients.slice(0, probes[p], probes[p] + 1)
+                    .copy_from(Tensor::from_vector(std::vector<float>(values.begin() + p * 45, values.begin() + (p + 1) * 45),
+                                                   {1, 15, 3}, Device::CPU)
+                                   .to(Device::GPU));
+            const auto identity = Tensor::cat({Tensor::ones({n, 1}, Device::GPU), Tensor::zeros({n, 3}, Device::GPU)}, 1);
+            SplatData model(3, Tensor::zeros({n, 3}, Device::GPU), Tensor::zeros({n, 1, 3}, Device::GPU), coefficients,
+                            Tensor::zeros({n, 3}, Device::GPU), identity, Tensor::zeros({n, 1}, Device::GPU), 1.0f);
+            try {
+                transform(model, rotation);
+            } catch (const std::exception& error) {
+                ADD_FAILURE() << "the rotation threw: " << error.what();
+                continue;
+            }
+            const auto actual = model.shN_canonical();
+            for (size_t p = 0; p < probed; ++p) {
+                const auto row = actual.slice(0, probes[p], probes[p] + 1).cpu().contiguous();
+                for (size_t v = 0; v < 45; ++v)
+                    ASSERT_NEAR(row.ptr<float>()[v], expected.ptr<float>()[p * 45 + v], 2e-6)
+                        << "row " << probes[p] << " value " << v;
+            }
+        }
     }
 
 } // namespace

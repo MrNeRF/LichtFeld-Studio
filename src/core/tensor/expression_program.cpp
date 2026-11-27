@@ -276,8 +276,9 @@ namespace lfs::core::internal {
                 binding.host = input.storage.flags & STORAGE_REF_HOST_MEMORY;
                 require(supported(binding.dtype) && (binding.host ? dtype_size(binding.dtype) == 4 : input.storage.backend == backend),
                         "expression input backend or dtype invalid");
-                require(input.storage.data && input.storage.byte_offset <= INT32_MAX &&
-                            input.storage.byte_offset % dtype_size(binding.dtype) == 0,
+                // The kernel's base address includes the byte offset in 64 bits on every backend, and its int32
+                // element offsets, bounded below, count from that base; so a view may start anywhere in its storage.
+                require(input.storage.data && input.storage.byte_offset % dtype_size(binding.dtype) == 0,
                         "expression input address or byte offset invalid");
                 const uint32_t used = std::max(loaded[i] ? shape.rank : 0u, arity[i]);
                 uint64_t elements = 1, last = 0, source_last = 0;
@@ -330,8 +331,7 @@ namespace lfs::core::internal {
                 require(supported(binding.dtype) && output.storage.backend == backend &&
                             !(output.storage.flags & STORAGE_REF_HOST_MEMORY),
                         "expression output backend or dtype invalid");
-                require(output.storage.data && output.storage.byte_offset <= INT32_MAX &&
-                            output.storage.byte_offset % dtype_size(binding.dtype) == 0,
+                require(output.storage.data && output.storage.byte_offset % dtype_size(binding.dtype) == 0,
                         "expression output address or byte offset invalid");
                 std::array<uint32_t, rank_limit> order{};
                 uint32_t active = 0;
