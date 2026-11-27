@@ -174,7 +174,7 @@
             <span class="preferences-label">@tr:blender_integration.application</span><span>{{blender_version}}</span>
           </div>
           <div class="preferences-row" data-if="blender_destination != ''">
-            <span class="preferences-label">@tr:blender_integration.destination</span><span>{{blender_destination}}</span>
+            <span class="preferences-label">@tr:blender_integration.destination</span><span class="preferences-destination">{{blender_destination}}</span>
           </div>
           <div class="preferences-row">
             <span class="preferences-label">@tr:blender_integration.installed</span><span>{{blender_installed}}</span>

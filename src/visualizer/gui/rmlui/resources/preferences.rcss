@@ -214,6 +214,12 @@ body.floating-panel {
     margin-bottom: 5dp;
 }
 
+.preferences-destination {
+    flex: 1 1 200dp;
+    min-width: 0;
+    word-break: break-word;
+}
+
 .preferences-setting {
     margin-bottom: 10dp;
 }

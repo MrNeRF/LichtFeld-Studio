@@ -812,8 +812,9 @@ namespace lfs::vis {
         input.screen_h = 300;
         gui::PanelDrawContext ctx;
         ctx.screen_bounds = gui::PanelDrawBounds{0, 0, 400, 300};
-        const auto draw = [&](const float x) {
+        const auto draw = [&](const float x, const bool clicked = false) {
             input.mouse_x = x;
+            input.mouse_clicked[0] = clicked;
             input.mouse_y = 100;
             manager().beginFrameCursorTracking();
             registry.render_panels({.target = gui::PanelRenderTarget::for_space(gui::PanelSpace::Floating),
@@ -851,6 +852,20 @@ namespace lfs::vis {
         event.type = SDL_EVENT_MOUSE_BUTTON_UP;
         dispatch(event);
         EXPECT_FALSE(hostOwnsPointer(back));
+
+        // The action raises front, but this same click still hits back's
+        // exposed area. The automatic raise must not undo the action.
+        ASSERT_TRUE(registry.bring_panel_to_front("test.input_float_front"));
+        draw(115, true);
+        draw(160);
+        EXPECT_EQ(back.getContext()->GetHoverElement(), nullptr);
+        EXPECT_NE(front.getContext()->GetHoverElement(), nullptr);
+
+        // A later click on the exposed panel still raises it normally.
+        draw(115, true);
+        draw(160);
+        EXPECT_EQ(front.getContext()->GetHoverElement(), nullptr);
+        EXPECT_NE(back.getContext()->GetHoverElement(), nullptr);
     }
 
     TEST_F(SidebarInputDispatchTest, SidebarFloatingOcclusionBlocksNewGesturesButKeepsOwnedDrag) {
