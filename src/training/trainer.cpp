@@ -2794,7 +2794,8 @@ namespace lfs::training {
                 .user_message = "Training failed.",
                 .detail = std::format(
                     "Cannot resume depth supervision: {} Restore the original depth maps and anchor sidecar, "
-                    "restore the initial geometry, or disable depth supervision before retrying.",
+                    "restore the initial geometry, or disable depth supervision before retrying. "
+                    "With an available source point cloud, --refit-depth-anchors allows new targets in headless mode.",
                     detail),
                 .detection = LFS_SOURCE_SITE_CURRENT(),
             }));
@@ -2812,9 +2813,11 @@ namespace lfs::training {
         resolved_depth_prior_ = configured_depth_prior;
         const bool resumed = current_iteration_.load() > 0;
         std::optional<std::uint64_t> seed;
+        bool allow_new_targets = false;
         {
             std::lock_guard lock(params_mutex_);
             seed = depth_anchor_seed_;
+            allow_new_targets = std::exchange(params_.refit_depth_anchors, false);
         }
         lfs::core::Tensor means;
         if (!resumed) {
@@ -2833,8 +2836,11 @@ namespace lfs::training {
                 return unavailable("The original training geometry is unavailable.");
             means = (*loaded)->means.to(lfs::core::DataType::Float32).contiguous();
             const auto recovered = computeAnchorSeedFingerprint(means);
-            if (seed && recovered != *seed)
-                return unavailable("The recovered point cloud differs from the checkpoint's original anchor geometry.");
+            if (seed && recovered != *seed) {
+                if (!allow_new_targets)
+                    return unavailable("The recovered point cloud differs from the checkpoint's original anchor geometry.");
+                LOG_WARN("Depth anchors: --refit-depth-anchors authorized new supervision targets from the source point cloud");
+            }
             seed = recovered;
             return {};
         };
@@ -2866,7 +2872,7 @@ namespace lfs::training {
         LOG_INFO("Depth anchors: validating depth files for {} photographs", cameras.size());
         nvtxRangePush("depth_anchors/fingerprint");
         const auto fingerprint_start = std::chrono::steady_clock::now();
-        const auto fingerprint = computeAnchorFingerprint(*seed, cameras);
+        auto fingerprint = computeAnchorFingerprint(*seed, cameras);
         const auto fingerprint_ms = phase_ms(fingerprint_start);
         nvtxRangePop();
 
@@ -2888,8 +2894,14 @@ namespace lfs::training {
             if (resume_without_seed) {
                 LOG_WARN("Depth anchors: no saved seed or matching sidecar; fitting against the recovered initial point cloud");
             } else if (resumed) {
+                const auto saved_seed = seed;
                 if (auto result = recover_seed(); !result)
                     return result;
+                if (seed != saved_seed) {
+                    fingerprint = computeAnchorFingerprint(*seed, cameras);
+                    if (fingerprint.version == 0)
+                        return unavailable("The depth files could not be fingerprinted for the new anchor seed.");
+                }
             }
             LOG_INFO("Depth anchors: no matching readable sidecar; fitting against the initial geometry");
             const auto compute_start = std::chrono::steady_clock::now();

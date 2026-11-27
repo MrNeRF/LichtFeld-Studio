@@ -2253,6 +2253,9 @@ TEST_F(DepthAnchorSetupTest, FingerprintTracksObservedGeometry) {
 }
 
 TEST_F(DepthAnchorSetupTest, FingerprintTracksSeedGeometryAndPreservesDeviceParity) {
+    // The original v3 fingerprint with no cameras equals the persisted seed prefix.
+    // Preserve its exact value when changing the sidecar schema in the future.
+    EXPECT_EQ(computeAnchorSeedFingerprint(means), 0xc215545aa50c5be4ULL);
     const auto path = directory / "view.png";
     std::ofstream(path) << "depth";
     const auto cam = camera(path);

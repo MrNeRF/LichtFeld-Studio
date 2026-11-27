@@ -765,6 +765,9 @@ namespace {
             ::args::Flag version(mode_group, "version", "Display version information", {'V', "version"});
             ::args::ValueFlag<std::string> view_ply(mode_group, "path", "View file(s). Supports projects (.licht), splat (.ply, .sog, .ssog, .spz, .rad, .usd, .usda, .usdc, .usdz) and mesh (.obj, .fbx, .gltf, .glb, .stl) formats. If directory, loads all.", {'v', "view"});
             ::args::ValueFlag<std::string> resume_checkpoint(mode_group, "checkpoint", "Resume training from a .resume checkpoint or .licht project", {"resume"});
+            ::args::Flag refit_depth_anchors(mode_group, "refit_depth_anchors",
+                                             "Allow new depth supervision targets from the source point cloud if the saved depth anchors cannot be recovered (--headless --resume only)",
+                                             {"refit-depth-anchors"});
             ::args::ValueFlag<std::string> render_camera_path(mode_group, "path", "Render a JSON camera-keyframe path to video, headless (no GUI/window). Requires --render-load and --render-output; see RENDER PATH options.", {"render-camera-path"});
             ::args::CompletionFlag completion(parser, {"complete"});
 
@@ -1314,6 +1317,11 @@ namespace {
                         params.resume_checkpoint = ckpt_path;
                     }
                 }
+            }
+            if (refit_depth_anchors) {
+                if (!headless || !(params.resume_checkpoint || params.resume_project))
+                    return std::unexpected("--refit-depth-anchors requires --headless and --resume");
+                params.refit_depth_anchors = true;
             }
             if (init_path) {
                 if (params.resume_checkpoint || params.resume_project) {

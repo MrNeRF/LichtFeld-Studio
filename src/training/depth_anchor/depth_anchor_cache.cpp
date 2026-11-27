@@ -341,11 +341,12 @@ namespace lfs::training {
 
     std::uint64_t computeAnchorSeedFingerprint(const lfs::core::Tensor& means) {
         std::uint64_t hash = 0xcbf29ce484222325ull;
-        hash_scalar(hash, kSchemaVersion);
-        // Keep this prefix compatible with depth_anchor_seed_v1 checkpoint metadata
-        // and with sidecars written before the seed and camera hashing were split.
-        constexpr std::uint64_t input_revision = 1;
-        hash_scalar(hash, input_revision);
+        // These domain values are part of depth_anchor_seed_v1, frozen at
+        // the legacy sidecar values. Sidecar schema changes must not change them.
+        constexpr std::int32_t seed_v1_domain = 3;
+        constexpr std::uint64_t seed_v1_revision = 1;
+        hash_scalar(hash, seed_v1_domain);
+        hash_scalar(hash, seed_v1_revision);
         const std::uint64_t point_values = means.is_valid() ? means.numel() : 0;
         hash_scalar(hash, point_values);
         if (point_values) {
