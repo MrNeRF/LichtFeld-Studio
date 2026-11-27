@@ -1314,7 +1314,8 @@ namespace lfs::core {
             backend_scope.emplace(*backend);
 
         const auto selection_mask = mask.to(DataType::Bool);
-        const int count = selection_mask.sum_scalar();
+        // Sizes the selected SH below, so it must be the exact count of the gathered rows.
+        const size_t count = selection_mask.count_nonzero();
         if (count == 0) {
             return SplatData();
         }
@@ -1358,7 +1359,7 @@ namespace lfs::core {
         result.set_active_sh_degree(splat_data._active_sh_degree, std::move(selected_bounds));
 
         // If the mask keeps every gaussian, preserve the LOD tree unchanged.
-        if (count == static_cast<int>(splat_data.size()) && splat_data.lod_tree) {
+        if (count == static_cast<size_t>(splat_data.size()) && splat_data.lod_tree) {
             result.lod_tree = std::make_unique<lfs::core::SplatLodTree>(*splat_data.lod_tree);
         }
 

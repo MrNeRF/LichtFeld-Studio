@@ -1418,16 +1418,15 @@ namespace lfs::core {
         if (!_deleted.is_valid()) {
             return size();
         }
-        return size() - static_cast<unsigned long>(_deleted.sum_scalar());
+        // An exact count: a float sum is exact only to 2^24.
+        return size() - static_cast<unsigned long>(_deleted.count_nonzero());
     }
 
     void SplatData::refresh_deleted_count() {
-        // sum_scalar() reduces + syncs, so this must run on the thread that owns the
+        // count_nonzero() reduces + syncs, so this must run on the thread that owns the
         // mask (the trainer), never the render thread. Re-deriving from the live mask
         // each call keeps the cache correct regardless of which path mutated _deleted.
-        _deleted_count.store(
-            _deleted.is_valid() ? static_cast<std::size_t>(_deleted.sum_scalar()) : 0,
-            std::memory_order_relaxed);
+        _deleted_count.store(_deleted.is_valid() ? _deleted.count_nonzero() : 0, std::memory_order_relaxed);
     }
 
     Tensor SplatData::soft_delete(const Tensor& mask) {
@@ -1571,7 +1570,7 @@ namespace lfs::core {
         }
 
         const auto keep_mask = _deleted.logical_not();
-        const size_t new_size = static_cast<size_t>(keep_mask.sum_scalar());
+        const size_t new_size = keep_mask.count_nonzero();
 
         // Nothing to delete
         if (new_size == old_size) {
@@ -2331,8 +2330,7 @@ namespace lfs::core {
                     static_cast<std::size_t>(sh_rest_coefficients_for_degree(max_sh_degree)));
             if (deleted.is_valid()) {
                 auto deleted_bool = std::move(deleted).to(DataType::Bool);
-                result->_deleted_count.store(
-                    static_cast<size_t>(deleted_bool.sum_scalar()), std::memory_order_relaxed);
+                result->_deleted_count.store(deleted_bool.count_nonzero(), std::memory_order_relaxed);
                 result->_deleted = std::move(deleted_bool).gpu();
             }
             if (densification.is_valid() && densification.numel() > 0)
