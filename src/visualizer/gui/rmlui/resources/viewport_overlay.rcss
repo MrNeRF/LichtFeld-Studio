@@ -2282,7 +2282,9 @@ body {
 }
 
 .toolbar-hcenter.model-align-active {
-    padding: 0;
+    justify-content: flex-start;
+    padding: 0 8dp;
+    box-sizing: border-box;
 }
 
 .toolbar-hcenter.model-align-active .align-toolbar {
