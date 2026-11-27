@@ -37,20 +37,29 @@ Df df_area(Df x, Df y, Df z) {
     return df_mul(K_4PI, df_pow(mean, K_INVP));
 }
 
-Df splat_mass(Ptr<float, Access.Read> scale, Ptr<float, Access.Read> opacity, uint i, float eps) {
+// Row i of `width` floats at its 64-bit byte address, its values as small indices: NVIDIA's Vulkan computes an access
+// chain's byte offset in 32 bits without VK_EXT_shader_64bit_indexing, and the 3-float rows (positions, log scales,
+// colours) pass 4 GiB at 357.9M points, the quaternions at 268.4M.
+Ptr<float, Access.ReadWrite> float_row(uint64_t base, uint i, uint width) {
+    return (Ptr<float, Access.ReadWrite>)(base + uint64_t(i) * width * 4u);
+}
+
+Df splat_mass(uint64_t scale, Ptr<float, Access.Read> opacity, uint i, float eps) {
     Df axes[3];
+    const Ptr<float, Access.ReadWrite> scale_i = float_row(scale, i, 3u);
     [ForceUnroll] for (uint a = 0; a < 3; ++a)
-        axes[a] = df_max(df_exp(df_from(scale[i * 3 + a])), df_from(1e-12));
+        axes[a] = df_max(df_exp(df_from(scale_i[a])), df_from(1e-12));
     const Df sig = df_sigmoid(opacity[i]);
     return df_add(df_mul(sig, df_area(axes[0], axes[1], axes[2])), df_from(eps));
 }
 
-void rotation(Ptr<float, Access.Read> rot, uint i, out Df r[9]) {
-    const Df invn = df_div(df_from(1), df_max(df_sqrt(df_add(df_add(df_mul(df_from(rot[i * 4]), df_from(rot[i * 4])), df_mul(df_from(rot[i * 4 + 1]), df_from(rot[i * 4 + 1]))), df_add(df_mul(df_from(rot[i * 4 + 2]), df_from(rot[i * 4 + 2])), df_mul(df_from(rot[i * 4 + 3]), df_from(rot[i * 4 + 3]))))), df_from(1e-12)));
-    const Df w = df_mul(df_from(rot[i * 4]), invn);
-    const Df x = df_mul(df_from(rot[i * 4 + 1]), invn);
-    const Df y = df_mul(df_from(rot[i * 4 + 2]), invn);
-    const Df z = df_mul(df_from(rot[i * 4 + 3]), invn);
+void rotation(uint64_t rotations, uint i, out Df r[9]) {
+    const Ptr<float, Access.ReadWrite> rot = float_row(rotations, i, 4u);
+    const Df invn = df_div(df_from(1), df_max(df_sqrt(df_add(df_add(df_mul(df_from(rot[0]), df_from(rot[0])), df_mul(df_from(rot[1]), df_from(rot[1]))), df_add(df_mul(df_from(rot[2]), df_from(rot[2])), df_mul(df_from(rot[3]), df_from(rot[3]))))), df_from(1e-12)));
+    const Df w = df_mul(df_from(rot[0]), invn);
+    const Df x = df_mul(df_from(rot[1]), invn);
+    const Df y = df_mul(df_from(rot[2]), invn);
+    const Df z = df_mul(df_from(rot[3]), invn);
     const Df two = df_from(2);
     r[0] = df_sub(df_from(1), df_mul(two, df_add(df_mul(y, y), df_mul(z, z))));
     r[1] = df_mul(two, df_sub(df_mul(x, y), df_mul(w, z)));
@@ -190,27 +199,27 @@ void decompose(inout Df a[9], out Df scales[3], out Df quaternion[4]) {
 // without VK_EXT_shader_64bit_indexing (the rows pass 4 GiB at 23.9M points). Values are small indices from it.
 uint64_t sh_row(uint64_t sh, uint i, uint rest) { return sh + uint64_t(i) * (rest * 3) * 4; }
 
-void copy_one(Ptr<float, Access.Read> pos, Ptr<float, Access.Read> rot, Ptr<float, Access.Read> scale,
-              Ptr<float, Access.Read> opacity, Ptr<float, Access.Read> dc, uint64_t sh,
-              Ptr<float, Access.ReadWrite> opos, Ptr<float, Access.ReadWrite> orot, Ptr<float, Access.ReadWrite> oscale,
-              Ptr<float, Access.ReadWrite> oopacity, Ptr<float, Access.ReadWrite> odc, uint64_t osh,
+void copy_one(uint64_t pos, uint64_t rot, uint64_t scale,
+              Ptr<float, Access.Read> opacity, uint64_t dc, uint64_t sh,
+              uint64_t opos, uint64_t orot, uint64_t oscale,
+              Ptr<float, Access.ReadWrite> oopacity, uint64_t odc, uint64_t osh,
               uint rest, uint i, uint row) {
     [ForceUnroll] for (uint a = 0; a < 3; ++a) {
-        opos[row * 3 + a] = pos[i * 3 + a];
-        oscale[row * 3 + a] = scale[i * 3 + a];
-        odc[row * 3 + a] = dc[i * 3 + a];
+        float_row(opos, row, 3u)[a] = float_row(pos, i, 3u)[a];
+        float_row(oscale, row, 3u)[a] = float_row(scale, i, 3u)[a];
+        float_row(odc, row, 3u)[a] = float_row(dc, i, 3u)[a];
     }
-    [ForceUnroll] for (uint a = 0; a < 4; ++a) orot[row * 4 + a] = rot[i * 4 + a];
+    [ForceUnroll] for (uint a = 0; a < 4; ++a) float_row(orot, row, 4u)[a] = float_row(rot, i, 4u)[a];
     oopacity[row] = opacity[i];
     Ptr<float, Access.Read> from = (Ptr<float, Access.Read>)sh_row(sh, i, rest);
     Ptr<float, Access.ReadWrite> to = (Ptr<float, Access.ReadWrite>)sh_row(osh, row, rest);
     for (uint a = 0; a < rest * 3; ++a) to[a] = from[a];
 }
 
-void merge_one(Ptr<float, Access.Read> pos, Ptr<float, Access.Read> rot, Ptr<float, Access.Read> scale,
-               Ptr<float, Access.Read> opacity, Ptr<float, Access.Read> dc, uint64_t sh,
-               Ptr<uint, Access.Read> members, Ptr<float, Access.ReadWrite> opos, Ptr<float, Access.ReadWrite> orot,
-               Ptr<float, Access.ReadWrite> oscale, Ptr<float, Access.ReadWrite> oopacity, Ptr<float, Access.ReadWrite> odc,
+void merge_one(uint64_t pos, uint64_t rot, uint64_t scale,
+               Ptr<float, Access.Read> opacity, uint64_t dc, uint64_t sh,
+               Ptr<uint, Access.Read> members, uint64_t opos, uint64_t orot,
+               uint64_t oscale, Ptr<float, Access.ReadWrite> oopacity, uint64_t odc,
                uint64_t osh, uint rest, uint begin, uint count, uint row) {
     Df weights[4];
     Df massSum = df_from(0);
@@ -224,7 +233,7 @@ void merge_one(Ptr<float, Access.Read> pos, Ptr<float, Access.Read> rot, Ptr<flo
         weights[m] = df_div(weights[m], massSum);
         const uint id = members[begin + m];
         [ForceUnroll] for (uint a = 0; a < 3; ++a)
-            mean[a] = df_add(mean[a], df_mul(weights[m], df_from(pos[id * 3 + a])));
+            mean[a] = df_add(mean[a], df_mul(weights[m], df_from(float_row(pos, id, 3u)[a])));
     }
     Df sig[9];
     for (uint a = 0; a < 9; ++a) sig[a] = df_from(0);
@@ -235,9 +244,9 @@ void merge_one(Ptr<float, Access.Read> pos, Ptr<float, Access.Read> rot, Ptr<flo
         Df variance[3];
         Df delta[3];
         [ForceUnroll] for (uint a = 0; a < 3; ++a) {
-            const Df sc = df_max(df_exp(df_from(scale[id * 3 + a])), df_from(1e-12));
+            const Df sc = df_max(df_exp(df_from(float_row(scale, id, 3u)[a])), df_from(1e-12));
             variance[a] = df_mul(sc, sc);
-            delta[a] = df_sub(df_from(pos[id * 3 + a]), mean[a]);
+            delta[a] = df_sub(df_from(float_row(pos, id, 3u)[a]), mean[a]);
         }
         Df si[9];
         covariance(r, variance, si);
@@ -254,10 +263,10 @@ void merge_one(Ptr<float, Access.Read> pos, Ptr<float, Access.Read> rot, Ptr<flo
     Df quat[4];
     decompose(sig, scales, quat);
     [ForceUnroll] for (uint a = 0; a < 3; ++a) {
-        opos[row * 3 + a] = df_store(mean[a]);
-        oscale[row * 3 + a] = df_store(df_log(scales[a]));
+        float_row(opos, row, 3u)[a] = df_store(mean[a]);
+        float_row(oscale, row, 3u)[a] = df_store(df_log(scales[a]));
     }
-    [ForceUnroll] for (uint a = 0; a < 4; ++a) orot[row * 4 + a] = df_store(quat[a]);
+    [ForceUnroll] for (uint a = 0; a < 4; ++a) float_row(orot, row, 4u)[a] = df_store(quat[a]);
     const Df area = df_max(df_area(scales[0], scales[1], scales[2]), df_from(1e-30));
     Df alpha = df_div(massSum, area);
     // The reference clamps in double; both bounds need float-float constants.
@@ -269,10 +278,10 @@ void merge_one(Ptr<float, Access.Read> pos, Ptr<float, Access.Read> rot, Ptr<flo
         Df acc = df_from(0);
         for (uint m = 0; m < count; ++m) {
             const uint id = members[begin + m];
-            const float value = c < 3 ? dc[id * 3 + c] : ((Ptr<float, Access.Read>)sh_row(sh, id, rest))[c - 3];
+            const float value = c < 3 ? float_row(dc, id, 3u)[c] : ((Ptr<float, Access.Read>)sh_row(sh, id, rest))[c - 3];
             acc = df_add(acc, df_mul(weights[m], df_from(value)));
         }
-        if (c < 3) odc[row * 3 + c] = df_store(acc);
+        if (c < 3) float_row(odc, row, 3u)[c] = df_store(acc);
         else ((Ptr<float, Access.ReadWrite>)sh_row(osh, row, rest))[c - 3] = df_store(acc);
     }
 }
@@ -281,22 +290,22 @@ void merge_one(Ptr<float, Access.Read> pos, Ptr<float, Access.Read> rot, Ptr<flo
 void LFS_KERNEL_ENTRY(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uniform Parameters p LFS_PHASE_ARGUMENT) {
     const uint3 groups = dispatchGroups();
     Ptr<uint64_t, Access.Read> table = (Ptr<uint64_t, Access.Read>)p.table;
-    Ptr<float, Access.Read> pos = (Ptr<float, Access.Read>)table[0];
-    Ptr<float, Access.Read> rot = (Ptr<float, Access.Read>)table[1];
-    Ptr<float, Access.Read> scale = (Ptr<float, Access.Read>)table[2];
+    const uint64_t pos = table[0];
+    const uint64_t rot = table[1];
+    const uint64_t scale = table[2];
     Ptr<float, Access.Read> opacity = (Ptr<float, Access.Read>)table[3];
-    Ptr<float, Access.Read> dc = (Ptr<float, Access.Read>)table[4];
+    const uint64_t dc = table[4];
     const uint64_t sh = table[5];
     Ptr<int, Access.Read> member = (Ptr<int, Access.Read>)table[6];
     Ptr<uint, Access.Read> minimum = (Ptr<uint, Access.Read>)table[7];
     Ptr<uint, Access.Read> members = (Ptr<uint, Access.Read>)table[8];
     Ptr<uint, Access.Read> offsets = (Ptr<uint, Access.Read>)table[9];
     Ptr<uint, Access.Read> rows = (Ptr<uint, Access.Read>)table[10];
-    Ptr<float, Access.ReadWrite> opos = (Ptr<float, Access.ReadWrite>)table[11];
-    Ptr<float, Access.ReadWrite> orot = (Ptr<float, Access.ReadWrite>)table[12];
-    Ptr<float, Access.ReadWrite> oscale = (Ptr<float, Access.ReadWrite>)table[13];
+    const uint64_t opos = table[11];
+    const uint64_t orot = table[12];
+    const uint64_t oscale = table[13];
     Ptr<float, Access.ReadWrite> oopacity = (Ptr<float, Access.ReadWrite>)table[14];
-    Ptr<float, Access.ReadWrite> odc = (Ptr<float, Access.ReadWrite>)table[15];
+    const uint64_t odc = table[15];
     const uint64_t osh = table[16];
     for (uint i = gid.x * 256u + tid.x; i < p.n; i += groups.x * 256u) {
         const int g = member[i];

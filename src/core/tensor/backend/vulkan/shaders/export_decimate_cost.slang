@@ -61,13 +61,20 @@ Df df_area(Df x, Df y, Df z) {
     return df_mul(K_4PI, df_pow(mean, K_INVP));
 }
 
-void cache_one(Ptr<float, Access.Read> pos, Ptr<float, Access.Read> rot, Ptr<float, Access.Read> scale,
-               Ptr<float, Access.Read> opacity, uint i, out GCache c) {
+// Row i of `width` floats at its 64-bit byte address, its values as small indices: NVIDIA's Vulkan computes an access
+// chain's byte offset in 32 bits without VK_EXT_shader_64bit_indexing, and the 3-float rows (positions, log scales,
+// colours) pass 4 GiB at 357.9M points, the quaternions and the [N, 4] pair and cost lists at 268.4M.
+Ptr<float, Access.Read> float_row(uint64_t base, uint i, uint width) {
+    return (Ptr<float, Access.Read>)(base + uint64_t(i) * width * 4u);
+}
+
+void cache_one(uint64_t pos, uint64_t rot, uint64_t scale, Ptr<float, Access.Read> opacity, uint i, out GCache c) {
+    const Ptr<float, Access.Read> pos_i = float_row(pos, i, 3u), rot_i = float_row(rot, i, 4u), scale_i = float_row(scale, i, 3u);
     Df variance[3];
     Df axes[3];
     Df ld = df_from(0);
     [ForceUnroll] for (uint a = 0; a < 3; ++a) {
-        const Df s = df_floor(df_exp_precise(df_from(scale[i * 3 + a])), 1e-12);
+        const Df s = df_floor(df_exp_precise(df_from(scale_i[a])), 1e-12);
         axes[a] = s;
         variance[a] = df_add(df_mul(s, s), K_JITTER);
         c.v[a] = df_as(variance[a]);
@@ -78,10 +85,10 @@ void cache_one(Ptr<float, Access.Read> pos, Ptr<float, Access.Read> rot, Ptr<flo
     const Df sigmoid = df_sigmoid(opacity[i]);
     c.mass = df_as(df_add(df_mul(sigmoid, df_area(axes[0], axes[1], axes[2])), df_from(1e-12)));
 
-    const Df q0 = df_from(rot[i * 4 + 0]);
-    const Df q1 = df_from(rot[i * 4 + 1]);
-    const Df q2 = df_from(rot[i * 4 + 2]);
-    const Df q3 = df_from(rot[i * 4 + 3]);
+    const Df q0 = df_from(rot_i[0]);
+    const Df q1 = df_from(rot_i[1]);
+    const Df q2 = df_from(rot_i[2]);
+    const Df q3 = df_from(rot_i[3]);
     const Df inv = df_div(df_from(1), df_floor(df_sqrt(df_add(df_add(df_mul(q0, q0), df_mul(q1, q1)), df_add(df_mul(q2, q2), df_mul(q3, q3)))), 1e-12));
     const Df w = df_mul(q0, inv);
     const Df x = df_mul(q1, inv);
@@ -113,7 +120,7 @@ void cache_one(Ptr<float, Access.Read> pos, Ptr<float, Access.Read> rot, Ptr<flo
         scaled[a] = df_mul(zed[a], df_sqrt(df_floor(df_from(c.v[a]), 0)));
     Df sample[3];
     [ForceUnroll] for (uint a = 0; a < 3; ++a) {
-        sample[a] = df_add(df_from(pos[i * 3 + a]),
+        sample[a] = df_add(df_from(pos_i[a]),
                            df_add(df_add(df_mul(scaled[0], df_from(c.r[a * 3])), df_mul(scaled[1], df_from(c.r[a * 3 + 1]))),
                                   df_mul(scaled[2], df_from(c.r[a * 3 + 2]))));
     }
@@ -122,7 +129,7 @@ void cache_one(Ptr<float, Access.Read> pos, Ptr<float, Access.Read> rot, Ptr<flo
     c.sample2 = sample[2];
     Df d[3];
     [ForceUnroll] for (uint a = 0; a < 3; ++a)
-        d[a] = df_sub(sample[a], df_from(pos[i * 3 + a]));
+        d[a] = df_sub(sample[a], df_from(pos_i[a]));
     Df q = df_from(0);
     [ForceUnroll] for (uint a = 0; a < 3; ++a) {
         const Df yv = df_add(df_add(df_mul(d[0], df_from(c.r[a])), df_mul(d[1], df_from(c.r[3 + a]))), df_mul(d[2], df_from(c.r[6 + a])));
@@ -170,8 +177,10 @@ Ptr<uint, Access.Read> neighbour_row(uint64_t neighbors, uint i) {
     return (Ptr<uint, Access.Read>)(neighbors + uint64_t(i) * 64);
 }
 
-float edge_cost(Ptr<float, Access.Read> pos, Ptr<float, Access.Read> dc, uint64_t sh, uint rest,
+float edge_cost(uint64_t pos, uint64_t dc, uint64_t sh, uint rest,
                 GCache a, GCache b, uint i, uint j) {
+    const Ptr<float, Access.Read> pos_i = float_row(pos, i, 3u), pos_j = float_row(pos, j, 3u);
+    const Ptr<float, Access.Read> dc_i = float_row(dc, i, 3u), dc_j = float_row(dc, j, 3u);
     const Df w = df_add(df_from(a.mass), df_from(b.mass));
     Df p = df_div(df_from(a.mass), df_as(w) > 0 ? w : df_from(1));
     const float pf = df_as(p);
@@ -183,9 +192,9 @@ float edge_cost(Ptr<float, Access.Read> pos, Ptr<float, Access.Read> dc, uint64_
     Df e[3];
     Df s[9];
     [ForceUnroll] for (uint c = 0; c < 3; ++c) {
-        const Df m = df_add(df_mul(p, df_from(pos[i * 3 + c])), df_mul(q, df_from(pos[j * 3 + c])));
-        d[c] = df_sub(df_from(pos[i * 3 + c]), m);
-        e[c] = df_sub(df_from(pos[j * 3 + c]), m);
+        const Df m = df_add(df_mul(p, df_from(pos_i[c])), df_mul(q, df_from(pos_j[c])));
+        d[c] = df_sub(df_from(pos_i[c]), m);
+        e[c] = df_sub(df_from(pos_j[c]), m);
     }
     [ForceUnroll] for (uint c = 0; c < 9; ++c) {
         const uint row = c / 3;
@@ -205,12 +214,12 @@ float edge_cost(Ptr<float, Access.Read> pos, Ptr<float, Access.Read> dc, uint64_
     s[0] = df_add(s[0], K_JITTER);
     s[4] = df_add(s[4], K_JITTER);
     s[8] = df_add(s[8], K_JITTER);
-    const Df crossA = df_logadd(df_add(lp, a.selfLog), df_add(lq, df_logpdf(a.sample0, a.sample1, a.sample2, pos[j * 3], pos[j * 3 + 1], pos[j * 3 + 2], b)));
-    const Df crossB = df_logadd(df_add(lp, df_logpdf(b.sample0, b.sample1, b.sample2, pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2], a)), df_add(lq, b.selfLog));
+    const Df crossA = df_logadd(df_add(lp, a.selfLog), df_add(lq, df_logpdf(a.sample0, a.sample1, a.sample2, pos_j[0], pos_j[1], pos_j[2], b)));
+    const Df crossB = df_logadd(df_add(lp, df_logpdf(b.sample0, b.sample1, b.sample2, pos_i[0], pos_i[1], pos_i[2], a)), df_add(lq, b.selfLog));
     Df cost = df_add(df_add(df_mul(p, crossA), df_mul(q, crossB)), df_mul(df_from(0.5), df_add(df_add(df_mul(df_from(3), K_LOG2PI), df_log(df_floor(df_det(s), 1e-30))), df_from(3))));
     for (uint c = 0; c < 3 + rest * 3; ++c) {
-        float left = c < 3 ? dc[i * 3 + c] : sh_value(sh, rest, i, c - 3);
-        float right = c < 3 ? dc[j * 3 + c] : sh_value(sh, rest, j, c - 3);
+        float left = c < 3 ? dc_i[c] : sh_value(sh, rest, i, c - 3);
+        float right = c < 3 ? dc_j[c] : sh_value(sh, rest, j, c - 3);
         const float delta = left - right;
         cost = df_add(cost, df_from(delta * delta));
     }
@@ -251,17 +260,11 @@ const uint kPhase = 0;
 [numthreads(256, 1, 1)]
 void LFS_KERNEL_ENTRY(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uniform Parameters p LFS_PHASE_ARGUMENT) {
     const uint3 groups = dispatchGroups();
-    Ptr<float, Access.Read> pos = (Ptr<float, Access.Read>)p.pos;
-    Ptr<float, Access.Read> rot = (Ptr<float, Access.Read>)p.rot;
-    Ptr<float, Access.Read> scale = (Ptr<float, Access.Read>)p.scale;
     Ptr<float, Access.Read> opacity = (Ptr<float, Access.Read>)p.opacity;
-    Ptr<float, Access.Read> dc = (Ptr<float, Access.Read>)p.dc;
-    Ptr<uint, Access.ReadWrite> idx = (Ptr<uint, Access.ReadWrite>)p.idx;
-    Ptr<float, Access.ReadWrite> cost = (Ptr<float, Access.ReadWrite>)p.cost;
     if (kPhase == 0) {
         for (uint i = gid.x * 256u + tid.x; i < p.n; i += groups.x * 256u) {
             GCache built;
-            cache_one(pos, rot, scale, opacity, i, built);
+            cache_one(p.pos, p.rot, p.scale, opacity, i, built);
             store_cache(p.cache, i, built);
         }
         return;
@@ -278,7 +281,7 @@ void LFS_KERNEL_ENTRY(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, unif
             if (j == 0xffffffffu) continue;
             GCache other;
             load_cache(p.cache, j, other);
-            const float value = edge_cost(pos, dc, p.sh, p.rest, mine, other, i, j);
+            const float value = edge_cost(p.pos, p.dc, p.sh, p.rest, mine, other, i, j);
             if (!isfinite(value) || value > best[3] || (value == best[3] && j >= chosen[3])) continue;
             int at = 3;
             while (at > 0 && (value < best[at - 1] || (value == best[at - 1] && j < chosen[at - 1]))) {
@@ -289,9 +292,11 @@ void LFS_KERNEL_ENTRY(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, unif
             best[at] = value;
             chosen[at] = j;
         }
+        const Ptr<uint, Access.ReadWrite> idx = (Ptr<uint, Access.ReadWrite>)(p.idx + uint64_t(i) * 16u);
+        const Ptr<float, Access.ReadWrite> cost = (Ptr<float, Access.ReadWrite>)(p.cost + uint64_t(i) * 16u);
         [ForceUnroll] for (uint a = 0; a < 4; ++a) {
-            idx[i * 4 + a] = chosen[a];
-            cost[i * 4 + a] = chosen[a] == 0xffffffffu ? asfloat(0x7f800000u) : best[a];
+            idx[a] = chosen[a];
+            cost[a] = chosen[a] == 0xffffffffu ? asfloat(0x7f800000u) : best[a];
         }
     }
 }
