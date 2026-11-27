@@ -156,7 +156,12 @@ void effective_rank(uint3 id : SV_DispatchThreadID) {
     }
     float eps = p.epsilon;
     float log_eps = log(eps);
-    float raw[3] = { p.a[3 * i], p.a[3 * i + 1], p.a[3 * i + 2] };
+    // The Gaussian's 3-float rows at their 64-bit byte address, not as an index from the buffers' pointers: NVIDIA's
+    // Vulkan computes an access chain's byte offset in 32 bits without VK_EXT_shader_64bit_indexing, and the rows pass
+    // 4 GiB at 357.9M Gaussians. The addresses and the bytes are the ones the indices gave.
+    const Ptr<float, Access.Read> scales = (Ptr<float, Access.Read>)(uint64_t(p.a) + uint64_t(i) * 12u);
+    const Ptr<float, Access.ReadWrite> gradient = (Ptr<float, Access.ReadWrite>)(uint64_t(p.out0) + uint64_t(i) * 12u);
+    float raw[3] = { scales[0], scales[1], scales[2] };
     uint minimum = 0;
     uint peak = 0;
     [unroll] for (uint d = 1; d < 3; ++d) {
@@ -210,6 +215,6 @@ void effective_rank(uint3 id : SV_DispatchThreadID) {
             bracket = -clamped[d] - indicator_d;
         }
         float thin = d == minimum ? p.thin_weight * scale_min : 0.0f;
-        p.out0[3 * i + d] = p.out0[3 * i + d] + (rank_factor * 2.0f * share[d] * bracket + thin) * p.inv_count;
+        gradient[d] = gradient[d] + (rank_factor * 2.0f * share[d] * bracket + thin) * p.inv_count;
     }
 }
