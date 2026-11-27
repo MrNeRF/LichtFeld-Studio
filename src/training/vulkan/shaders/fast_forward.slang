@@ -25,7 +25,7 @@ Projected project(FastPush p, uint i, out uint touched) {
     Projected o = (Projected)0;
     touched = 0;
     float3 m = load3(p.means, i), s = load3(p.scales, i);
-    float4 q = ((Ptr<float4, Access.Read>)p.rotations)[i];
+    float4 q = load4(p.rotations, i);
     float4 v0 = ((Ptr<float4, Access.Read>)p.view)[0], v1 = ((Ptr<float4, Access.Read>)p.view)[1], v2 = ((Ptr<float4, Access.Read>)p.view)[2];
     float z = dot(v2.xyz, m) + v2.w;
     float rawOpacity = loadFloat(p.opacities, i);
@@ -91,7 +91,7 @@ void shade(FastPush p, uint i, inout Projected o) {
     o.blue = color.z;
     if (p.renderNormal != 0) {
         float3 variance = exp(2 * min(load3(p.scales, i), float3(20)));
-        float3x3 R = rotation(((Ptr<float4, Access.Read>)p.rotations)[i]);
+        float3x3 R = rotation(load4(p.rotations, i));
         uint axis = variance.x <= variance.y && variance.x <= variance.z ? 0 : variance.y <= variance.z ? 1
                                                                                                         : 2;
         float3 normal = float3(R[0][axis], R[1][axis], R[2][axis]);

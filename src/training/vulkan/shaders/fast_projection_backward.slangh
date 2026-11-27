@@ -173,7 +173,7 @@ void projectionBackward(BackPush back, uint primitive_idx) {
             min(raw_scale.y, 20.0f),
             min(raw_scale.z, 20.0f));
         const float3 variance = float3(exp(2.0f * clamped_scale.x), exp(2.0f * clamped_scale.y), exp(2.0f * clamped_scale.z));
-        const float4 raw_rotation = ((Ptr<float4, Access.Read>)p.rotations)[primitive_idx];
+        const float4 raw_rotation = load4(p.rotations, primitive_idx);
         const float qr = raw_rotation.x;
         const float qx = raw_rotation.y;
         const float qy = raw_rotation.z;

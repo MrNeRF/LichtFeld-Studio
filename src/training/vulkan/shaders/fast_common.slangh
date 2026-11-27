@@ -79,13 +79,22 @@ Projected broadcastProjected(Projected o, uint lane, bool depth, bool normal) {
     }
     return result;
 }
-float loadFloat(uint64_t a, uint i) { return ((Ptr<float, Access.Read>)a)[i]; }
-float3 load3(uint64_t a, uint i) { return float3(loadFloat(a, 3 * i), loadFloat(a, 3 * i + 1), loadFloat(a, 3 * i + 2)); }
-void storeFloat(uint64_t a, uint i, float v) { ((Ptr<float, Access.ReadWrite>)a)[i] = v; }
+// Floats at their 64-bit byte address, not as an index from their buffer's start: NVIDIA's Vulkan computes an access
+// chain's byte offset in 32 bits without VK_EXT_shader_64bit_indexing, and a per-Gaussian buffer of 3 floats (means,
+// scales, sh0 and their gradients) passes 4 GiB at 357.9M Gaussians, one of 4 floats (rotations and their gradient) at
+// 268.4M.
+float loadFloat(uint64_t a, uint i) { return ((Ptr<float, Access.Read>)(a + uint64_t(i) * 4))[0]; }
+float3 load3(uint64_t a, uint i) {
+    Ptr<float, Access.Read> v = (Ptr<float, Access.Read>)(a + uint64_t(i) * 12);
+    return float3(v[0], v[1], v[2]);
+}
+float4 load4(uint64_t a, uint i) { return ((Ptr<float4, Access.Read>)(a + uint64_t(i) * 16))[0]; }
+void storeFloat(uint64_t a, uint i, float v) { ((Ptr<float, Access.ReadWrite>)(a + uint64_t(i) * 4))[0] = v; }
 void store3(uint64_t a, uint i, float3 v) {
-    storeFloat(a, 3 * i, v.x);
-    storeFloat(a, 3 * i + 1, v.y);
-    storeFloat(a, 3 * i + 2, v.z);
+    Ptr<float, Access.ReadWrite> o = (Ptr<float, Access.ReadWrite>)(a + uint64_t(i) * 12);
+    o[0] = v.x;
+    o[1] = v.y;
+    o[2] = v.z;
 }
 uint loadUint(uint64_t a, uint i) { return ((Ptr<uint, Access.Read>)a)[i]; }
 void storeUint(uint64_t a, uint i, uint v) { ((Ptr<uint, Access.ReadWrite>)a)[i] = v; }
