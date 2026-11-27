@@ -84,10 +84,11 @@ float qDecode(uint code, float lo, float hi, uint bits) {
     float qmax = bits == 16 ? 65535.0f : 255.0f;
     return fma(hi - lo, float(code) * (1.0f / qmax), lo);
 }
-// Moment codes, SH values and SH gradients are read and written at their 64-bit byte address, not as an index from
-// their buffer's start: NVIDIA's Vulkan computes an access chain's byte offset in 32 bits without
-// VK_EXT_shader_64bit_indexing, and at SH degree 3 the SH gradient passes 4 GiB at 22.4M rows, the 8-bit SH moments and
-// an f16 SH store at 44.7M, a Q16 store at 47.7M.
+// Moment codes, values and gradients are read and written at their 64-bit byte address, not as an index from their
+// buffer's start: NVIDIA's Vulkan computes an access chain's byte offset in 32 bits without
+// VK_EXT_shader_64bit_indexing. At SH degree 3 the SH gradient passes 4 GiB at 22.4M rows, the 8-bit SH moments and an
+// f16 SH store at 44.7M, a Q16 store at 47.7M; a row step's 3-float parameter and gradient at 357.9M rows, its
+// 4-float ones at 268.4M.
 float loadFloatAt(uint64_t address, uint64_t index) { return ((Ptr<float, Access.Read>)(address + index * 4))[0]; }
 float2 loadUS(Params p, uint64_t cell, float4 mm) {
     uint u, s;
@@ -204,8 +205,9 @@ void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uniform Push pu
         if (valid && (p.entryCount & 1u) != 0u && p.meanScales != 0 && p.meanFar != 0 &&
             row < p.meanFarCount && uint64_t(row) * 3 + 2 < p.meanScaleCount && p.meanMedian > 0.0f &&
             ((Ptr<uint8_t, Access.Read>)p.meanFar)[row] != 0) {
-            Ptr<float, Access.Read> scales = (Ptr<float, Access.Read>)p.meanScales;
-            float extent = exp((scales[row * 3] + scales[row * 3 + 1] + scales[row * 3 + 2]) * (1.0f / 3.0f));
+            // The row's scales at its 64-bit byte address (see loadFloatAt).
+            Ptr<float, Access.Read> scales = (Ptr<float, Access.Read>)(p.meanScales + uint64_t(row) * 12);
+            float extent = exp((scales[0] + scales[1] + scales[2]) * (1.0f / 3.0f));
             step *= qMin(qMax(extent / p.meanMedian, 1.0f), 300.0f);
         }
         if (valid && p.frozenMask != 0 && row < p.frozenCount && ((Ptr<uint8_t, Access.Read>)p.frozenMask)[row] != 0 && p.frozenScale == 0.0f) apply = false;
@@ -214,14 +216,15 @@ void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uniform Push pu
             uint64_t cell = uint64_t(row) * attrs + a;
             float2 mv = decodeMV(loadUS(p, cell, oldmm));
             m[a]=mv.x; v[a]=mv.y;
-            float g=((Ptr<float, Access.Read>)p.gradient)[cell];
+            float g=loadFloatAt(p.gradient, cell);
             float h=0.0f;
             if (p.screenShare != 0 && row < p.primitives && (p.entryCount & 2) != 0)
                 h = hinge(p,row,mv.y);
             if (apply) {
                 m[a] = fma(p.beta1, mv.x, (1.0f-p.beta1)*(g+h));
                 v[a] = fma(p.beta2, mv.y, roundedMul(roundedMul(1.0f-p.beta2,g),g));
-                ((Ptr<float, Access.ReadWrite>)p.parameter)[cell] = adamUpdate(((Ptr<float, Access.Read>)p.parameter)[cell], step, m[a], v[a], p.bc2, p.eps);
+                Ptr<float, Access.ReadWrite> parameter = (Ptr<float, Access.ReadWrite>)(p.parameter + cell * 4);
+                parameter[0] = adamUpdate(parameter[0], step, m[a], v[a], p.bc2, p.eps);
             }
             float2 us=encodeUS(m[a],v[a]); usU[a]=us.x; usS[a]=us.y;
             umin=qMin(umin,us.x); umax=qMax(umax,us.x); smin=qMin(smin,us.y); smax=qMax(smax,us.y);
