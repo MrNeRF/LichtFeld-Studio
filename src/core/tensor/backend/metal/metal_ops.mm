@@ -1002,6 +1002,15 @@ namespace lfs::core::internal {
                 .padding = 0,
             };
             const size_t tile = gemm_tile(program.m, program.n, program.batch);
+            // The tiles start from 64-bit offsets; inside one, the int32 views span its rows of A and C, and all of a
+            // B that is not transposed.
+            const size_t band = std::min(program.m, tile);
+            LFS_ASSERT_MSG(band * program.k <= size_t(std::numeric_limits<int32_t>::max()) &&
+                               band * program.n <= size_t(std::numeric_limits<int32_t>::max()) &&
+                               (transpose_rhs ? std::min(program.n, tile) * program.k : program.k * program.n) <=
+                                   size_t(std::numeric_limits<int32_t>::max()),
+                           std::format("Metal GEMM tile spans exceed int32 (m={}, n={}, k={})", program.m, program.n,
+                                       program.k));
             const auto pipeline = context->pipeline(
                 "gemm", {{14, transpose_rhs ? 1u : 0u}, {15, bias != nullptr ? 1u : 0u}, {27, tile == 64 ? 1u : 0u}});
             const std::array uses{lhs, rhs, output, bias != nullptr ? *bias : output};

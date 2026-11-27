@@ -3690,17 +3690,19 @@ template <bool TransposeB, int Tile>
 static void gemm_tile(device float* lhs, device float* rhs, device float* output, device const float* bias,
                       constant GemmParams& params, uint2 group) {
     const int m = int(params.m), n = int(params.n), k = int(params.k);
-    // Extents list the innermost dimension first.
-    Matrix a(lhs, dextents<int32_t, 2>(k, m));
-    Matrix b(rhs, TransposeB ? dextents<int32_t, 2>(k, n) : dextents<int32_t, 2>(n, k));
-    Matrix c(output, dextents<int32_t, 2>(n, m));
     constexpr auto descriptor =
         mpp::tensor_ops::matmul2d_descriptor(Tile, Tile, static_cast<int>(dynamic_extent), false, TransposeB);
     mpp::tensor_ops::matmul2d<descriptor, execution_simdgroups<4>> matmul;
     const int row = int(group.y) * Tile, column = int(group.x) * Tile;
-    auto a_tile = a.slice(0, row);
-    auto b_tile = TransposeB ? b.slice(0, column) : b.slice(column, 0);
-    auto c_tile = c.slice(column, row);
+    // The views index in int32, so slicing whole matrices wraps past 2^31 elements. Each tile's rows start from a
+    // 64-bit offset instead, as do the columns of a transposed B; the views are the same, so are the results.
+    // Extents list the innermost dimension first.
+    Matrix a_tile(lhs + ulong(row) * uint(k), dextents<int32_t, 2>(k, m - row));
+    Matrix b(TransposeB ? rhs + ulong(column) * uint(k) : rhs,
+             TransposeB ? dextents<int32_t, 2>(k, n - column) : dextents<int32_t, 2>(n, k));
+    auto b_tile = b.slice(TransposeB ? 0 : column, 0);
+    Matrix c_rows(output + ulong(row) * uint(n), dextents<int32_t, 2>(n, m - row));
+    auto c_tile = c_rows.slice(column, 0);
     if (kBiasRelu == 0) {
         matmul.run(a_tile, b_tile, c_tile);
         return;

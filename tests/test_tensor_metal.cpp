@@ -2799,4 +2799,23 @@ namespace {
         }
     }
 
+    // A GEMM whose output passes 2^31 floats: C[i][j] = i for A[i] = (i, 0, 0, 0) and B all ones. Rows past 65,408 sit
+    // more than 2^31 elements into C, past what the tiles' int32 views could reach from the matrix start. Opt-in, 8.6 GB.
+    TEST_F(TensorMetal, GemmRowsPastInt32ElementsAreExact) {
+        if (std::getenv("LFS_TEST_LARGE_SH") == nullptr)
+            GTEST_SKIP() << "Set LFS_TEST_LARGE_SH=1 for this 8.6 GB test";
+        GpuBackendScope scope(GpuBackend::Metal);
+        constexpr size_t m = 65600, n = 32832, k = 4;
+        std::vector<float> a(m * k, 0.0f);
+        for (size_t i = 0; i < m; ++i)
+            a[i * k] = static_cast<float>(i);
+        const Tensor product = Tensor::from_vector(a, {m, k}, Device::CPU).to(Device::GPU).mm(Tensor::ones({k, n}, Device::GPU));
+        for (const size_t first : {size_t{0}, size_t{65300}}) {
+            const auto rows = product.slice(0, first, first + 300).contiguous().cpu().to_vector();
+            for (size_t r = 0; r < 300; ++r)
+                for (size_t j = 0; j < n; j += 997)
+                    ASSERT_EQ(rows[r * n + j], static_cast<float>(first + r)) << "row " << first + r << " column " << j;
+        }
+    }
+
 } // namespace
