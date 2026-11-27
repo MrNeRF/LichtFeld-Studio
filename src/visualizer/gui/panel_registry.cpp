@@ -680,9 +680,11 @@ apply_registered_chrome:
     void PanelRegistry::render_space_panels(PanelSpace space, const PanelDrawContext& ctx,
                                             const PanelInputState* input) {
         std::vector<PanelSnapshot> snapshots;
+        bool explicit_floating_raise = false;
         {
             std::lock_guard lock(mutex_);
             if (space == PanelSpace::Floating) {
+                explicit_floating_raise = std::exchange(explicit_floating_raise_pending_, false);
                 for (auto& [id, interaction] : floating_interactions_) {
                     (void)id;
                     interaction.last_bounds_valid = false;
@@ -1122,8 +1124,9 @@ apply_registered_chrome:
                                         return entry.second.dragging || entry.second.resizing;
                                     });
 
-                                if (interactive && (layout.mouse_in_panel || layout.mouse_in_resize_grip) &&
-                                    mouse_clicked_left) {
+                                // A click can already have raised another panel through its action.
+                                if (!explicit_floating_raise && interactive &&
+                                    (layout.mouse_in_panel || layout.mouse_in_resize_grip) && mouse_clicked_left) {
                                     bring_floating_panel_to_front_locked(pi);
                                 }
 
@@ -1954,6 +1957,7 @@ apply_registered_chrome:
         requested_panel_payloads_.clear();
         floating_interactions_.clear();
         next_float_stack_order_ = 1;
+        explicit_floating_raise_pending_ = false;
         minimized_first_slot_ = 0;
         minimized_scroll_to_end_ = false;
         for (auto& panel : panels_) {
@@ -2182,6 +2186,7 @@ apply_registered_chrome:
                     if (interaction.window_state == FloatingWindowState::Minimized)
                         interaction.window_state = interaction.before_minimize;
                     bring_floating_panel_to_front_locked(p);
+                    explicit_floating_raise_pending_ = true;
                     panel = p.panel;
                     break;
                 }

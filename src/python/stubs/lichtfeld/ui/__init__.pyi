@@ -1977,6 +1977,9 @@ def open_folder_dialog(title: str = 'Select Folder', start_dir: str = '') -> str
     Open a folder selection dialog. Returns empty string if cancelled. title is accepted for compatibility and currently ignored.
     """
 
+def open_file_dialog(start_dir: str = '') -> str:
+    """Open a native file picker. Returns an empty string on cancellation."""
+
 def open_project_file_dialog(start_dir: str = '') -> str:
     """
     Open a file dialog to select a LichtFeld project (.licht). Returns empty string if cancelled.
@@ -3238,6 +3241,9 @@ def get_mcp_status() -> dict:
 
 def get_mcp_log_directory() -> str:
     """Return the MCP per-session log directory"""
+
+def open_preferences(section: str = '') -> None:
+    """Open Preferences at the requested section"""
 
 def take_preferences_section_request() -> str:
     """Consume a requested Preferences section name"""

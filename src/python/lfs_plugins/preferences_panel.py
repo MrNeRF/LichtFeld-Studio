@@ -9,6 +9,7 @@ import shutil
 from .asset_index import AssetIndex, resolve_asset_manager_storage_path, resolve_default_asset_directory
 from .asset_watch import scan_all_asset_folders, scan_asset_folder
 
+from . import blender_extension
 from .keymap_bindings import KeymapBindingsSection
 from .model_preferences import ModelPreferencesSection
 from .gamepad_preferences import GamepadTestSection
@@ -135,6 +136,7 @@ class PreferencesPanel(Panel):
         self._vr_runtime_selected = ""
         self._last_state = None
         self._marketplace_git_available = shutil.which("git") is not None
+        self._blender = blender_extension.PanelSection()
         self._section = "general"
         self._input_page = "navigation"
         self._input_expanded = False
@@ -187,6 +189,9 @@ class PreferencesPanel(Panel):
         model.bind_func("show_viewport", lambda: self._section == "viewport")
         model.bind_event("show_viewport", lambda *_: self._set_section("viewport"))
         model.bind_func("panel_label", lambda: lf.ui.tr("preferences.title"))
+        self._blender.bind(model)
+        model.bind_func("show_integrations", lambda: self._section == "integrations")
+        model.bind_event("show_integrations", lambda *_: self._set_section("integrations"))
         model.bind_func("marketplace_git_available", lambda: self._marketplace_git_available)
         model.bind_func("show_marketplace", lambda: self._section == "marketplace")
         model.bind_event("show_marketplace", lambda *_: self._set_section("marketplace"))
@@ -385,6 +390,7 @@ class PreferencesPanel(Panel):
         model.bind_record_list("navigation_modes")
         model.bind_record_list("file_associations")
         self._handle = model.get_handle()
+        self._blender.set_handle(self._handle)
         self._models.handle = self._handle
         self._portal_state_binding.set_handle(self._handle)
         self._keymap.bind(model)
@@ -436,6 +442,7 @@ class PreferencesPanel(Panel):
             self._scrub_fields.mount(doc)
 
     def on_unmount(self, doc):
+        self._blender.set_handle(None)
         self._models.handle = None
         self._models.cancel_pending_confirmation()
         self._gamepad_test.close()
@@ -1577,7 +1584,7 @@ class PreferencesPanel(Panel):
 
     def _consume_section_request(self):
         section = lf.ui.take_preferences_section_request()
-        if section in ("general", "appearance", "viewport", "input", "interface", "file_associations", "mcp", "marketplace", "models"):
+        if section in ("general", "appearance", "viewport", "input", "interface", "file_associations", "mcp", "marketplace", "models", "integrations"):
             if section == "file_associations" and not self._has_file_associations():
                 return
             self._set_section(section)
@@ -1671,6 +1678,7 @@ class PreferencesPanel(Panel):
                 "show_mcp",
                 "show_portal",
                 "show_marketplace",
+                "show_integrations",
                 "show_section_reset",
                 "reset_section_label",
             ):
@@ -1741,7 +1749,7 @@ class PreferencesPanel(Panel):
         return connection_action(self._portal_connection_state())[0]
 
     def _show_section_reset(self):
-        return self._section not in ("portal", "file_associations", "models") and not (
+        return self._section not in ("portal", "file_associations", "models", "integrations") and not (
             self._section == "mcp" and self._mcp_safe_mode) and not (
             self._section == "input" and self._input_page == "gamepad" and self._gamepad_page != "controls")
 

@@ -512,6 +512,7 @@ namespace lfs::vis::gui {
         std::unordered_map<std::string, std::string>
             requested_panel_payloads_;
         uint64_t next_float_stack_order_ = 1;
+        bool explicit_floating_raise_pending_ = false;
         uint64_t registration_revision_ = 0;
         uint64_t visibility_revision_ = 0;
         uint64_t localized_label_generation_ = 0;

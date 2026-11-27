@@ -23,6 +23,7 @@
       <button class="btn preferences-nav-item" data-class-active="show_interface" data-event-click="show_interface">@tr:preferences.interface</button>
       <button class="btn preferences-nav-item" data-class-active="show_file_associations" data-event-click="show_file_associations" data-if="has_file_associations">@tr:preferences.file_associations</button>
       <button class="btn preferences-nav-item" data-class-active="show_models" data-event-click="show_models">@tr:preferences.models.title</button>
+      <button class="btn preferences-nav-item" data-class-active="show_integrations" data-event-click="show_integrations">@tr:blender_integration.section</button>
       <button class="btn preferences-nav-item" data-class-active="show_marketplace" data-event-click="show_marketplace">@tr:preferences.marketplace</button>
       <button class="btn preferences-nav-item" data-class-active="show_mcp" data-event-click="show_mcp">@tr:preferences.mcp</button>
       <button class="btn preferences-nav-item" data-class-active="show_portal" data-event-click="show_portal">@tr:preferences.portal</button>
@@ -151,6 +152,56 @@
             <select class="preferences-select" data-value="gallery_uploadFormat"><option value="auto">@tr:projects.gallery.format.auto</option><option value="studio">@tr:projects.gallery.format.studio</option><option value="sog">@tr:projects.gallery.format.sog</option><option value="ssog">@tr:projects.gallery.format.ssog</option><option value="spz">@tr:projects.gallery.format.spz</option></select></div>
           <div class="preferences-row"><span class="preferences-label">@tr:preferences.gallery.cache</span><input class="preferences-select" type="text" data-value="gallery_posterCacheMiB" /></div>
           <span class="preferences-description">{{gallery_preferences_error}}</span>
+        </div>
+      </div>
+
+      <div class="preferences-section" data-if="show_integrations">
+        <div class="section-header text-accent">@tr:blender_integration.title</div>
+        <div class="section-content">
+          <div class="preferences-row">
+            <span class="preferences-label">@tr:blender_integration.executable</span>
+            <input type="text" class="preferences-select preferences-path-input" data-value="blender_path" data-attrif-disabled="blender_busy" />
+            <button class="btn btn--secondary" data-event-click="blender_browse" data-attrif-disabled="blender_busy">@tr:common.browse</button>
+          </div>
+          <div class="preferences-row">
+            <span class="preferences-label">@tr:blender_integration.channel</span>
+            <select class="preferences-select" data-value="blender_channel" data-attrif-disabled="blender_busy">
+              <option value="stable">@tr:blender_integration.stable</option>
+              <option value="beta">@tr:blender_integration.beta</option>
+            </select>
+          </div>
+          <div class="preferences-row" data-if="blender_version != ''">
+            <span class="preferences-label">@tr:blender_integration.application</span><span>{{blender_version}}</span>
+          </div>
+          <div class="preferences-row" data-if="blender_destination != ''">
+            <span class="preferences-label">@tr:blender_integration.destination</span><span class="preferences-destination">{{blender_destination}}</span>
+          </div>
+          <div class="preferences-row">
+            <span class="preferences-label">@tr:blender_integration.installed</span><span>{{blender_installed}}</span>
+          </div>
+          <div class="preferences-row" data-if="blender_has_releases">
+            <span class="preferences-label">@tr:blender_integration.available</span>
+            <span>{{blender_selected_version}}</span>
+            <button class="btn btn--secondary" data-if="!blender_version_picker_open" data-event-click="blender_toggle_version_picker" data-attrif-disabled="blender_busy">@tr:blender_integration.choose_version</button>
+            <button class="btn btn--secondary" data-if="blender_version_picker_open" data-event-click="blender_toggle_version_picker" data-attrif-disabled="blender_busy">@tr:common.cancel</button>
+          </div>
+          <div data-if="blender_has_releases &amp;&amp; blender_version_picker_open">
+            <div class="preferences-row">
+              <input type="text" class="preferences-select preferences-path-input" data-value="blender_version_query" placeholder="@tr:blender_integration.find_version" data-attrif-disabled="blender_busy" />
+            </div>
+            <div class="preferences-row" data-if="!blender_has_version_matches">@tr:blender_integration.no_version_matches</div>
+            <div class="preferences-row" data-for="release : blender_release_versions">
+              <button class="btn btn--secondary" data-event-click="blender_choose_version(release.version)" data-attrif-disabled="blender_busy">{{release.version}}</button>
+            </div>
+          </div>
+          <div class="preferences-description">{{blender_status}}</div>
+          <div class="preferences-row">
+            <button class="btn btn--secondary" data-event-click="blender_check" data-attrif-disabled="blender_busy">@tr:blender_integration.check</button>
+            <button class="btn" data-event-click="blender_install" data-if="!blender_can_replace" data-attrif-disabled="!blender_installable">{{blender_action}}</button>
+            <button class="btn btn--secondary" data-event-click="blender_replace" data-if="blender_can_replace" data-attrif-disabled="blender_busy">{{blender_replace_action}}</button>
+            <button class="btn btn--secondary" data-event-click="blender_open" data-attrif-disabled="blender_busy">@tr:blender_integration.open</button>
+            <button class="btn btn--secondary" data-event-click="blender_releases">@tr:blender_integration.releases</button>
+          </div>
         </div>
       </div>
 
