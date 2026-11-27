@@ -31,7 +31,8 @@ def test_project_folder_remove_label_uses_sentence_case_in_all_locales():
 
 
 @pytest.fixture
-def preferences_panel_module(monkeypatch):
+def preferences_panel_module(monkeypatch, tmp_path):
+    monkeypatch.setenv("LFS_RESOLVED_DATA_DIR", str(tmp_path))
     project_root = Path(__file__).parent.parent.parent
     source_python = project_root / "src" / "python"
     if str(source_python) in sys.path:
@@ -939,14 +940,15 @@ def test_starting_listener_does_not_retry_an_already_confirmed_port(
     assert state.set_mcp_calls == []
 
 
-def test_mcp_section_request_is_consumed_once(preferences_panel_module):
+@pytest.mark.parametrize("section", ["mcp", "integrations"])
+def test_section_request_is_consumed_once(preferences_panel_module, section):
     module, state = preferences_panel_module
     panel = module.PreferencesPanel()
-    state.section_request = "mcp"
+    state.section_request = section
 
     panel._consume_section_request()
 
-    assert panel._section == "mcp"
+    assert panel._section == section
     assert state.section_request == ""
 
 
@@ -1541,6 +1543,7 @@ def test_input_group_collapses_without_changing_page_and_children_reopen_it(pref
 
 @pytest.mark.parametrize("section,safe,visible", [
     ("portal", False, False), ("file_associations", False, False),
+    ("integrations", False, False),
     ("mcp", True, False), ("mcp", False, True), ("input", True, True),
 ])
 def test_reset_visibility_respects_scope_and_safe_mode(preferences_panel_module, section, safe, visible):

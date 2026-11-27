@@ -87,6 +87,7 @@ class GettingStartedPanel(Panel):
             model.bind_event(binding_name,
                              lambda *_args, section=section: self._set_section(section))
         model.bind_event("open_url", self._on_open_url)
+        model.bind_event("open_blender", self._on_open_blender)
         self._handle = model.get_handle()
 
     def _set_section(self, section):
@@ -133,6 +134,10 @@ class GettingStartedPanel(Panel):
         doc.remove_data_model("getting_started")
         self._handle = None
         super().on_unmount(doc)
+
+    @staticmethod
+    def _on_open_blender(*_):
+        lf.ui.open_preferences("integrations")
 
     def _on_open_url(self, _handle, event, _args):
         target = event.current_target()

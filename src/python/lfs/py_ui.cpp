@@ -3462,6 +3462,14 @@ namespace lfs::python {
             "title is accepted for compatibility and currently ignored.");
 
         m.def(
+            "open_file_dialog",
+            [](const std::string& start_dir) {
+                const auto path = vis::gui::OpenFileDialog(core::utf8_to_path(start_dir));
+                return path.empty() ? std::string{} : core::path_to_utf8(path);
+            },
+            nb::arg("start_dir") = "", "Open a native file picker. Returns an empty string on cancellation.");
+
+        m.def(
             "open_project_file_dialog",
             [](const std::string& start_dir) -> std::string {
                 std::filesystem::path start_path;
@@ -6568,6 +6576,9 @@ namespace lfs::python {
                 return path;
             },
             "Return the MCP per-session log directory");
+
+        m.def("open_preferences", &vis::gui::openPreferencesPanel,
+              nb::arg("section") = "", "Open Preferences at the requested section");
 
         m.def(
             "take_preferences_section_request",

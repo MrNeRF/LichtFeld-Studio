@@ -184,6 +184,7 @@
     <button id="wiki-section" class="btn wiki-link"
             data-url="https://github.com/MrNeRF/LichtFeld-Studio/wiki"
             data-event-click="open_url">@tr:getting_started.documentation</button>
+    <button class="btn wiki-link" data-event-click="open_blender">@tr:blender_integration.title</button>
   </div>
 </body>
 </rml>
