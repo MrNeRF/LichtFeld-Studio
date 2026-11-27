@@ -2795,7 +2795,8 @@ namespace lfs::training {
                 .detail = std::format(
                     "Cannot resume depth supervision: {} Restore the original depth maps and anchor sidecar, "
                     "restore the initial geometry, or disable depth supervision before retrying. "
-                    "With an available source point cloud, --refit-depth-anchors allows new targets in headless mode.",
+                    "Use --refit-depth-anchors to allow new targets in headless mode. If the source cloud moved, "
+                    "supply its path with --init.",
                     detail),
                 .detection = LFS_SOURCE_SITE_CURRENT(),
             }));
@@ -2814,10 +2815,12 @@ namespace lfs::training {
         const bool resumed = current_iteration_.load() > 0;
         std::optional<std::uint64_t> seed;
         bool allow_new_targets = false;
+        std::optional<std::string> refit_source;
         {
             std::lock_guard lock(params_mutex_);
             seed = depth_anchor_seed_;
             allow_new_targets = std::exchange(params_.refit_depth_anchors, false);
+            refit_source = std::exchange(params_.depth_anchor_refit_source, std::nullopt);
         }
         lfs::core::Tensor means;
         if (!resumed) {
@@ -2828,17 +2831,30 @@ namespace lfs::training {
             }
             seed = computeAnchorSeedFingerprint(means);
         }
+        const bool resume_without_seed = resumed && !seed;
         const auto recover_seed = [&]() -> lfs::Result<void> {
-            auto loaded = loadInitialPointCloud(params_, scene_->getTrainingDataOrigin());
+            auto source = getParams();
+            if (allow_new_targets && refit_source)
+                source.init_path = refit_source;
+            auto loaded = loadInitialPointCloud(source, scene_->getTrainingDataOrigin());
             if (!loaded)
                 return unavailable(std::format("Cannot recover the initial point cloud: {}", lfs::format_for_developer(loaded.error())));
             if (!*loaded || !(*loaded)->means.is_valid() || (*loaded)->means.numel() == 0)
                 return unavailable("The original training geometry is unavailable.");
             means = (*loaded)->means.to(lfs::core::DataType::Float32).contiguous();
             const auto recovered = computeAnchorSeedFingerprint(means);
-            if (seed && recovered != *seed) {
-                if (!allow_new_targets)
+            const auto& opt = source.optimization;
+            const bool lost_legacy_geometry =
+                resume_without_seed &&
+                (opt.random || !source.add_splat_paths.empty() || !opt.noise_infill_mesh.empty() ||
+                 (opt.max_cap > 0 && (*loaded)->size() > opt.max_cap));
+            if ((seed && recovered != *seed) || lost_legacy_geometry) {
+                if (!allow_new_targets) {
+                    if (lost_legacy_geometry)
+                        return unavailable("This checkpoint has no anchor seed and its initial model cannot be "
+                                           "reconstructed from the source cloud alone.");
                     return unavailable("The recovered point cloud differs from the checkpoint's original anchor geometry.");
+                }
                 LOG_WARN("Depth anchors: --refit-depth-anchors authorized new supervision targets from the source point cloud");
             }
             seed = recovered;
@@ -2863,46 +2879,61 @@ namespace lfs::training {
             cameras.push_back(group.photograph);
         const auto sidecar = depthAnchorSidecarPath(cameras);
 
-        const bool resume_without_seed = resumed && !seed;
         if (resume_without_seed) {
             LOG_INFO("Depth anchors: recovering the initial point cloud for a resume without a saved anchor seed");
             if (auto result = recover_seed(); !result)
                 return result;
         }
-        LOG_INFO("Depth anchors: validating depth files for {} photographs", cameras.size());
-        nvtxRangePush("depth_anchors/fingerprint");
-        const auto fingerprint_start = std::chrono::steady_clock::now();
-        auto fingerprint = computeAnchorFingerprint(*seed, cameras);
-        const auto fingerprint_ms = phase_ms(fingerprint_start);
-        nvtxRangePop();
+        DepthAnchorFingerprint fingerprint;
+        double fingerprint_ms = 0.0;
+        double source_ms = 0.0;
+        const auto try_cached_anchors = [&] {
+            LOG_INFO("Depth anchors: validating depth files for {} photographs", cameras.size());
+            {
+                nvtxRangePush("depth_anchors/fingerprint");
+                const FitRange fingerprint_range;
+                const auto start = std::chrono::steady_clock::now();
+                fingerprint = computeAnchorFingerprint(*seed, cameras, [](std::size_t file, std::size_t total) {
+                    if (file == 1 || file == total || file % 256 == 0)
+                        LOG_INFO("Depth anchors: checking depth file {}/{}", file, total);
+                });
+                fingerprint_ms += phase_ms(start);
+            }
+            nvtxRangePush("depth_anchors/read_sidecar");
+            const FitRange read_range;
+            const auto start = std::chrono::steady_clock::now();
+            auto result = readDepthAnchorSidecar(sidecar, fingerprint);
+            source_ms += phase_ms(start);
+            if (!result)
+                LOG_INFO("Depth anchors: cache miss after {:.1f} ms fingerprinting ({})", fingerprint_ms, result.error());
+            return result;
+        };
 
-        RawDepthAnchorMap raw;
-        nvtxRangePush("depth_anchors/read_sidecar");
-        const auto read_start = std::chrono::steady_clock::now();
-        auto cached = readDepthAnchorSidecar(sidecar, fingerprint);
-        const auto read_ms = phase_ms(read_start);
-        nvtxRangePop();
-
-        double source_ms = read_ms;
-        if (cached) {
-            raw = std::move(*cached);
-            LOG_INFO("Depth anchors: loaded {} cached anchors from {}", raw.size(), lfs::core::path_to_utf8(sidecar));
-        } else {
-            LOG_INFO("Depth anchors: cache miss after {:.1f} ms fingerprinting ({})", fingerprint_ms, cached.error());
-            if (resumed && fingerprint.version == 0)
+        auto cached = try_cached_anchors();
+        if (!cached && resumed) {
+            if (fingerprint.version == 0)
                 return unavailable("The depth files could not be fingerprinted.");
             if (resume_without_seed) {
                 LOG_WARN("Depth anchors: no saved seed or matching sidecar; fitting against the recovered initial point cloud");
-            } else if (resumed) {
+            } else {
                 const auto saved_seed = seed;
                 if (auto result = recover_seed(); !result)
                     return result;
                 if (seed != saved_seed) {
-                    fingerprint = computeAnchorFingerprint(*seed, cameras);
+                    // A prior authorized refit may have written the sidecar before
+                    // the training run reached its next checkpoint.
+                    cached = try_cached_anchors();
                     if (fingerprint.version == 0)
                         return unavailable("The depth files could not be fingerprinted for the new anchor seed.");
                 }
             }
+        }
+
+        RawDepthAnchorMap raw;
+        if (cached) {
+            raw = std::move(*cached);
+            LOG_INFO("Depth anchors: loaded {} cached anchors from {}", raw.size(), lfs::core::path_to_utf8(sidecar));
+        } else {
             LOG_INFO("Depth anchors: no matching readable sidecar; fitting against the initial geometry");
             const auto compute_start = std::chrono::steady_clock::now();
             {

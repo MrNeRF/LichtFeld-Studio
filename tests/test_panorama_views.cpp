@@ -13,6 +13,7 @@
 #include "training/popspa_cameras.hpp"
 #include "training/strategies/strategy_factory.hpp"
 #include "training/trainer.hpp"
+#include <chrono>
 #include <format>
 #include <glm/geometric.hpp>
 #include <glm/vec3.hpp>
@@ -728,6 +729,28 @@ namespace {
         EXPECT_EQ(TrainerDepthAnchorTestAccess::snapshot_params(resumed).depth_anchor_seed_v1, saved_seed);
         EXPECT_TRUE(readDepthAnchorSidecar(sidecar, computeAnchorFingerprint(means, {photo})));
         EXPECT_FALSE(readDepthAnchorSidecar(sidecar, computeAnchorFingerprint(strategy->get_model().means(), {photo})));
+
+        // The checkpoint still refers to the old seed if the first run stopped
+        // after replacing the sidecar but before writing its next checkpoint.
+        const auto old_write_time = std::filesystem::last_write_time(sidecar) - std::chrono::seconds(10);
+        std::filesystem::last_write_time(sidecar, old_write_time);
+        auto retry_params = first_depth_params;
+        retry_params.refit_depth_anchors = true;
+        TrainerDepthAnchorTestAccess::resume(resumed, computeAnchorSeedFingerprint(strategy->get_model().means()));
+        const auto retried = TrainerDepthAnchorTestAccess::fit(resumed, retry_params, {photo}, strategy);
+        ASSERT_TRUE(retried) << retried.error().detail();
+        EXPECT_EQ(std::filesystem::last_write_time(sidecar), old_write_time);
+        EXPECT_EQ(TrainerDepthAnchorTestAccess::snapshot_params(resumed).depth_anchor_seed_v1, saved_seed);
+
+        auto random_legacy_params = first_depth_params;
+        random_legacy_params.init_path.reset();
+        random_legacy_params.depth_anchor_refit_source = first_depth_params.init_path;
+        random_legacy_params.refit_depth_anchors = true;
+        random_legacy_params.optimization.random = true;
+        TrainerDepthAnchorTestAccess::resume(resumed, std::nullopt);
+        const auto random_recovered = TrainerDepthAnchorTestAccess::fit(resumed, random_legacy_params, {photo}, strategy);
+        ASSERT_TRUE(random_recovered) << random_recovered.error().detail();
+        EXPECT_EQ(std::filesystem::last_write_time(sidecar), old_write_time);
     }
 
     // Fails if area resampling takes a fixed number of samples per face pixel: toward a pole one face pixel spans

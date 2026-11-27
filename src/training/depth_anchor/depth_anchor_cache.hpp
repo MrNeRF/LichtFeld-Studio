@@ -61,7 +61,8 @@ namespace lfs::training {
     [[nodiscard]] std::uint64_t computeAnchorSeedFingerprint(const lfs::core::Tensor& means);
     [[nodiscard]] DepthAnchorFingerprint computeAnchorFingerprint(
         std::uint64_t seed_fingerprint,
-        const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras);
+        const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras,
+        const DepthAnchorProgress& progress = {});
 
     [[nodiscard]] inline DepthAnchorFingerprint computeAnchorFingerprint(
         const lfs::core::Tensor& means,

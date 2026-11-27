@@ -359,7 +359,8 @@ namespace lfs::training {
 
     DepthAnchorFingerprint computeAnchorFingerprint(
         std::uint64_t hash,
-        const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras) {
+        const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras,
+        const DepthAnchorProgress& progress) {
         DepthAnchorFingerprint fingerprint;
         fingerprint.version = kSchemaVersion;
 
@@ -375,7 +376,10 @@ namespace lfs::training {
                       return a->image_name() < b->image_name();
                   });
 
+        std::size_t checked = 0;
         for (const auto* cam : depth_cameras) {
+            if (progress)
+                progress(++checked, depth_cameras.size());
             const std::string& name = cam->image_name();
             hash_bytes(hash, name.data(), name.size());
             hash_scalar(hash, cam->focal_x());
@@ -429,6 +433,7 @@ namespace lfs::training {
                 hash_bytes(hash, buffer.data(), static_cast<std::size_t>(depth.gcount()));
             }
             if (!depth.eof() || depth.bad()) {
+                LOG_WARN("Depth anchors: unable to read {}", lfs::core::path_to_utf8(cam->depth_path()));
                 // An incomplete fingerprint must neither reuse nor publish a cache.
                 return {};
             }

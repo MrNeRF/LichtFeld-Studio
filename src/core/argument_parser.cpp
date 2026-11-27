@@ -1324,20 +1324,21 @@ namespace {
                 params.refit_depth_anchors = true;
             }
             if (init_path) {
-                if (params.resume_checkpoint || params.resume_project) {
-                    return std::unexpected("--init cannot be used together with --resume");
-                }
-
-                if (random) {
+                const bool resuming = params.resume_checkpoint || params.resume_project;
+                if (resuming && !params.refit_depth_anchors)
+                    return std::unexpected("--init with --resume requires --refit-depth-anchors");
+                if (!resuming && random)
                     return std::unexpected("--init cannot be used together with --random");
-                }
 
                 const auto path_str = ::args::get(init_path);
-                params.init_path = lfs::core::path_to_utf8(absolute_input_path(path_str));
-
-                if (!lfs::core::native_fs::exists(lfs::core::utf8_to_path(path_str))) {
+                const auto initial_source = absolute_input_path(path_str);
+                if (!lfs::core::native_fs::exists(initial_source))
                     return std::unexpected(std::format("Initialization file does not exist: {}", path_str));
-                }
+
+                if (resuming)
+                    params.depth_anchor_refit_source = lfs::core::path_to_utf8(initial_source);
+                else
+                    params.init_path = lfs::core::path_to_utf8(initial_source);
             }
 
             if (cropbox) {
