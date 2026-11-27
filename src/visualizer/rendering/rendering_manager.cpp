@@ -976,9 +976,14 @@ namespace lfs::vis {
     }
 
     void RenderingManager::advanceSplitOffset() {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        split_view_service_.advanceSplitOffset(settings_);
-        markDirty(DirtyFlag::SPLIT_VIEW, lfs::vis::FrameReason::SettingsChange);
+        SplitViewService::ModeChangeResult result;
+        {
+            std::lock_guard<std::mutex> lock(settings_mutex_);
+            split_view_service_.advanceSplitOffset(settings_);
+            result = split_view_service_.handleComparableNodesChanged(settings_, services().sceneOrNull());
+            markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SettingsChange);
+        }
+        applySplitModeChange(result);
     }
 
     SplitViewInfo RenderingManager::getSplitViewInfo() const {
@@ -1031,6 +1036,13 @@ namespace lfs::vis {
         if (independent_panel_overrides_) {
             return false;
         }
+        if (splitViewUsesGTComparison(mode) && !isGTComparisonActive() && !hasGTComparisonAvailable()) {
+            LOG_WARN("GT comparison requires a loaded dataset with source images");
+            return false;
+        }
+        if (mode == SplitViewMode::IndependentDual && !isIndependentSplitViewActive() && !primary_viewport) {
+            return false;
+        }
         if (splitViewUsesNodeComparison(mode)) {
             const auto* const scene_manager = services().sceneOrNull();
             std::optional<int32_t> left_id;
@@ -1051,11 +1063,30 @@ namespace lfs::vis {
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
             result = split_view_service_.setMode(settings_, mode, primary_viewport);
+            if (result.current_mode == SplitViewMode::IndependentDual &&
+                (result.mode_changed || result.render_settings_changed)) {
+                syncGridPlanesLocked(settings_.grid_plane);
+            }
             if (result.mode_changed || result.render_settings_changed) {
-                markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SettingsChange);
+                if (splitViewUsesGTComparison(result.current_mode) ||
+                    splitViewUsesGTComparison(result.previous_mode)) {
+                    markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::SPLATS | DirtyFlag::OVERLAY,
+                              lfs::vis::FrameReason::SceneChange);
+                } else if (result.current_mode == SplitViewMode::IndependentDual ||
+                           result.previous_mode == SplitViewMode::IndependentDual) {
+                    markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::CAMERA | DirtyFlag::OVERLAY,
+                              lfs::vis::FrameReason::CameraMotion);
+                } else {
+                    markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::OVERLAY,
+                              lfs::vis::FrameReason::SettingsChange);
+                }
             }
         }
         applySplitModeChange(result);
+        if (splitViewUsesGTComparison(result.previous_mode) &&
+            !splitViewUsesGTComparison(result.current_mode)) {
+            invalidateCameraMetricsRequests(true);
+        }
         return true;
     }
 
@@ -1086,6 +1117,10 @@ namespace lfs::vis {
             }
         }
         applySplitModeChange(result);
+        if (splitViewUsesGTComparison(result.previous_mode) &&
+            !splitViewUsesGTComparison(result.current_mode)) {
+            invalidateCameraMetricsRequests(true);
+        }
         return true;
     }
 
@@ -1120,6 +1155,10 @@ namespace lfs::vis {
             }
         }
         applySplitModeChange(result);
+        if (splitViewUsesGTComparison(result.previous_mode) &&
+            !splitViewUsesGTComparison(result.current_mode)) {
+            invalidateCameraMetricsRequests(true);
+        }
         return true;
     }
 

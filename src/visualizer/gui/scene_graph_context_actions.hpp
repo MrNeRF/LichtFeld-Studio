@@ -18,8 +18,9 @@ namespace lfs::vis::gui {
             if (node->model && node->model->size() > 0) {
                 return true;
             }
-            for (const auto& slot : scene.getVisibleSplatNodeSlots()) {
-                if (slot.node && slot.node->id == node->id) {
+            for (const auto& slot : scene.getCombinedSplatNodeSlots()) {
+                if (slot.node && slot.node->id == node->id &&
+                    slot.node->gaussian_count.load(std::memory_order_acquire) > 0) {
                     return true;
                 }
             }
@@ -27,7 +28,7 @@ namespace lfs::vis::gui {
         case core::NodeType::POINTCLOUD:
             return node->point_cloud && node->point_cloud->size() > 0;
         case core::NodeType::MESH:
-            return node->mesh != nullptr;
+            return node->mesh != nullptr && scene.isNodeEffectivelyVisible(node->id);
         default:
             return false;
         }

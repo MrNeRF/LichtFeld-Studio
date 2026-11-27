@@ -1819,8 +1819,11 @@ namespace lfs::vis {
                 context.panel,
                 settings.split_view_left_node_id,
                 settings.split_view_right_node_id);
-            if (sample.node && sample.node->type != core::NodeType::SPLAT) {
-                // Non-splat panels (meshes, point clouds) show no Gaussians to pick.
+            if (sample.node &&
+                (sample.node->type != core::NodeType::SPLAT ||
+                 !scene.isNodeEffectivelyVisible(sample.node->id))) {
+                // Non-splat panels (meshes, point clouds) and hidden pinned splats
+                // are outside the visible Gaussian selection domain.
                 viewport_screen_positions_[panel_index].reset();
                 viewport_screen_position_keys_[panel_index] = {};
                 return nullptr;
@@ -1887,6 +1890,11 @@ namespace lfs::vis {
                     viewport_screen_positions_[panel_index] = screen_positions;
                     viewport_screen_position_keys_[panel_index] = key;
                     return screen_positions;
+                }
+                if (!found_node) {
+                    viewport_screen_positions_[panel_index].reset();
+                    viewport_screen_position_keys_[panel_index] = {};
+                    return nullptr;
                 }
             }
             // Owned-panel projection was not possible (consolidated nodes, empty

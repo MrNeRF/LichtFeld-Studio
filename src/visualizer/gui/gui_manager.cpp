@@ -7270,7 +7270,7 @@ namespace lfs::vis::gui {
                         const auto* end = begin + released->data.size();
                         if (const auto [ptr, ec] = std::from_chars(begin, end, node_id);
                             ec == std::errc{} && ptr == end && node_id != core::NULL_NODE) {
-                            const float split_ratio = rendering->isNodeComparisonActive()
+                            const float split_ratio = rendering->isSplitViewActive()
                                                           ? std::clamp(rendering->getSplitPosition(), 0.0f, 1.0f)
                                                           : 0.5f;
                             const float divider_x = viewport_layout_.pos.x + viewport_layout_.size.x * split_ratio;

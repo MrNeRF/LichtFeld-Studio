@@ -889,8 +889,9 @@ namespace lfs::vis {
             if (hasRenderableGaussians(node.model.get())) {
                 return true;
             }
-            for (const auto& slot : scene.getVisibleSplatNodeSlots()) {
-                if (slot.node && slot.node->id == node.id) {
+            for (const auto& slot : scene.getCombinedSplatNodeSlots()) {
+                if (slot.node && slot.node->id == node.id &&
+                    slot.node->gaussian_count.load(std::memory_order_acquire) > 0) {
                     return true;
                 }
             }
@@ -898,7 +899,7 @@ namespace lfs::vis {
         case core::NodeType::POINTCLOUD:
             return node.point_cloud && node.point_cloud->size() > 0;
         case core::NodeType::MESH:
-            return node.mesh != nullptr;
+            return node.mesh != nullptr && scene.isNodeEffectivelyVisible(node.id);
         default:
             return false;
         }
@@ -962,10 +963,19 @@ namespace lfs::vis {
             if (!node) {
                 return std::nullopt;
             }
-            // Explicitly pinned splats with owned storage and point clouds can be
-            // compared even when hidden; meshes rely on the visible mesh pass.
-            if (node->type == core::NodeType::SPLAT && hasRenderableGaussians(node->model.get())) {
-                return NodeComparisonNode{.node = node, .splat_slot = std::nullopt};
+            // Explicitly pinned splats (owned or consolidated) and point clouds can
+            // be compared even when hidden; meshes rely on the visible mesh pass.
+            if (node->type == core::NodeType::SPLAT) {
+                if (hasRenderableGaussians(node->model.get())) {
+                    return NodeComparisonNode{.node = node, .splat_slot = std::nullopt};
+                }
+                for (const auto& slot : scene.getCombinedSplatNodeSlots()) {
+                    if (slot.node && slot.node->id == node->id &&
+                        slot.node->gaussian_count.load(std::memory_order_acquire) > 0) {
+                        return NodeComparisonNode{.node = node, .splat_slot = slot.slot_index};
+                    }
+                }
+                return std::nullopt;
             }
             if (node->type == core::NodeType::POINTCLOUD &&
                 node->point_cloud && node->point_cloud->size() > 0) {
@@ -1046,25 +1056,92 @@ namespace lfs::vis {
         // visibility and SH limits; the renderer uses this model's active SH
         // degree. The caller supplies the node's world transform separately.
         scene = {};
-        const auto keep_matching = [visible_index](auto& regions, auto& primary) {
-            using Filter = std::decay_t<decltype(regions[0])>;
-            std::vector<Filter> kept;
-            kept.reserve(regions.size());
-            for (auto& region : regions) {
+        if (visible_index >= 0) {
+            const auto keep_matching = [visible_index](auto& regions, auto& primary) {
+                using Filter = std::decay_t<decltype(regions[0])>;
+                std::vector<Filter> kept;
+                kept.reserve(regions.size());
+                for (auto& region : regions) {
+                    if (region.parent_node_index == visible_index) {
+                        region.parent_node_index = 0;
+                        kept.push_back(std::move(region));
+                    }
+                }
+                regions = std::move(kept);
+                if (!regions.empty()) {
+                    primary = regions.front();
+                } else {
+                    primary.reset();
+                }
+            };
+            keep_matching(filters.crop_regions, filters.crop_region);
+            keep_matching(filters.ellipsoid_regions, filters.ellipsoid_region);
+
+            std::vector<lfs::rendering::GaussianScopedCropPolygonFilter> kept_polygons;
+            kept_polygons.reserve(filters.crop_polygon_regions.size());
+            for (auto& region : filters.crop_polygon_regions) {
                 if (region.parent_node_index == visible_index) {
                     region.parent_node_index = 0;
-                    kept.push_back(std::move(region));
+                    kept_polygons.push_back(std::move(region));
                 }
             }
-            regions = std::move(kept);
-            if (!regions.empty()) {
-                primary = regions.front();
-            } else {
-                primary.reset();
+            filters.crop_polygon_regions = std::move(kept_polygons);
+        } else {
+            // Hidden pinned splats have no visible slot index; clear other nodes'
+            // filters and rebuild only enabled volumes owned by this node.
+            filters.crop_regions.clear();
+            filters.crop_region.reset();
+            filters.ellipsoid_regions.clear();
+            filters.ellipsoid_region.reset();
+            filters.crop_polygon_regions.clear();
+
+            for (const auto& cb : ctx.scene_state.cropboxes) {
+                if (!cb.data || !cb.data->enabled || cb.parent_splat_id != node.id ||
+                    isTrainingRoiVolume(ctx, cb.node_id)) {
+                    continue;
+                }
+                filters.crop_regions.push_back(lfs::rendering::GaussianScopedBoxFilter{
+                    .bounds =
+                        {.min = cb.data->min,
+                         .max = cb.data->max,
+                         .transform = glm::inverse(cb.world_transform)},
+                    .inverse = cb.data->inverse,
+                    .desaturate = ctx.settings.desaturate_cropping,
+                    .parent_node_index = 0});
             }
-        };
-        keep_matching(filters.crop_regions, filters.crop_region);
-        keep_matching(filters.ellipsoid_regions, filters.ellipsoid_region);
+            if (!filters.crop_regions.empty()) {
+                filters.crop_region = filters.crop_regions.front();
+            }
+            for (const auto& el : ctx.scene_state.ellipsoids) {
+                if (!el.data || !el.data->enabled || el.parent_splat_id != node.id) {
+                    continue;
+                }
+                filters.ellipsoid_regions.push_back(lfs::rendering::GaussianScopedEllipsoidFilter{
+                    .bounds =
+                        {.radii = el.data->radii,
+                         .transform = glm::inverse(el.world_transform)},
+                    .inverse = el.data->inverse,
+                    .desaturate = ctx.settings.desaturate_cropping,
+                    .parent_node_index = 0});
+            }
+            if (!filters.ellipsoid_regions.empty()) {
+                filters.ellipsoid_region = filters.ellipsoid_regions.front();
+            }
+            for (const auto& polygon : ctx.scene_state.crop_polygons) {
+                if (!polygon.data || !polygon.data->enabled || polygon.parent_splat_id != node.id ||
+                    isTrainingRoiVolume(ctx, polygon.node_id)) {
+                    continue;
+                }
+                filters.crop_polygon_regions.push_back(lfs::rendering::GaussianScopedCropPolygonFilter{
+                    .bounds =
+                        {.vertices = polygon.data->vertices,
+                         .half_depth = polygon.data->half_depth,
+                         .transform = glm::inverse(polygon.world_transform)},
+                    .inverse = polygon.data->inverse,
+                    .desaturate = ctx.settings.desaturate_cropping,
+                    .parent_node_index = 0});
+            }
+        }
 
         overlay.emphasis.mask.reset();
         overlay.has_selection = false;
@@ -1169,12 +1246,12 @@ namespace lfs::vis {
         state.visible_splat_count = hasRenderableGaussians(node.model.get()) ? 1 : 0;
         scopeCustomEffectToSlot(state.custom_effect, visible_index);
 
-        const auto keep_matching = [visible_index](auto& items) {
+        const auto keep_matching = [&node](auto& items) {
             using Item = std::decay_t<decltype(items[0])>;
             std::vector<Item> kept;
             kept.reserve(items.size());
             for (auto& item : items) {
-                if (item.parent_node_index == visible_index) {
+                if (item.parent_splat_id == node.id) {
                     item.parent_node_index = 0;
                     kept.push_back(std::move(item));
                 }

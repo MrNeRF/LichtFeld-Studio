@@ -2198,10 +2198,10 @@ namespace lfs::vis {
     }
 
     TEST(SplitViewServiceTest, SplitViewModeNameAndBackwardsCompatibleAlias) {
-        EXPECT_EQ(splitViewModeName(SplitViewMode::Disabled), "none");
-        EXPECT_EQ(splitViewModeName(SplitViewMode::NodeComparison), "node_comparison");
-        EXPECT_EQ(splitViewModeName(SplitViewMode::GTComparison), "gt_comparison");
-        EXPECT_EQ(splitViewModeName(SplitViewMode::IndependentDual), "independent_dual");
+        EXPECT_STREQ(splitViewModeName(SplitViewMode::Disabled), "none");
+        EXPECT_STREQ(splitViewModeName(SplitViewMode::NodeComparison), "node_comparison");
+        EXPECT_STREQ(splitViewModeName(SplitViewMode::GTComparison), "gt_comparison");
+        EXPECT_STREQ(splitViewModeName(SplitViewMode::IndependentDual), "independent_dual");
 
         EXPECT_EQ(parseSplitViewModeName("none"), SplitViewMode::Disabled);
         EXPECT_EQ(parseSplitViewModeName("disabled"), SplitViewMode::Disabled);
@@ -4760,6 +4760,157 @@ namespace lfs::vis {
         std::tie(pinned_left, pinned_right) = manager.getSplitViewNodes();
         EXPECT_FALSE(pinned_left.has_value());
         EXPECT_FALSE(pinned_right.has_value());
+    }
+
+    TEST_F(RenderingManagerEventsTest, SetSplitViewModePreconditionsAndPinRevalidation) {
+        SceneManager scene_manager;
+        services().set(&scene_manager);
+        RenderingManager manager;
+        auto& scene = scene_manager.getScene();
+        const auto hidden_a = scene.addSplat("hidden_a", makeTestSplat(0.0f));
+        const auto hidden_b = scene.addSplat("hidden_b", makeTestSplat(2.0f));
+        scene.setNodeVisibility(hidden_a, false);
+        scene.setNodeVisibility(hidden_b, false);
+
+        // GT comparison requires dataset images; IndependentDual requires a primary viewport.
+        EXPECT_FALSE(manager.setSplitViewMode(SplitViewMode::GTComparison));
+        EXPECT_EQ(manager.getSplitViewMode(), SplitViewMode::Disabled);
+        EXPECT_FALSE(manager.setSplitViewMode(SplitViewMode::IndependentDual, nullptr));
+        EXPECT_EQ(manager.getSplitViewMode(), SplitViewMode::Disabled);
+
+        auto settings = manager.getSettings();
+        settings.grid_plane = 2;
+        manager.updateSettings(settings);
+        Viewport viewport(800, 600);
+        ASSERT_TRUE(manager.setSplitViewMode(SplitViewMode::IndependentDual, &viewport));
+        EXPECT_EQ(manager.getSplitViewMode(), SplitViewMode::IndependentDual);
+        EXPECT_EQ(manager.getGridPlaneForPanel(SplitViewPanelId::Left), 2);
+        EXPECT_EQ(manager.getGridPlaneForPanel(SplitViewPanelId::Right), 2);
+        ASSERT_TRUE(manager.setSplitViewMode(SplitViewMode::Disabled));
+
+        // Clearing explicit pins while fewer than 2 visible comparable nodes exist exits NodeComparison.
+        ASSERT_TRUE(manager.setSplitViewNodes(hidden_a, hidden_b, true));
+        EXPECT_TRUE(manager.isNodeComparisonActive());
+        ASSERT_TRUE(manager.setSplitViewNodes(std::nullopt, std::nullopt, true));
+        EXPECT_EQ(manager.getSplitViewMode(), SplitViewMode::Disabled);
+
+        // Cycling offset clears pins and exits NodeComparison when no visible pair remains.
+        ASSERT_TRUE(manager.setSplitViewNodes(hidden_a, hidden_b, true));
+        EXPECT_TRUE(manager.isNodeComparisonActive());
+        manager.advanceSplitOffset();
+        EXPECT_EQ(manager.getSplitViewMode(), SplitViewMode::Disabled);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, NodeComparisonHiddenConsolidatedSplatAndHiddenMeshEligibility) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::SplatFiles);
+        auto& scene = manager.getScene();
+        const auto left_id = scene.addSplat("left", makeTestSplat(0.0f));
+        const auto right_id = scene.addSplat("right", makeTestSplat(1.0f));
+        ASSERT_EQ(scene.consolidateNodeModels(), 2u);
+
+        scene.setNodeVisibility(left_id, false);
+        const auto* left_node = scene.getNodeById(left_id);
+        ASSERT_NE(left_node, nullptr);
+        EXPECT_TRUE(isNodeComparable(scene, *left_node));
+
+        const auto pair = resolveNodeComparisonPair(scene, 0, left_id, right_id);
+        ASSERT_TRUE(pair.has_value());
+        ASSERT_TRUE(pair->left.splat_slot.has_value());
+        ASSERT_TRUE(pair->right.splat_slot.has_value());
+        EXPECT_EQ(pair->left.node->id, left_id);
+        EXPECT_EQ(pair->right.node->id, right_id);
+
+        const auto metadata = manager.buildRenderState({.metadata_only = true});
+        Viewport viewport(640, 480);
+        RenderSettings settings;
+        settings.split_view_mode = SplitViewMode::NodeComparison;
+        settings.split_view_left_node_id = left_id;
+        settings.split_view_right_node_id = right_id;
+        const FrameContext ctx{
+            .viewport = viewport,
+            .scene_manager = &manager,
+            .model = scene.peekCombinedModel(),
+            .scene_state = metadata,
+            .settings = settings,
+            .render_size = {640, 480},
+        };
+        const auto plan = buildSplitViewCompositionPlan(ctx, FrameResources{});
+        ASSERT_TRUE(plan.has_value());
+        ASSERT_TRUE(plan->panels[0].panel.content.gaussian_render.has_value());
+        ASSERT_EQ(plan->panels[0].panel.content.gaussian_render->scene.node_visibility_mask.size(), 2u);
+        EXPECT_TRUE(plan->panels[0].panel.content.gaussian_render->scene.node_visibility_mask[*pair->left.splat_slot]);
+
+        auto mesh = std::make_shared<core::MeshData>();
+        const auto mesh_id = scene.addMesh("mesh", std::move(mesh));
+        ASSERT_NE(mesh_id, core::NULL_NODE);
+        const auto* mesh_node = scene.getNodeById(mesh_id);
+        ASSERT_NE(mesh_node, nullptr);
+        EXPECT_TRUE(isNodeComparable(scene, *mesh_node));
+        scene.setNodeVisibility(mesh_id, false);
+        EXPECT_FALSE(isNodeComparable(scene, *mesh_node));
+    }
+
+    TEST_F(SceneManagerRenderStateTest, HiddenPinnedSplatScopeIsolatesOwnCropVolumesOnly) {
+        SceneManager manager;
+        auto& scene = manager.getScene();
+        const auto visible_a = scene.addSplat("visible_a", makeTestSplat(0.0f));
+        const auto hidden_b = scene.addSplat("hidden_b", makeTestSplat(2.0f));
+        const auto hidden_c = scene.addSplat("hidden_c", makeTestSplat(4.0f));
+
+        const auto box_a = scene.addCropBox("box_a", visible_a);
+        const auto box_b = scene.addCropBox("box_b", hidden_b);
+        const auto box_c = scene.addCropBox("box_c", hidden_c);
+        scene.getCropBoxData(box_a)->min = {-1.0f, -1.0f, -1.0f};
+        scene.getCropBoxData(box_a)->enabled = true;
+        scene.getCropBoxData(box_b)->min = {-2.0f, -2.0f, -2.0f};
+        scene.getCropBoxData(box_b)->enabled = true;
+        scene.getCropBoxData(box_c)->min = {-3.0f, -3.0f, -3.0f};
+        scene.getCropBoxData(box_c)->enabled = true;
+
+        core::CropPolygonData poly;
+        poly.vertices = {{-1.f, -1.f}, {1.f, -1.f}, {0.f, 1.f}};
+        poly.half_depth = 1.0f;
+        poly.enabled = true;
+        ASSERT_NE(scene.addCropPolygon("poly_a", visible_a, poly), core::NULL_NODE);
+        poly.half_depth = 2.0f;
+        ASSERT_NE(scene.addCropPolygon("poly_b", hidden_b, poly), core::NULL_NODE);
+        poly.half_depth = 3.0f;
+        ASSERT_NE(scene.addCropPolygon("poly_c", hidden_c, poly), core::NULL_NODE);
+
+        scene.setNodeVisibility(hidden_b, false);
+        scene.setNodeVisibility(hidden_c, false);
+
+        Viewport viewport(640, 480);
+        auto state = manager.buildRenderState();
+        const FrameContext ctx{
+            .viewport = viewport,
+            .scene_manager = &manager,
+            .model = manager.getModelForRendering(),
+            .scene_state = state,
+            .settings = RenderSettings{},
+            .render_size = {640, 480},
+        };
+        const auto* hidden_b_node = scene.getNodeById(hidden_b);
+        ASSERT_NE(hidden_b_node, nullptr);
+
+        auto request = buildViewportRenderRequest(ctx, {640, 480});
+        applyNodeComparisonNodeScope(
+            request.scene, request.filters, request.overlay, ctx, *hidden_b_node, -1);
+        ASSERT_EQ(request.filters.crop_regions.size(), 1u);
+        EXPECT_EQ(request.filters.crop_regions.front().bounds.min, glm::vec3(-2.0f));
+        EXPECT_EQ(request.filters.crop_regions.front().parent_node_index, 0);
+        ASSERT_EQ(request.filters.crop_polygon_regions.size(), 1u);
+        EXPECT_FLOAT_EQ(request.filters.crop_polygon_regions.front().bounds.half_depth, 2.0f);
+        EXPECT_EQ(request.filters.crop_polygon_regions.front().parent_node_index, 0);
+
+        scopeSceneRenderStateToVisibleSplatNode(state, scene, *hidden_b_node, -1, glm::mat4(1.0f));
+        ASSERT_EQ(state.cropboxes.size(), 1u);
+        EXPECT_EQ(state.cropboxes.front().parent_splat_id, hidden_b);
+        EXPECT_EQ(state.cropboxes.front().parent_node_index, 0);
+        ASSERT_EQ(state.crop_polygons.size(), 1u);
+        EXPECT_EQ(state.crop_polygons.front().parent_splat_id, hidden_b);
+        EXPECT_EQ(state.crop_polygons.front().parent_node_index, 0);
     }
 
     TEST_F(RenderingManagerEventsTest, VisibilityPreservesOtherViewModes) {

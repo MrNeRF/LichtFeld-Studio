@@ -335,6 +335,8 @@ namespace lfs::vis::op {
             .previous_mode = settings.split_view_mode,
             .previous_position = settings.split_position,
             .previous_offset = settings.split_view_offset,
+            .previous_left_node_id = settings.split_view_left_node_id,
+            .previous_right_node_id = settings.split_view_right_node_id,
             .previous_focus = renderer->getFocusedSplitPanel(),
             .primary_viewport = &primary,
             .previous_primary = primary,
@@ -366,7 +368,29 @@ namespace lfs::vis::op {
         if (auto* renderer = services().renderingOrNull()) {
             renderer->setIndependentPanelOverrides(std::nullopt);
             auto& primary = *saved->primary_viewport;
-            renderer->restoreSplitViewMode(saved->previous_mode, primary, saved->previous_position, saved->previous_offset);
+            auto restored_mode = saved->previous_mode;
+            auto restored_left = saved->previous_left_node_id;
+            auto restored_right = saved->previous_right_node_id;
+            if (auto* scene_mgr = services().sceneOrNull()) {
+                const auto& scene = scene_mgr->getScene();
+                auto validate_pin = [&](std::optional<int32_t>& id) {
+                    if (!id)
+                        return;
+                    const auto* const node = scene.getNodeById(*id);
+                    if (!node || !isNodeComparable(scene, *node))
+                        id.reset();
+                };
+                validate_pin(restored_left);
+                validate_pin(restored_right);
+                if (restored_left && restored_right && *restored_left == *restored_right)
+                    restored_right.reset();
+                if (splitViewUsesNodeComparison(restored_mode) &&
+                    !resolveNodeComparisonPair(scene, saved->previous_offset, restored_left, restored_right)) {
+                    restored_mode = SplitViewMode::Disabled;
+                }
+            }
+            renderer->restoreSplitViewMode(restored_mode, primary, saved->previous_position, saved->previous_offset,
+                                           restored_left, restored_right);
             restoreAlignmentCamera(primary, saved->previous_primary);
             restoreAlignmentCamera(renderer->projectSecondaryViewport(), saved->previous_secondary);
             renderer->setFocusedSplitPanel(saved->previous_focus);

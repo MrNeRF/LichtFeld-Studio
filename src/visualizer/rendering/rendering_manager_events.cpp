@@ -163,7 +163,9 @@ namespace lfs::vis {
         const SplitViewMode mode,
         Viewport& primary_viewport,
         const std::optional<float> position,
-        const std::optional<size_t> offset) {
+        const std::optional<size_t> offset,
+        const std::optional<std::optional<int32_t>> left_node_id,
+        const std::optional<std::optional<int32_t>> right_node_id) {
         std::vector<SplitViewService::ModeChangeResult>
             changes;
         {
@@ -174,26 +176,36 @@ namespace lfs::vis {
             if (offset)
                 settings_.split_view_offset = *offset;
             if (settings_.split_view_mode == mode) {
+                if (left_node_id)
+                    settings_.split_view_left_node_id = *left_node_id;
+                if (right_node_id)
+                    settings_.split_view_right_node_id = *right_node_id;
                 markDirty(DirtyFlag::SPLIT_VIEW, FrameReason::SettingsChange);
-                return;
+            } else {
+                if (settings_.split_view_mode !=
+                    SplitViewMode::Disabled) {
+                    changes.push_back(
+                        split_view_service_.toggleMode(
+                            settings_,
+                            settings_.split_view_mode,
+                            &primary_viewport));
+                }
+                if (mode != SplitViewMode::Disabled) {
+                    changes.push_back(
+                        split_view_service_.toggleMode(
+                            settings_, mode,
+                            &primary_viewport));
+                }
+                if (offset)
+                    settings_.split_view_offset = *offset;
+                if (left_node_id)
+                    settings_.split_view_left_node_id = *left_node_id;
+                if (right_node_id)
+                    settings_.split_view_right_node_id = *right_node_id;
+                if (mode == SplitViewMode::IndependentDual)
+                    syncGridPlanesLocked(settings_.grid_plane);
+                markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
             }
-            if (settings_.split_view_mode !=
-                SplitViewMode::Disabled) {
-                changes.push_back(
-                    split_view_service_.toggleMode(
-                        settings_,
-                        settings_.split_view_mode,
-                        &primary_viewport));
-            }
-            if (mode != SplitViewMode::Disabled) {
-                changes.push_back(
-                    split_view_service_.toggleMode(
-                        settings_, mode,
-                        &primary_viewport));
-            }
-            if (mode == SplitViewMode::IndependentDual)
-                syncGridPlanesLocked(settings_.grid_plane);
-            markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
         }
         for (const auto& change : changes)
             applySplitModeChange(change);

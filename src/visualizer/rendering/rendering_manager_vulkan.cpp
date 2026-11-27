@@ -2730,7 +2730,15 @@ namespace lfs::vis {
         // Resolve every visible family's inputs before choosing the frame's immutable publication.
         if (shader_service_ && shader_service_->hasBindings() && (frame_ctx.scene_state.custom_effect || shader_service_->hasApplicableBindings(sequencer_custom_reveal_)) && (model || (scene_manager && splitViewUsesNodeComparison(frame_settings.split_view_mode))) && context.vulkan_context && !frame_settings.point_cloud_mode) {
             auto base = buildViewportRenderRequest(frame_ctx, render_size);
-            std::vector<const core::SplatData*> models{model};
+            struct PlannedModel {
+                const core::SplatData* model = nullptr;
+                const core::SceneNode* comparison_node = nullptr;
+                int visible_index = -1;
+            };
+            std::vector<PlannedModel> models;
+            if (model) {
+                models.push_back({.model = model});
+            }
             if (scene_manager && splitViewUsesNodeComparison(frame_settings.split_view_mode)) {
                 models.clear();
                 if (const auto pair = resolveNodeComparisonPair(
@@ -2742,23 +2750,40 @@ namespace lfs::vis {
                     const auto owned = [](const NodeComparisonNode& entry) { return entry.node && hasRenderableGaussians(entry.node->model.get()) ? entry.node->model.get() : nullptr; };
                     const std::array sides{pair->left, pair->right};
                     const bool own = std::ranges::all_of(sides, [&](const auto& entry) { return !entry.splat_slot || owned(entry); });
-                    for (const auto& entry : sides)
-                        if (const auto* const panel = own ? owned(entry) : scene_manager->getScene().peekCombinedModel();
-                            entry.node && entry.node->type == core::NodeType::SPLAT && !entry.node->point_cloud && !entry.node->point_cloud_source && hasRenderableGaussians(panel) && !std::ranges::contains(models, panel))
-                            models.push_back(panel);
+                    for (const auto& entry : sides) {
+                        const auto* const panel = own ? owned(entry) : scene_manager->getScene().peekCombinedModel();
+                        if (!entry.node || entry.node->type != core::NodeType::SPLAT ||
+                            entry.node->point_cloud || entry.node->point_cloud_source ||
+                            !hasRenderableGaussians(panel)) {
+                            continue;
+                        }
+                        const auto* const scoped_node = own ? entry.node : nullptr;
+                        const int visible_index = (own && entry.splat_slot) ? static_cast<int>(*entry.splat_slot) : -1;
+                        const bool already_planned = std::ranges::any_of(models, [&](const PlannedModel& existing) {
+                            return existing.model == panel && existing.comparison_node == scoped_node;
+                        });
+                        if (!already_planned) {
+                            models.push_back({.model = panel,
+                                              .comparison_node = scoped_node,
+                                              .visible_index = visible_index});
+                        }
+                    }
                 }
             }
             std::vector<std::string> hosts;
-            for (const auto* planned_model : models) {
+            for (const auto& planned_entry : models) {
+                const auto* const planned_model = planned_entry.model;
                 auto request = base;
                 request.gut = rendering::isGutBackend(rendering::normalizeViewerRasterBackend(request.raster_backend, request.gut));
-                if (planned_model != model && scene_manager) {
-                    for (const auto& slot : scene_manager->getScene().getVisibleSplatNodeSlots())
-                        if (slot.node && slot.node->model.get() == planned_model) {
-                            applyNodeComparisonNodeScope(request.scene, request.filters, request.overlay, frame_ctx, *slot.node, static_cast<int>(slot.slot_index));
-                            scopeCustomEffectToSlot(request.custom_effect, static_cast<int>(slot.slot_index));
-                            break;
-                        }
+                if (planned_entry.comparison_node && scene_manager) {
+                    applyNodeComparisonNodeScope(
+                        request.scene,
+                        request.filters,
+                        request.overlay,
+                        frame_ctx,
+                        *planned_entry.comparison_node,
+                        planned_entry.visible_index);
+                    scopeCustomEffectToSlot(request.custom_effect, planned_entry.visible_index);
                 }
                 // Traversal can select its cut later in this frame. Preparation only needs
                 // the storage kind, so admit its LoD storage before the cut is available.
@@ -2998,7 +3023,8 @@ namespace lfs::vis {
                 const std::vector<glm::mat4>* model_transforms_override = nullptr,
                 const std::optional<VksplatViewportRenderer::OutputSlot> vksplat_output_slot = std::nullopt,
                 const lfs::rendering::ViewportRenderRequest* request_override = nullptr,
-                const bool force_point_cloud = false)
+                const bool force_point_cloud = false,
+                const NodeComparisonNode* comparison_node = nullptr)
             -> std::expected<RenderedPanel, std::string> {
             const lfs::core::SplatData* const panel_model = model_override ? model_override : model;
             const bool panel_has_visible_gaussian_model =
@@ -3073,21 +3099,15 @@ namespace lfs::vis {
                     .filters = state.filters,
                     .overlay = state.overlay,
                     .transparent_background = environmentBackgroundUsesTransparentViewerCompositing(frame_settings)};
-                if (model_override && scene_manager &&
+                if (comparison_node && comparison_node->node && scene_manager &&
                     splitViewUsesNodeComparison(frame_settings.split_view_mode)) {
-                    const auto& source_scene = scene_manager->getScene();
-                    for (const auto& slot : source_scene.getVisibleSplatNodeSlots()) {
-                        if (slot.node && slot.node->model.get() == model_override) {
-                            // Each panel draws one owned model. Scope selection,
-                            // brush preview and crop filters to that same node.
-                            auto scoped = buildPointCloudNodeRenderRequest(
-                                frame_ctx, source_scene, *slot.node, panel_size,
-                                *request.scene.model_transforms);
-                            request.filters = std::move(scoped.filters);
-                            request.overlay = std::move(scoped.overlay);
-                            break;
-                        }
-                    }
+                    // Each panel draws one owned model. Scope selection,
+                    // brush preview and crop filters to that same node.
+                    auto scoped = buildPointCloudNodeRenderRequest(
+                        frame_ctx, scene_manager->getScene(), *comparison_node->node, panel_size,
+                        *request.scene.model_transforms);
+                    request.filters = std::move(scoped.filters);
+                    request.overlay = std::move(scoped.overlay);
                 }
                 auto auxiliary_engine = ensure_auxiliary_rendering_engine();
                 if (!auxiliary_engine) {
@@ -3126,22 +3146,18 @@ namespace lfs::vis {
                                      return buildViewportRenderRequest(
                                          frame_ctx, panel_size, &source_viewport, panel_id);
                                  }();
-            if (model_override && scene_manager &&
+            if (comparison_node && comparison_node->node && scene_manager &&
                 splitViewUsesNodeComparison(frame_settings.split_view_mode)) {
-                const auto visible_nodes = scene_manager->getScene().getVisibleSplatNodeSlots();
-                for (const auto& slot : visible_nodes) {
-                    if (slot.node && slot.node->model.get() == model_override) {
-                        applyNodeComparisonNodeScope(
-                            request.scene,
-                            request.filters,
-                            request.overlay,
-                            frame_ctx,
-                            *slot.node,
-                            static_cast<int>(slot.slot_index));
-                        scopeCustomEffectToSlot(request.custom_effect, static_cast<int>(slot.slot_index));
-                        break;
-                    }
-                }
+                const int visible_index =
+                    comparison_node->splat_slot ? static_cast<int>(*comparison_node->splat_slot) : -1;
+                applyNodeComparisonNodeScope(
+                    request.scene,
+                    request.filters,
+                    request.overlay,
+                    frame_ctx,
+                    *comparison_node->node,
+                    visible_index);
+                scopeCustomEffectToSlot(request.custom_effect, visible_index);
             }
             if (node_visibility_override && scene_manager && !request.scene.transform_indices) {
                 request.scene.transform_indices =
@@ -4138,7 +4154,8 @@ namespace lfs::vis {
                         if (entry.node->type == core::NodeType::SPLAT)
                             return lfs::from_legacy_expected(render_panel_image(
                                                                  context.viewport, size, panel, visibility, node_model, transforms,
-                                                                 output_slot, nullptr, entry.node->point_cloud_source),
+                                                                 output_slot, nullptr, entry.node->point_cloud_source,
+                                                                 render_owned_nodes ? &entry : nullptr),
                                                              error_context);
                         return mesh_background_panel();
                     };

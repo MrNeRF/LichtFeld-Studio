@@ -427,7 +427,9 @@ namespace lfs::vis {
         void restoreSplitViewMode(SplitViewMode mode,
                                   Viewport& primary_viewport,
                                   std::optional<float> position = std::nullopt,
-                                  std::optional<size_t> offset = std::nullopt);
+                                  std::optional<size_t> offset = std::nullopt,
+                                  std::optional<std::optional<int32_t>> left_node_id = std::nullopt,
+                                  std::optional<std::optional<int32_t>> right_node_id = std::nullopt);
         struct IndependentPanelOverride {
             std::vector<core::Uuid> visible_nodes;
             std::vector<std::pair<core::Uuid, glm::mat4>> transforms;

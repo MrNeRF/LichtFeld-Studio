@@ -358,6 +358,8 @@ namespace lfs::io::project {
                      {"gt_camera_id", nullptr},
                      {"panel_grid_planes",
                       Json::array({1, 1})},
+                     {"left_node_uuid", nullptr},
+                     {"right_node_uuid", nullptr},
                  }},
                 {"camera_bookmarks", Json::array()},
                 {"tools",

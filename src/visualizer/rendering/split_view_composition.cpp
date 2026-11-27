@@ -253,8 +253,8 @@ namespace lfs::vis {
                 return std::nullopt;
             }
 
-            const auto visible_splats = scene.getVisibleSplatNodeSlots();
-            const size_t mask_slot_count = std::max(visible_splats.size(),
+            const auto combined_splats = scene.getCombinedSplatNodeSlots();
+            const size_t mask_slot_count = std::max(combined_splats.size(),
                                                     ctx.scene_state.node_visibility_mask.size());
 
             const auto build_panel_content = [&](const NodeComparisonNode& entry)

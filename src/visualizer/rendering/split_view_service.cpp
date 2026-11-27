@@ -276,6 +276,10 @@ namespace lfs::vis {
             settings.split_view_left_node_id = saved_left;
             settings.split_view_right_node_id = saved_right;
             result.render_settings_changed = result.render_settings_changed || slots_changed;
+        } else if (splitViewUsesNodeComparison(settings.split_view_mode) && scene_manager) {
+            auto revalidated = handleComparableNodesChanged(settings, scene_manager);
+            revalidated.render_settings_changed = revalidated.render_settings_changed || slots_changed;
+            return revalidated;
         }
         return result;
     }

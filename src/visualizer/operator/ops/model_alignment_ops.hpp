@@ -40,6 +40,8 @@ namespace lfs::vis::op {
             SplitViewMode previous_mode;
             float previous_position;
             size_t previous_offset;
+            std::optional<int32_t> previous_left_node_id;
+            std::optional<int32_t> previous_right_node_id;
             SplitViewPanelId previous_focus;
             Viewport* primary_viewport;
             Viewport previous_primary;
