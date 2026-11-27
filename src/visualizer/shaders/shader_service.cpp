@@ -333,8 +333,8 @@ namespace lfs::vis::shaders {
           wake_(std::move(wake)),
           owner_(std::this_thread::get_id()) {
         using namespace core::events::state;
-        events_.subscribe<PLYRemoved>([this](const auto&) { reconcileNodes(); });
-        events_.subscribe<PLYAdded>([this](const auto&) { reconcileNodes(); });
+        events_.subscribe<NodeRemoved>([this](const auto&) { reconcileNodes(); });
+        events_.subscribe<NodeAdded>([this](const auto&) { reconcileNodes(); });
         events_.subscribe<SceneCleared>([this](const auto&) { reconcileNodes(); });
     }
 

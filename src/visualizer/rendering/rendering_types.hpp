@@ -37,10 +37,41 @@ namespace lfs::vis {
 
     enum class SplitViewMode {
         Disabled,
-        PLYComparison,
+        NodeComparison,
         GTComparison,
         IndependentDual
     };
+
+    [[nodiscard]] inline const char* splitViewModeName(const SplitViewMode mode) noexcept {
+        switch (mode) {
+        case SplitViewMode::GTComparison:
+            return "gt_comparison";
+        case SplitViewMode::NodeComparison:
+            return "node_comparison";
+        case SplitViewMode::IndependentDual:
+            return "independent_dual";
+        case SplitViewMode::Disabled:
+        default:
+            return "none";
+        }
+    }
+
+    [[nodiscard]] inline std::optional<SplitViewMode> parseSplitViewModeName(
+        const std::string_view name) noexcept {
+        if (name == "none" || name == "disabled") {
+            return SplitViewMode::Disabled;
+        }
+        if (name == "node_comparison" || name == "ply_comparison") {
+            return SplitViewMode::NodeComparison;
+        }
+        if (name == "gt_comparison") {
+            return SplitViewMode::GTComparison;
+        }
+        if (name == "independent_dual") {
+            return SplitViewMode::IndependentDual;
+        }
+        return std::nullopt;
+    }
 
     enum class GTComparisonMode {
         RGB = 0,
@@ -84,17 +115,17 @@ namespace lfs::vis {
     }
 
     [[nodiscard]] inline bool splitViewUsesComparisonPanels(const SplitViewMode mode) {
-        return mode == SplitViewMode::PLYComparison || mode == SplitViewMode::GTComparison;
+        return mode == SplitViewMode::NodeComparison || mode == SplitViewMode::GTComparison;
     }
 
-    [[nodiscard]] inline bool splitViewUsesPLYComparison(const SplitViewMode mode) {
-        return mode == SplitViewMode::PLYComparison;
+    [[nodiscard]] inline bool splitViewUsesNodeComparison(const SplitViewMode mode) {
+        return mode == SplitViewMode::NodeComparison;
     }
 
-    // Ordered pair of visible splat-node indices for a PLY-comparison offset.
+    // Ordered pair of comparable node indices for a node-comparison offset.
     // The sequence walks unique unordered pairs (0,1), (0,2), ..., (n-2,n-1).
     [[nodiscard]] inline std::optional<std::pair<size_t, size_t>>
-    plyComparisonPairForOffset(const size_t node_count, const size_t offset) {
+    nodeComparisonPairForOffset(const size_t node_count, const size_t offset) {
         if (node_count < 2) {
             return std::nullopt;
         }
@@ -113,8 +144,8 @@ namespace lfs::vis {
 
     // Select a validation pair containing the provisional node without changing
     // the stored comparison offset. Keep the displayed left model when possible.
-    [[nodiscard]] inline size_t plyComparisonImportOffset(size_t count, size_t offset, size_t provisional) {
-        const auto displayed = plyComparisonPairForOffset(count, offset);
+    [[nodiscard]] inline size_t nodeComparisonImportOffset(size_t count, size_t offset, size_t provisional) {
+        const auto displayed = nodeComparisonPairForOffset(count, offset);
         if (!displayed || provisional >= count || displayed->first == provisional || displayed->second == provisional)
             return offset;
         const size_t left = std::min(displayed->first, provisional);
@@ -184,7 +215,7 @@ namespace lfs::vis {
         }};
     };
 
-    struct PlyComparisonPanelLayout {
+    struct NodeComparisonPanelLayout {
         SplitViewPanelLayout panel;
         // Maps full-viewport UVs into the panel render target. The render target
         // includes a margin around the cached splitter position.
@@ -192,14 +223,14 @@ namespace lfs::vis {
         glm::vec2 texcoord_offset{0.0f, 0.0f};
     };
 
-    inline constexpr float PLY_COMPARISON_SPLITTER_MARGIN_FRACTION = 0.125f;
+    inline constexpr float NODE_COMPARISON_SPLITTER_MARGIN_FRACTION = 0.125f;
 
-    [[nodiscard]] inline std::array<PlyComparisonPanelLayout, 2>
-    makePlyComparisonPanelLayouts(const int total_width, const float split_position) {
+    [[nodiscard]] inline std::array<NodeComparisonPanelLayout, 2>
+    makeNodeComparisonPanelLayouts(const int total_width, const float split_position) {
         const int divider_x = splitViewDividerPixel(total_width, split_position);
         const int margin = std::clamp(
             static_cast<int>(std::lround(static_cast<float>(std::max(total_width, 0)) *
-                                         PLY_COMPARISON_SPLITTER_MARGIN_FRACTION)),
+                                         NODE_COMPARISON_SPLITTER_MARGIN_FRACTION)),
             0,
             std::max(total_width, 0));
         const int left_render_width = std::min(total_width, divider_x + margin);
@@ -229,13 +260,13 @@ namespace lfs::vis {
         }};
     }
 
-    [[nodiscard]] inline bool plyComparisonSplitterWithinMargin(
+    [[nodiscard]] inline bool nodeComparisonSplitterWithinMargin(
         const int total_width, const float cached_split_position, const float current_split_position) {
         if (total_width <= 0) {
             return false;
         }
         const int margin = static_cast<int>(std::lround(
-            static_cast<float>(total_width) * PLY_COMPARISON_SPLITTER_MARGIN_FRACTION));
+            static_cast<float>(total_width) * NODE_COMPARISON_SPLITTER_MARGIN_FRACTION));
         return std::abs(static_cast<float>(splitViewDividerPixel(total_width, cached_split_position) -
                                            splitViewDividerPixel(total_width, current_split_position))) <= margin;
     }
@@ -390,6 +421,8 @@ namespace lfs::vis {
         GTComparisonMode gt_comparison_mode = GTComparisonMode::RGB;
         float split_position = 0.5f;
         size_t split_view_offset = 0;
+        std::optional<int32_t> split_view_left_node_id;
+        std::optional<int32_t> split_view_right_node_id;
 
         lfs::rendering::GaussianRasterBackend raster_backend = lfs::rendering::GaussianRasterBackend::ThreeDgs;
         bool gut = false;

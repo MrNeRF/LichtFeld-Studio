@@ -99,7 +99,7 @@ namespace lfs::vis::input {
         TOGGLE_INDEPENDENT_SPLIT_VIEW,
         TOGGLE_GT_COMPARISON,
         TOGGLE_DEPTH_MODE, // Deprecated: migrated to TOGGLE_SELECTION_DEPTH_FILTER on load
-        CYCLE_PLY,
+        CYCLE_NODE,
         // Editing
         DELETE_SELECTED, // Delete selected Gaussians (selection tool)
         DELETE_NODE,     // Delete selected PLY node (global mode)

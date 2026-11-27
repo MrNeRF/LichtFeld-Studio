@@ -412,16 +412,24 @@ namespace lfs::vis {
         [[nodiscard]] bool isSplitViewActive() const;
         [[nodiscard]] bool isGTComparisonActive() const;
         [[nodiscard]] bool hasGTComparisonAvailable() const;
-        [[nodiscard]] bool isPLYComparisonActive() const;
+        [[nodiscard]] bool isNodeComparisonActive() const;
         [[nodiscard]] bool isIndependentSplitViewActive() const;
         [[nodiscard]] GTComparisonMode getGTComparisonMode() const;
         [[nodiscard]] SplitViewMode getSplitViewMode() const;
+        bool setSplitViewMode(SplitViewMode mode, const Viewport* primary_viewport = nullptr);
+        bool setSplitViewNode(SplitViewPanelId panel, std::optional<int32_t> node_id, bool enter_comparison = true);
+        bool setSplitViewNodes(std::optional<int32_t> left_node_id,
+                               std::optional<int32_t> right_node_id,
+                               bool enter_comparison = true);
+        [[nodiscard]] std::pair<std::optional<int32_t>, std::optional<int32_t>> getSplitViewNodes() const;
         // Project restore may only enter/leave split modes through the service
         // transition path; it must never assign RenderSettings::split_view_mode.
         void restoreSplitViewMode(SplitViewMode mode,
                                   Viewport& primary_viewport,
                                   std::optional<float> position = std::nullopt,
-                                  std::optional<size_t> offset = std::nullopt);
+                                  std::optional<size_t> offset = std::nullopt,
+                                  std::optional<std::optional<int32_t>> left_node_id = std::nullopt,
+                                  std::optional<std::optional<int32_t>> right_node_id = std::nullopt);
         struct IndependentPanelOverride {
             std::vector<core::Uuid> visible_nodes;
             std::vector<std::pair<core::Uuid, glm::mat4>> transforms;
@@ -1016,9 +1024,9 @@ namespace lfs::vis {
         void handleSceneLoaded();
         void handleSceneChanged(uint32_t mutation_flags);
         void handleSceneCleared();
-        void handlePLYVisibilityChanged();
-        void handlePLYAdded();
-        void handlePLYRemoved();
+        void handleNodeVisibilityChanged();
+        void handleNodeAdded();
+        void handleNodeRemoved();
         void handleCropBoxChanged(bool enabled);
         void handleEllipsoidChanged(bool enabled);
         void handlePointCloudModeChanged(const lfs::core::events::ui::PointCloudModeChanged& event);

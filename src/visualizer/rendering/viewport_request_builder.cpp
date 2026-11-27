@@ -883,8 +883,30 @@ namespace lfs::vis {
         return request;
     }
 
-    std::vector<PlyComparisonNode> plyComparisonNodes(const core::Scene& scene) {
-        std::vector<PlyComparisonNode> nodes;
+    bool isNodeComparable(const core::Scene& scene, const core::SceneNode& node) {
+        switch (node.type) {
+        case core::NodeType::SPLAT:
+            if (hasRenderableGaussians(node.model.get())) {
+                return true;
+            }
+            for (const auto& slot : scene.getCombinedSplatNodeSlots()) {
+                if (slot.node && slot.node->id == node.id &&
+                    slot.node->gaussian_count.load(std::memory_order_acquire) > 0) {
+                    return true;
+                }
+            }
+            return false;
+        case core::NodeType::POINTCLOUD:
+            return node.point_cloud && node.point_cloud->size() > 0;
+        case core::NodeType::MESH:
+            return node.mesh != nullptr && scene.isNodeEffectivelyVisible(node.id);
+        default:
+            return false;
+        }
+    }
+
+    std::vector<NodeComparisonNode> nodeComparisonNodes(const core::Scene& scene) {
+        std::vector<NodeComparisonNode> nodes;
         for (const auto& slot : scene.getVisibleSplatNodeSlots()) {
             nodes.push_back({.node = slot.node, .splat_slot = slot.slot_index});
         }
@@ -901,7 +923,7 @@ namespace lfs::vis {
         }
         // Match the scene tree's depth-first order, independent of model type
         // and of the retained Gaussian render-slot order.
-        std::unordered_map<core::NodeId, PlyComparisonNode> by_id;
+        std::unordered_map<core::NodeId, NodeComparisonNode> by_id;
         for (const auto& entry : nodes)
             by_id.emplace(entry.node->id, entry);
         nodes.clear();
@@ -919,20 +941,111 @@ namespace lfs::vis {
         return nodes;
     }
 
-    const core::SceneNode* plyComparisonNodeForPanel(
+    std::optional<NodeComparisonPair> resolveNodeComparisonPair(
         const core::Scene& scene,
         const size_t split_view_offset,
-        const SplitViewPanelId panel) {
-        const auto visible_nodes = plyComparisonNodes(scene);
-        const auto pair = plyComparisonPairForOffset(visible_nodes.size(), split_view_offset);
+        const std::optional<core::NodeId> left_node_id,
+        const std::optional<core::NodeId> right_node_id) {
+        const auto visible_nodes = nodeComparisonNodes(scene);
+        const auto auto_pair = nodeComparisonPairForOffset(visible_nodes.size(), split_view_offset);
+
+        const auto resolve_pinned = [&](const std::optional<core::NodeId> id)
+            -> std::optional<NodeComparisonNode> {
+            if (!id || *id == core::NULL_NODE) {
+                return std::nullopt;
+            }
+            for (const auto& entry : visible_nodes) {
+                if (entry.node && entry.node->id == *id) {
+                    return entry;
+                }
+            }
+            const auto* const node = scene.getNodeById(*id);
+            if (!node) {
+                return std::nullopt;
+            }
+            // Explicitly pinned splats (owned or consolidated) and point clouds can
+            // be compared even when hidden; meshes rely on the visible mesh pass.
+            if (node->type == core::NodeType::SPLAT) {
+                if (hasRenderableGaussians(node->model.get())) {
+                    return NodeComparisonNode{.node = node, .splat_slot = std::nullopt};
+                }
+                for (const auto& slot : scene.getCombinedSplatNodeSlots()) {
+                    if (slot.node && slot.node->id == node->id &&
+                        slot.node->gaussian_count.load(std::memory_order_acquire) > 0) {
+                        return NodeComparisonNode{.node = node, .splat_slot = slot.slot_index};
+                    }
+                }
+                return std::nullopt;
+            }
+            if (node->type == core::NodeType::POINTCLOUD &&
+                node->point_cloud && node->point_cloud->size() > 0) {
+                return NodeComparisonNode{.node = node, .splat_slot = std::nullopt};
+            }
+            return std::nullopt;
+        };
+
+        const auto pinned_left = resolve_pinned(left_node_id);
+        const auto pinned_right = resolve_pinned(right_node_id);
+
+        if (pinned_left && pinned_right) {
+            return NodeComparisonPair{.left = *pinned_left, .right = *pinned_right};
+        }
+
+        const auto pick_partner = [&](const core::NodeId exclude_id, const bool prefer_second)
+            -> std::optional<NodeComparisonNode> {
+            if (auto_pair) {
+                const size_t first_choice = prefer_second ? auto_pair->second : auto_pair->first;
+                const size_t second_choice = prefer_second ? auto_pair->first : auto_pair->second;
+                if (visible_nodes[first_choice].node && visible_nodes[first_choice].node->id != exclude_id) {
+                    return visible_nodes[first_choice];
+                }
+                if (visible_nodes[second_choice].node && visible_nodes[second_choice].node->id != exclude_id) {
+                    return visible_nodes[second_choice];
+                }
+            }
+            for (const auto& entry : visible_nodes) {
+                if (entry.node && entry.node->id != exclude_id) {
+                    return entry;
+                }
+            }
+            return std::nullopt;
+        };
+
+        if (pinned_left) {
+            if (const auto partner = pick_partner(pinned_left->node->id, true)) {
+                return NodeComparisonPair{.left = *pinned_left, .right = *partner};
+            }
+            return std::nullopt;
+        }
+        if (pinned_right) {
+            if (const auto partner = pick_partner(pinned_right->node->id, false)) {
+                return NodeComparisonPair{.left = *partner, .right = *pinned_right};
+            }
+            return std::nullopt;
+        }
+
+        if (!auto_pair) {
+            return std::nullopt;
+        }
+        return NodeComparisonPair{
+            .left = visible_nodes[auto_pair->first],
+            .right = visible_nodes[auto_pair->second]};
+    }
+
+    const core::SceneNode* nodeComparisonNodeForPanel(
+        const core::Scene& scene,
+        const size_t split_view_offset,
+        const SplitViewPanelId panel,
+        const std::optional<core::NodeId> left_node_id,
+        const std::optional<core::NodeId> right_node_id) {
+        const auto pair = resolveNodeComparisonPair(scene, split_view_offset, left_node_id, right_node_id);
         if (!pair) {
             return nullptr;
         }
-        const size_t index = panel == SplitViewPanelId::Right ? pair->second : pair->first;
-        return visible_nodes[index].node;
+        return panel == SplitViewPanelId::Right ? pair->right.node : pair->left.node;
     }
 
-    void applyPlyComparisonNodeScope(
+    void applyNodeComparisonNodeScope(
         lfs::rendering::GaussianSceneState& scene,
         lfs::rendering::GaussianFilterState& filters,
         lfs::rendering::GaussianOverlayState& overlay,
@@ -943,25 +1056,92 @@ namespace lfs::vis {
         // visibility and SH limits; the renderer uses this model's active SH
         // degree. The caller supplies the node's world transform separately.
         scene = {};
-        const auto keep_matching = [visible_index](auto& regions, auto& primary) {
-            using Filter = std::decay_t<decltype(regions[0])>;
-            std::vector<Filter> kept;
-            kept.reserve(regions.size());
-            for (auto& region : regions) {
+        if (visible_index >= 0) {
+            const auto keep_matching = [visible_index](auto& regions, auto& primary) {
+                using Filter = std::decay_t<decltype(regions[0])>;
+                std::vector<Filter> kept;
+                kept.reserve(regions.size());
+                for (auto& region : regions) {
+                    if (region.parent_node_index == visible_index) {
+                        region.parent_node_index = 0;
+                        kept.push_back(std::move(region));
+                    }
+                }
+                regions = std::move(kept);
+                if (!regions.empty()) {
+                    primary = regions.front();
+                } else {
+                    primary.reset();
+                }
+            };
+            keep_matching(filters.crop_regions, filters.crop_region);
+            keep_matching(filters.ellipsoid_regions, filters.ellipsoid_region);
+
+            std::vector<lfs::rendering::GaussianScopedCropPolygonFilter> kept_polygons;
+            kept_polygons.reserve(filters.crop_polygon_regions.size());
+            for (auto& region : filters.crop_polygon_regions) {
                 if (region.parent_node_index == visible_index) {
                     region.parent_node_index = 0;
-                    kept.push_back(std::move(region));
+                    kept_polygons.push_back(std::move(region));
                 }
             }
-            regions = std::move(kept);
-            if (!regions.empty()) {
-                primary = regions.front();
-            } else {
-                primary.reset();
+            filters.crop_polygon_regions = std::move(kept_polygons);
+        } else {
+            // Hidden pinned splats have no visible slot index; clear other nodes'
+            // filters and rebuild only enabled volumes owned by this node.
+            filters.crop_regions.clear();
+            filters.crop_region.reset();
+            filters.ellipsoid_regions.clear();
+            filters.ellipsoid_region.reset();
+            filters.crop_polygon_regions.clear();
+
+            for (const auto& cb : ctx.scene_state.cropboxes) {
+                if (!cb.data || !cb.data->enabled || cb.parent_splat_id != node.id ||
+                    isTrainingRoiVolume(ctx, cb.node_id)) {
+                    continue;
+                }
+                filters.crop_regions.push_back(lfs::rendering::GaussianScopedBoxFilter{
+                    .bounds =
+                        {.min = cb.data->min,
+                         .max = cb.data->max,
+                         .transform = glm::inverse(cb.world_transform)},
+                    .inverse = cb.data->inverse,
+                    .desaturate = ctx.settings.desaturate_cropping,
+                    .parent_node_index = 0});
             }
-        };
-        keep_matching(filters.crop_regions, filters.crop_region);
-        keep_matching(filters.ellipsoid_regions, filters.ellipsoid_region);
+            if (!filters.crop_regions.empty()) {
+                filters.crop_region = filters.crop_regions.front();
+            }
+            for (const auto& el : ctx.scene_state.ellipsoids) {
+                if (!el.data || !el.data->enabled || el.parent_splat_id != node.id) {
+                    continue;
+                }
+                filters.ellipsoid_regions.push_back(lfs::rendering::GaussianScopedEllipsoidFilter{
+                    .bounds =
+                        {.radii = el.data->radii,
+                         .transform = glm::inverse(el.world_transform)},
+                    .inverse = el.data->inverse,
+                    .desaturate = ctx.settings.desaturate_cropping,
+                    .parent_node_index = 0});
+            }
+            if (!filters.ellipsoid_regions.empty()) {
+                filters.ellipsoid_region = filters.ellipsoid_regions.front();
+            }
+            for (const auto& polygon : ctx.scene_state.crop_polygons) {
+                if (!polygon.data || !polygon.data->enabled || polygon.parent_splat_id != node.id ||
+                    isTrainingRoiVolume(ctx, polygon.node_id)) {
+                    continue;
+                }
+                filters.crop_polygon_regions.push_back(lfs::rendering::GaussianScopedCropPolygonFilter{
+                    .bounds =
+                        {.vertices = polygon.data->vertices,
+                         .half_depth = polygon.data->half_depth,
+                         .transform = glm::inverse(polygon.world_transform)},
+                    .inverse = polygon.data->inverse,
+                    .desaturate = ctx.settings.desaturate_cropping,
+                    .parent_node_index = 0});
+            }
+        }
 
         overlay.emphasis.mask.reset();
         overlay.has_selection = false;
@@ -1024,27 +1204,27 @@ namespace lfs::vis {
             effect.reset();
     }
 
-    PlyComparisonDepthSample resolvePlyComparisonDepthSample(
+    NodeComparisonDepthSample resolveNodeComparisonDepthSample(
         const core::Scene& scene,
         const size_t split_view_offset,
-        const SplitViewPanelId panel) {
-        PlyComparisonDepthSample sample;
-        const auto visible_nodes = plyComparisonNodes(scene);
-        const auto pair = plyComparisonPairForOffset(visible_nodes.size(), split_view_offset);
+        const SplitViewPanelId panel,
+        const std::optional<core::NodeId> left_node_id,
+        const std::optional<core::NodeId> right_node_id) {
+        NodeComparisonDepthSample sample;
+        const auto pair = resolveNodeComparisonPair(scene, split_view_offset, left_node_id, right_node_id);
         if (!pair) {
             return sample;
         }
-        const size_t index = panel == SplitViewPanelId::Right ? pair->second : pair->first;
-        const auto& slot = visible_nodes[index];
+        const auto& slot = panel == SplitViewPanelId::Right ? pair->right : pair->left;
         sample.node = slot.node;
-        if (!slot.splat_slot) {
+        if (!slot.node || slot.node->type != core::NodeType::SPLAT) {
             return sample;
         }
-        sample.visible_index = static_cast<int>(*slot.splat_slot);
-        if (slot.node && hasRenderableGaussians(slot.node->model.get())) {
+        sample.visible_index = slot.splat_slot ? static_cast<int>(*slot.splat_slot) : -1;
+        if (hasRenderableGaussians(slot.node->model.get())) {
             sample.model = slot.node->model.get();
             sample.uses_owned_node_model = true;
-        } else {
+        } else if (slot.splat_slot) {
             sample.model = scene.peekCombinedModel();
         }
         return sample;
@@ -1066,12 +1246,12 @@ namespace lfs::vis {
         state.visible_splat_count = hasRenderableGaussians(node.model.get()) ? 1 : 0;
         scopeCustomEffectToSlot(state.custom_effect, visible_index);
 
-        const auto keep_matching = [visible_index](auto& items) {
+        const auto keep_matching = [&node](auto& items) {
             using Item = std::decay_t<decltype(items[0])>;
             std::vector<Item> kept;
             kept.reserve(items.size());
             for (auto& item : items) {
-                if (item.parent_node_index == visible_index) {
+                if (item.parent_splat_id == node.id) {
                     item.parent_node_index = 0;
                     kept.push_back(std::move(item));
                 }

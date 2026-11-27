@@ -78,6 +78,8 @@
 #include <RmlUi/Core/Core.h>
 #include <RmlUi/Core/ElementDocument.h>
 #include <nanobind/stl/array.h>
+#include <nanobind/stl/optional.h>
+#include <nanobind/stl/pair.h>
 #include <stdexcept>
 #include <typeinfo>
 
@@ -7032,14 +7034,118 @@ namespace lfs::python {
                 auto* rm = get_rendering_manager();
                 if (!rm)
                     return "none";
-                switch (rm->getSplitViewMode()) {
-                case vis::SplitViewMode::GTComparison: return "gt_comparison";
-                case vis::SplitViewMode::PLYComparison: return "ply_comparison";
-                case vis::SplitViewMode::IndependentDual: return "independent_dual";
-                default: return "none";
-                }
+                return vis::splitViewModeName(rm->getSplitViewMode());
             },
-            "Get split view mode (none, gt_comparison, ply_comparison, independent_dual)");
+            "Get split view mode (none, gt_comparison, node_comparison, independent_dual)");
+
+        m.def(
+            "set_split_view_mode",
+            [](const std::string& mode) -> bool {
+                const auto parsed = vis::parseSplitViewModeName(mode);
+                if (!parsed) {
+                    throw nb::value_error(
+                        "mode must be 'none', 'node_comparison', 'ply_comparison', 'gt_comparison', or 'independent_dual'");
+                }
+                return invoke_on_viewer(
+                    [target = *parsed]() -> bool {
+                        auto* rm = get_rendering_manager();
+                        if (!rm) {
+                            return false;
+                        }
+                        const auto* viewer = dynamic_cast<const vis::VisualizerImpl*>(get_visualizer());
+                        const Viewport* primary_viewport = viewer ? &viewer->getViewport() : nullptr;
+                        if (!rm->setSplitViewMode(target, primary_viewport)) {
+                            return false;
+                        }
+                        markProjectSessionChapterCommitted("VIEW");
+                        return true;
+                    },
+                    false);
+            },
+            nb::arg("mode"),
+            "Set split view mode (none, node_comparison, gt_comparison, independent_dual; 'ply_comparison' accepted as alias)");
+
+        m.def(
+            "set_split_view_nodes",
+            [](nb::object left, nb::object right, bool enter_mode) -> bool {
+                using NodeSpec = std::variant<std::monostate, core::NodeId, std::string>;
+                const auto parse_spec = [](const nb::handle value, const char* arg_name) -> NodeSpec {
+                    if (value.is_none()) {
+                        return std::monostate{};
+                    }
+                    if (nb::isinstance<nb::int_>(value) && !nb::isinstance<nb::bool_>(value)) {
+                        return nb::cast<core::NodeId>(value);
+                    }
+                    if (nb::isinstance<nb::str>(value)) {
+                        return nb::cast<std::string>(value);
+                    }
+                    throw nb::type_error(std::format("'{}' must be None, an int node ID, or a node name string", arg_name).c_str());
+                };
+
+                auto left_spec = parse_spec(left, "left");
+                auto right_spec = parse_spec(right, "right");
+
+                const auto result = invoke_on_viewer(
+                    [left_spec = std::move(left_spec), right_spec = std::move(right_spec), enter_mode]()
+                        -> std::expected<bool, std::string> {
+                        auto* rm = get_rendering_manager();
+                        auto* sm = get_scene_manager();
+                        if (!rm || !sm) {
+                            return false;
+                        }
+                        const auto resolve_spec =
+                            [sm](const NodeSpec& spec, const char* arg_name)
+                            -> std::expected<std::optional<core::NodeId>, std::string> {
+                            if (std::holds_alternative<std::monostate>(spec)) {
+                                return std::optional<core::NodeId>{std::nullopt};
+                            }
+                            if (const auto* id = std::get_if<core::NodeId>(&spec)) {
+                                return std::optional<core::NodeId>{*id};
+                            }
+                            const auto& name = std::get<std::string>(spec);
+                            const auto* node = sm->getScene().getNode(name);
+                            if (!node) {
+                                return std::unexpected(
+                                    std::format("Scene node '{}' not found for '{}'", name, arg_name));
+                            }
+                            return std::optional<core::NodeId>{node->id};
+                        };
+
+                        const auto left_id = resolve_spec(left_spec, "left");
+                        if (!left_id) {
+                            return std::unexpected(left_id.error());
+                        }
+                        const auto right_id = resolve_spec(right_spec, "right");
+                        if (!right_id) {
+                            return std::unexpected(right_id.error());
+                        }
+                        if (!rm->setSplitViewNodes(*left_id, *right_id, enter_mode)) {
+                            return false;
+                        }
+                        markProjectSessionChapterCommitted("VIEW");
+                        return true;
+                    },
+                    std::expected<bool, std::string>{false});
+                if (!result) {
+                    throw nb::value_error(result.error().c_str());
+                }
+                return *result;
+            },
+            nb::arg("left") = nb::none(),
+            nb::arg("right") = nb::none(),
+            nb::arg("enter_mode") = true,
+            "Pin explicit left and/or right scene nodes (by node ID or name, or None for automatic) for node comparison split view");
+
+        m.def(
+            "get_split_view_nodes",
+            []() -> std::pair<std::optional<core::NodeId>, std::optional<core::NodeId>> {
+                auto* rm = get_rendering_manager();
+                if (!rm) {
+                    return {std::nullopt, std::nullopt};
+                }
+                return rm->getSplitViewNodes();
+            },
+            "Get pinned (left_node_id, right_node_id) for node comparison split view");
 
         m.def(
             "get_speed_overlay", []() -> std::tuple<float, float, float, float> {

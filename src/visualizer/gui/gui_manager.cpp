@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/gui_manager.hpp"
+#include <charconv>
 #include "control/command_api.hpp"
 #include "core/camera.hpp"
 #include "core/cuda_error.hpp"
@@ -7092,7 +7093,7 @@ namespace lfs::vis::gui {
                                                                                           : LOCF("align.mobile_name", mobile ? mobile->name : "");
                     }
                     if (alignment ||
-                        splitViewUsesPLYComparison(rendering->getSettings().split_view_mode)) {
+                        splitViewUsesNodeComparison(rendering->getSettings().split_view_mode)) {
                         const float inset = 10.0f * current_ui_scale_;
                         split_divider_state.left_name = info.left_name;
                         split_divider_state.right_name = info.right_name;
@@ -7246,16 +7247,43 @@ namespace lfs::vis::gui {
                 "application/x-lichtfeld-project";
             constexpr std::string_view kGalleryPayloadType =
                 "application/x-lichtfeld-gallery-scene";
+            constexpr std::string_view kSceneNodePayloadType =
+                "application/x-lichtfeld-scene-node";
             const auto payload = rmlui_manager_.dragPayload();
             const auto hit = hitTestPointer(sdl_input.mouse_x, sdl_input.mouse_y);
-            const bool can_drop =
-                payload && (payload->type == kProjectPayloadType || payload->type == kGalleryPayloadType) &&
+            const bool in_viewport =
                 isPositionInViewport(sdl_input.mouse_x, sdl_input.mouse_y) &&
                 !hit.blocks_pointer && !hit.blocks_mouse_button;
+            const bool is_project_or_gallery =
+                payload && (payload->type == kProjectPayloadType || payload->type == kGalleryPayloadType);
+            const bool is_scene_node =
+                payload && payload->type == kSceneNodePayloadType;
+            const bool can_drop = is_project_or_gallery && in_viewport;
 
             if (payload && payload->released) {
                 const auto released = rmlui_manager_.takeReleasedDragPayload();
                 rml_viewport_overlay_.setProjectDragOverlay({});
+                if (released && is_scene_node && in_viewport) {
+                    if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr) {
+                        core::NodeId node_id = core::NULL_NODE;
+                        const auto* begin = released->data.data();
+                        const auto* end = begin + released->data.size();
+                        if (const auto [ptr, ec] = std::from_chars(begin, end, node_id);
+                            ec == std::errc{} && ptr == end && node_id != core::NULL_NODE) {
+                            const float split_ratio = rendering->isSplitViewActive()
+                                                          ? std::clamp(rendering->getSplitPosition(), 0.0f, 1.0f)
+                                                          : 0.5f;
+                            const float divider_x = viewport_layout_.pos.x + viewport_layout_.size.x * split_ratio;
+                            const auto panel = sdl_input.mouse_x < divider_x
+                                                   ? SplitViewPanelId::Left
+                                                   : SplitViewPanelId::Right;
+                            if (rendering->setSplitViewNode(panel, node_id, true) && viewer_) {
+                                viewer_->projectMarkSessionChapterCommitted("VIEW");
+                            }
+                        }
+                    }
+                    return;
+                }
                 if (released && can_drop) {
                     if (released->type == kGalleryPayloadType) {
                         const auto panel = PanelRegistry::instance().get_panel_instance("lfs.asset_manager");

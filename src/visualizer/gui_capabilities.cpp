@@ -1683,7 +1683,7 @@ namespace lfs::vis::cap {
         scene.setCropBoxData(cropbox_id, data);
 
         if (cropbox_node) {
-            core::events::state::PLYAdded{
+            core::events::state::NodeAdded{
                 .name = cropbox_node->name,
                 .uuid = cropbox_node->uuid,
                 .node_gaussians = 0,
@@ -2048,7 +2048,7 @@ namespace lfs::vis::cap {
         scene.setEllipsoidData(ellipsoid_id, data);
 
         if (ellipsoid_node) {
-            core::events::state::PLYAdded{
+            core::events::state::NodeAdded{
                 .name = ellipsoid_node->name,
                 .uuid = ellipsoid_node->uuid,
                 .node_gaussians = 0,
@@ -2396,7 +2396,7 @@ namespace lfs::vis::cap {
             return crop_polygon_error(lfs::ErrorCode::Internal, "Failed to create crop polygon for node: " + parent_name);
         const std::string polygon_name = polygon_node->name;
 
-        core::events::state::PLYAdded{
+        core::events::state::NodeAdded{
             .name = polygon_name,
             .uuid = polygon_node->uuid,
             .node_gaussians = 0,

@@ -141,20 +141,20 @@ namespace {
         EXPECT_THROW(wrapper.type(), std::runtime_error);
     }
 
-    class ScopedPlyRemovedSubscription {
+    class ScopedNodeRemovedSubscription {
     public:
-        explicit ScopedPlyRemovedSubscription(const lfs::event::HandlerId id) : id_(id) {}
-        ~ScopedPlyRemovedSubscription() { reset(); }
+        explicit ScopedNodeRemovedSubscription(const lfs::event::HandlerId id) : id_(id) {}
+        ~ScopedNodeRemovedSubscription() { reset(); }
 
-        ScopedPlyRemovedSubscription(const ScopedPlyRemovedSubscription&) = delete;
-        ScopedPlyRemovedSubscription& operator=(const ScopedPlyRemovedSubscription&) = delete;
+        ScopedNodeRemovedSubscription(const ScopedNodeRemovedSubscription&) = delete;
+        ScopedNodeRemovedSubscription& operator=(const ScopedNodeRemovedSubscription&) = delete;
 
         void reset() {
             if (id_ == 0) {
                 return;
             }
             lfs::event::EventBridge::instance().unsubscribe(
-                typeid(lfs::core::events::state::PLYRemoved), id_);
+                typeid(lfs::core::events::state::NodeRemoved), id_);
             id_ = 0;
         }
 
@@ -514,8 +514,8 @@ TEST_F(SceneGraphIdentityTest, DeleteGroupByIdEmitsRemovedEventsWithCorrectNames
     scene_manager_->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
 
     std::vector<std::string> removed_names;
-    ScopedPlyRemovedSubscription subscription{
-        lfs::core::events::state::PLYRemoved::when(
+    ScopedNodeRemovedSubscription subscription{
+        lfs::core::events::state::NodeRemoved::when(
             [&removed_names](const auto& event) { removed_names.push_back(event.name); })};
 
     scene_manager_->removeNode(group_id, false);
@@ -544,8 +544,8 @@ TEST_F(SceneGraphIdentityTest, DeleteGroupByIdKeepChildrenEmitsCorrectName) {
     scene_manager_->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
 
     std::vector<std::string> removed_names;
-    ScopedPlyRemovedSubscription subscription{
-        lfs::core::events::state::PLYRemoved::when(
+    ScopedNodeRemovedSubscription subscription{
+        lfs::core::events::state::NodeRemoved::when(
             [&removed_names](const auto& event) { removed_names.push_back(event.name); })};
 
     scene_manager_->removeNode(group_id, true);
@@ -623,8 +623,8 @@ TEST_F(SceneGraphIdentityTest, MergePreservesNonSplatDescendantsAndWorldTransfor
     DuplicateNoticeConsumer notices;
     auto subscription = lfs::ErrorBus::instance().subscribe(notices);
     std::vector<std::string> removed;
-    ScopedPlyRemovedSubscription removed_subscription{
-        lfs::core::events::state::PLYRemoved::when(
+    ScopedNodeRemovedSubscription removed_subscription{
+        lfs::core::events::state::NodeRemoved::when(
             [&](const auto& event) { removed.push_back(event.name); })};
     ASSERT_EQ(scene_manager_->mergeGroupNode(group), "mixed");
     const auto check_kept = [&](const bool merged) {

@@ -141,7 +141,7 @@ namespace lfs::python {
             .value("TOGGLE_INDEPENDENT_SPLIT_VIEW", Action::TOGGLE_INDEPENDENT_SPLIT_VIEW)
             .value("TOGGLE_GT_COMPARISON", Action::TOGGLE_GT_COMPARISON)
             .value("TOGGLE_DEPTH_MODE", Action::TOGGLE_DEPTH_MODE)
-            .value("CYCLE_PLY", Action::CYCLE_PLY)
+            .value("CYCLE_NODE", Action::CYCLE_NODE)
             .value("DELETE_SELECTED", Action::DELETE_SELECTED)
             .value("DELETE_NODE", Action::DELETE_NODE)
             .value("UNDO", Action::UNDO)

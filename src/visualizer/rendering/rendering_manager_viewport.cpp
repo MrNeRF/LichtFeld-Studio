@@ -1937,7 +1937,7 @@ namespace lfs::vis {
         // Captured Gaussian tensors do not carry the published exact-depth coverage.
         // Dedicated samplers (point clouds / GT) retain their own depth contract.
         const bool full_frame_depth = !require_exact_depth || splitViewUsesGTComparison(settings_.split_view_mode) ||
-                                      splitViewUsesPLYComparison(settings_.split_view_mode);
+                                      splitViewUsesNodeComparison(settings_.split_view_mode);
         if (viewport_artifact_service_.hasDepthSampler() || (full_frame_depth && cached_depth > 0.0f)) {
             return cached_depth;
         }
@@ -1994,14 +1994,16 @@ namespace lfs::vis {
         const auto settings = getSettings();
         SceneRenderState scene_state;
         const lfs::core::SplatData* model = nullptr;
-        if (splitViewUsesPLYComparison(settings.split_view_mode)) {
+        if (splitViewUsesNodeComparison(settings.split_view_mode)) {
             scene_state = request.scene_manager->buildRenderState({.metadata_only = true});
             attachCustomEffect(scene_state, *request.scene_manager, scene_time_);
             const auto& scene = request.scene_manager->getScene();
-            const auto sample = resolvePlyComparisonDepthSample(
+            const auto sample = resolveNodeComparisonDepthSample(
                 scene,
                 settings.split_view_offset,
-                request.panel.value_or(SplitViewPanelId::Left));
+                request.panel.value_or(SplitViewPanelId::Left),
+                settings.split_view_left_node_id,
+                settings.split_view_right_node_id);
             if (sample.uses_owned_node_model && sample.node && hasRenderableGaussians(sample.model)) {
                 scopeSceneRenderStateToVisibleSplatNode(
                     scene_state,

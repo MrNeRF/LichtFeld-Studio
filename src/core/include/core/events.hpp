@@ -123,7 +123,7 @@ namespace lfs::core {
             EVENT(AddPLY, std::filesystem::path path; std::string name;);
             EVENT(RemovePLY, std::string name; bool keep_children = false;);
             EVENT(RenamePLY, std::string old_name; std::string new_name;);
-            EVENT(SetPLYVisibility, std::string name; bool visible;);
+            EVENT(SetNodeVisibility, std::string name; bool visible;);
             EVENT(RemoveNodeById, int32_t node_id; bool keep_children = false;);
             EVENT(RenameNodeById, int32_t node_id; std::string new_name;);
             EVENT(SetNodeVisibilityById, int32_t node_id; bool visible;);
@@ -154,7 +154,7 @@ namespace lfs::core {
             EVENT(FitCropBoxToScene, bool use_percentile;);
             EVENT(FitEllipsoidToScene, bool use_percentile;);
             EVENT(ToggleCropInverse, );
-            EVENT(CyclePLY, );
+            EVENT(CycleNode, );
             EVENT(CycleSelectionVisualization, );
             EVENT(ToggleSplitView, );
             EVENT(ToggleIndependentSplitView, const Viewport* viewport;);
@@ -233,8 +233,8 @@ namespace lfs::core {
             EVENT(SceneChanged, uint32_t mutation_flags = 0; bool document_changed = true;);
             EVENT(SelectionChanged, bool has_selection; int count;);
             // node_type stores core::NodeType as int.
-            EVENT(PLYAdded, std::string name; Uuid uuid; size_t node_gaussians; size_t total_gaussians; bool is_visible; std::string parent_name; bool is_group; int node_type; bool from_history = false;);
-            EVENT(PLYRemoved, std::string name; Uuid uuid; bool children_kept = false; std::string parent_of_removed; bool from_history = false;);
+            EVENT(NodeAdded, std::string name; Uuid uuid; size_t node_gaussians; size_t total_gaussians; bool is_visible; std::string parent_name; bool is_group; int node_type; bool from_history = false;);
+            EVENT(NodeRemoved, std::string name; Uuid uuid; bool children_kept = false; std::string parent_of_removed; bool from_history = false;);
             EVENT(NodeReparented, std::string name; std::string old_parent; std::string new_parent; bool from_history = false;);
 
             // Data loading

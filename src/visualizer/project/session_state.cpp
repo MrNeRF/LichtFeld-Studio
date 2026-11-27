@@ -29,6 +29,7 @@
 #include "io/video/video_export_options.hpp"
 #include "rendering/render_constants.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "rendering/viewport_request_builder.hpp"
 #include "sequencer/sequencer_controller.hpp"
 #include "shaders/shader_api.hpp"
 #include "tools/selection_tool.hpp"
@@ -2706,7 +2707,19 @@ namespace lfs::vis::project {
             settings.split_view_mode = alignment->previous_mode;
             settings.split_position = alignment->previous_position;
             settings.split_view_offset = alignment->previous_offset;
+            settings.split_view_left_node_id = alignment->previous_left_node_id;
+            settings.split_view_right_node_id = alignment->previous_right_node_id;
         }
+        const auto split_node_uuid_json = [&](const std::optional<int32_t> id) -> Json {
+            if (!id || *id == core::NULL_NODE) {
+                return Json(nullptr);
+            }
+            const auto* const node = viewer.getScene().getNodeById(*id);
+            if (!node || node->uuid.is_nil() || omit_filter.omits(node->uuid)) {
+                return Json(nullptr);
+            }
+            return Json(node->uuid.to_string());
+        };
         Json bookmarks_json = Json::array();
         for (const auto& bookmark : bookmarks) {
             auto item =
@@ -2830,6 +2843,8 @@ namespace lfs::vis::project {
                               SplitViewPanelId::
                                   Right),
                   })},
+                 {"left_node_uuid", split_node_uuid_json(settings.split_view_left_node_id)},
+                 {"right_node_uuid", split_node_uuid_json(settings.split_view_right_node_id)},
              }},
             {"camera_bookmarks",
              std::move(bookmarks_json)},
@@ -3792,6 +3807,37 @@ namespace lfs::vis::project {
                 restored->split_view_mode;
             const auto saved_split_offset =
                 restored->split_view_offset;
+            const auto resolve_split_node_uuid = [&](const char* key) -> std::optional<int32_t> {
+                const auto split = find_required_object(root, "split");
+                if (split == root.end()) {
+                    return std::nullopt;
+                }
+                const auto uuid_str = scalar<std::string>(*split, key);
+                if (!uuid_str || uuid_str->empty()) {
+                    return std::nullopt;
+                }
+                const auto uuid = lfs::core::Uuid::from_string(*uuid_str);
+                if (!uuid || uuid->is_nil()) {
+                    return std::nullopt;
+                }
+                const auto id = viewer.getScene().getNodeIdByUuid(*uuid);
+                if (id == core::NULL_NODE) {
+                    return std::nullopt;
+                }
+                const auto* const node = viewer.getScene().getNodeById(id);
+                if (!node || !isNodeComparable(viewer.getScene(), *node)) {
+                    return std::nullopt;
+                }
+                return id;
+            };
+            const auto restored_left_node_id = resolve_split_node_uuid("left_node_uuid");
+            auto restored_right_node_id = resolve_split_node_uuid("right_node_uuid");
+            if (restored_left_node_id && restored_right_node_id &&
+                *restored_left_node_id == *restored_right_node_id) {
+                restored_right_node_id.reset();
+            }
+            restored->split_view_left_node_id = restored_left_node_id;
+            restored->split_view_right_node_id = restored_right_node_id;
             restored->split_view_mode =
                 rendering->getSettings()
                     .split_view_mode;
@@ -3804,13 +3850,11 @@ namespace lfs::vis::project {
             // saved cameras therefore apply only after this call.
             rendering->restoreSplitViewMode(
                 desired_split,
-                viewer.getViewport());
-            auto split_settings =
-                rendering->getSettings();
-            split_settings.split_view_offset =
-                saved_split_offset;
-            rendering->updateSettings(
-                split_settings);
+                viewer.getViewport(),
+                std::nullopt,
+                saved_split_offset,
+                restored_left_node_id,
+                restored_right_node_id);
             if (auto* selection_tool =
                     viewer.getSelectionTool()) {
                 selection_tool

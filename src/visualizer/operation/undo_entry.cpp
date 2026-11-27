@@ -27,9 +27,9 @@
 namespace lfs::vis::op {
 
     namespace {
+        using lfs::core::events::state::NodeAdded;
+        using lfs::core::events::state::NodeRemoved;
         using lfs::core::events::state::NodeReparented;
-        using lfs::core::events::state::PLYAdded;
-        using lfs::core::events::state::PLYRemoved;
         using lfs::core::events::state::SceneCleared;
         constexpr auto PROPERTY_COALESCE_WINDOW = std::chrono::milliseconds(500);
         constexpr size_t DENSE_SELECTION_SNAPSHOT_THRESHOLD = 1u << 20;
@@ -1624,7 +1624,7 @@ namespace lfs::vis::op {
             for (const auto& child : snapshot.children) {
                 emitRemovedEvents(child);
             }
-            PLYRemoved{
+            NodeRemoved{
                 .name = snapshot.name,
                 .uuid = snapshot.uuid,
                 .children_kept = false,
@@ -1642,7 +1642,7 @@ namespace lfs::vis::op {
                         parent_name = parent->name;
                     }
                 }
-                PLYAdded{
+                NodeAdded{
                     .name = node->name,
                     .uuid = node->uuid,
                     .node_gaussians = node->gaussian_count.load(std::memory_order_acquire),

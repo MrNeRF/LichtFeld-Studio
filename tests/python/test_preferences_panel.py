@@ -355,7 +355,7 @@ def preferences_panel_module(monkeypatch):
             ),
             TOGGLE_GT_COMPARISON=SimpleNamespace(name="TOGGLE_GT_COMPARISON", value=52),
             TOGGLE_CAMERA_FRUSTUMS=SimpleNamespace(name="TOGGLE_CAMERA_FRUSTUMS", value=53),
-            CYCLE_PLY=SimpleNamespace(name="CYCLE_PLY", value=54),
+            CYCLE_NODE=SimpleNamespace(name="CYCLE_NODE", value=54),
             CYCLE_SELECTION_VIS=SimpleNamespace(name="CYCLE_SELECTION_VIS", value=55),
             TOOL_SELECT=SimpleNamespace(name="TOOL_SELECT", value=56),
             TOOL_TRANSLATE=SimpleNamespace(name="TOOL_TRANSLATE", value=57),

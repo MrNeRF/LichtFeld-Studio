@@ -51,25 +51,43 @@ namespace lfs::vis {
         const FrameContext& ctx, const core::Scene& scene, const core::SceneNode& node,
         glm::ivec2 render_size, const std::vector<glm::mat4>& transforms);
 
-    struct PlyComparisonNode {
+    struct NodeComparisonNode {
         const core::SceneNode* node = nullptr;
-        // Combined-model slot of a splat node; empty for point clouds and meshes.
+        // Combined-model slot of a splat node; empty for point clouds, meshes, and hidden pinned splats.
         std::optional<size_t> splat_slot;
     };
 
-    // Visible comparison-eligible nodes in depth-first scene-tree order.
-    [[nodiscard]] LFS_VIS_API std::vector<PlyComparisonNode> plyComparisonNodes(const core::Scene& scene);
+    struct NodeComparisonPair {
+        NodeComparisonNode left;
+        NodeComparisonNode right;
+    };
 
-    // Visible splat, point cloud, or mesh shown in a comparison panel, or null when
-    // the scene has fewer than two of them.
-    [[nodiscard]] LFS_VIS_API const core::SceneNode* plyComparisonNodeForPanel(
+    // Whether a node has renderable geometry eligible for NodeComparison (splat, point cloud, or mesh).
+    [[nodiscard]] LFS_VIS_API bool isNodeComparable(const core::Scene& scene, const core::SceneNode& node);
+
+    // Visible comparison-eligible nodes in depth-first scene-tree order.
+    [[nodiscard]] LFS_VIS_API std::vector<NodeComparisonNode> nodeComparisonNodes(const core::Scene& scene);
+
+    // Resolve the Left and Right comparison nodes, honoring optional explicit node IDs
+    // and falling back to split_view_offset over visible comparable nodes when unset or invalid.
+    [[nodiscard]] LFS_VIS_API std::optional<NodeComparisonPair> resolveNodeComparisonPair(
         const core::Scene& scene,
         size_t split_view_offset,
-        SplitViewPanelId panel);
+        std::optional<core::NodeId> left_node_id = std::nullopt,
+        std::optional<core::NodeId> right_node_id = std::nullopt);
 
-    // Scope scene/crop/ellipsoid/selection overlay state to one visible splat node so
+    // Comparable splat, point cloud, or mesh shown in a comparison panel, or null when
+    // no valid 2-node comparison pair can be resolved.
+    [[nodiscard]] LFS_VIS_API const core::SceneNode* nodeComparisonNodeForPanel(
+        const core::Scene& scene,
+        size_t split_view_offset,
+        SplitViewPanelId panel,
+        std::optional<core::NodeId> left_node_id = std::nullopt,
+        std::optional<core::NodeId> right_node_id = std::nullopt);
+
+    // Scope scene/crop/ellipsoid/selection overlay state to one splat node so
     // a per-node comparison render can use identity transform indices.
-    LFS_VIS_API void applyPlyComparisonNodeScope(
+    LFS_VIS_API void applyNodeComparisonNodeScope(
         lfs::rendering::GaussianSceneState& scene,
         lfs::rendering::GaussianFilterState& filters,
         lfs::rendering::GaussianOverlayState& overlay,
@@ -82,7 +100,7 @@ namespace lfs::vis {
     void scopeCustomEffectToSlot(std::optional<lfs::rendering::GaussianCustomEffectState>& effect,
                                  int visible_index);
 
-    struct PlyComparisonDepthSample {
+    struct NodeComparisonDepthSample {
         const core::SceneNode* node = nullptr;
         const core::SplatData* model = nullptr;
         int visible_index = -1;
@@ -92,10 +110,12 @@ namespace lfs::vis {
     // Clicked comparison panel's splat node and the model expected-depth should
     // sample. Prefers the node's own storage; peeks a prepared combined model
     // only when the node no longer owns one.
-    [[nodiscard]] LFS_VIS_API PlyComparisonDepthSample resolvePlyComparisonDepthSample(
+    [[nodiscard]] LFS_VIS_API NodeComparisonDepthSample resolveNodeComparisonDepthSample(
         const core::Scene& scene,
         size_t split_view_offset,
-        SplitViewPanelId panel);
+        SplitViewPanelId panel,
+        std::optional<core::NodeId> left_node_id = std::nullopt,
+        std::optional<core::NodeId> right_node_id = std::nullopt);
 
     // Rewrite metadata render state so a single comparison node renders with
     // identity transform indices, that node's crop/ellipsoid, and its selection slice.

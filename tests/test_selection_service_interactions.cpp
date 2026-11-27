@@ -1068,13 +1068,13 @@ TEST_F(SelectionServiceInteractionsTest, ComparisonSelectAllFilteredStillApplies
     EXPECT_FALSE(scene_manager_->getScene().hasPreparedCombinedModel());
 
     auto settings = rendering_manager_->getSettings();
-    settings.split_view_mode = lfs::vis::SplitViewMode::PLYComparison;
+    settings.split_view_mode = lfs::vis::SplitViewMode::NodeComparison;
     settings.crop_filter_for_selection = false;
     settings.depth_filter_enabled = true;
     settings.depth_filter_min = {-0.25f, -0.25f, -0.25f};
     settings.depth_filter_max = {0.25f, 0.25f, 0.25f};
     rendering_manager_->updateSettings(settings);
-    ASSERT_TRUE(rendering_manager_->isPLYComparisonActive());
+    ASSERT_TRUE(rendering_manager_->isNodeComparisonActive());
 
     const auto result = service_->selectAllFiltered();
     ASSERT_TRUE(result.success) << result.error;
@@ -1112,7 +1112,7 @@ TEST_F(SelectionServiceInteractionsTest, SelectAllFilteredKeepsGaussiansInsideTh
 TEST_F(SelectionServiceInteractionsTest, ComparisonHoverKeepsOwnedPanelPositionsWithoutCombinedModel) {
     scene_manager_->getScene().addSplat("right", make_test_splat({0.0f, 0.0f, 0.0f}));
     auto settings = rendering_manager_->getSettings();
-    settings.split_view_mode = lfs::vis::SplitViewMode::PLYComparison;
+    settings.split_view_mode = lfs::vis::SplitViewMode::NodeComparison;
     rendering_manager_->updateSettings(settings);
     const auto positions = service_->getScreenPositions();
     ASSERT_NE(positions, nullptr);

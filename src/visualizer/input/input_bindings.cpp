@@ -78,7 +78,7 @@ namespace lfs::vis::input {
             publishKeymapNotice(lfs::ErrorCode::InvalidArgument, std::move(message));
         }
 
-        constexpr int PROFILE_VERSION = 41; // Image preview segmentation commands.
+        constexpr int PROFILE_VERSION = 42; // Rename CYCLE_PLY action to CYCLE_NODE.
 
         [[nodiscard]] std::optional<Binding> parseStoredBinding(const nlohmann::json& value);
         [[nodiscard]] std::string triggerIdentity(const Binding& binding);
@@ -180,6 +180,7 @@ namespace lfs::vis::input {
                     const auto a = static_cast<Action>(i);
                     m->emplace(toLowerCopy(getActionName(a)), a);
                 }
+                m->emplace("cycle ply", Action::CYCLE_NODE);
                 return m;
             }();
             const auto it = table->find(toLowerCopy(description));
@@ -240,6 +241,8 @@ namespace lfs::vis::input {
         }
 
         [[nodiscard]] std::optional<Action> findActionBySymbol(std::string_view symbol) {
+            if (symbol == "CYCLE_PLY")
+                return Action::CYCLE_NODE;
             for (const auto& [name, value] : kCurrentActionSymbols) {
                 if (name == symbol)
                     return static_cast<Action>(value);
@@ -2033,7 +2036,7 @@ namespace lfs::vis::input {
             {KeyTrigger{KEY_G, MODIFIER_NONE}, Action::TOGGLE_GT_COMPARISON, "GT comparison"},
             {KeyTrigger{KEY_C, MODIFIER_ALT}, Action::TOGGLE_CAMERA_FRUSTUMS, "Camera frustums"},
             {KeyTrigger{KEY_G, MODIFIER_ALT}, Action::TOGGLE_GRID, "Grid"},
-            {KeyTrigger{KEY_T, MODIFIER_NONE}, Action::CYCLE_PLY, "Cycle PLY"},
+            {KeyTrigger{KEY_T, MODIFIER_NONE}, Action::CYCLE_NODE, "Cycle Node"},
             // Editing (Delete is mode-specific, added below)
             {KeyTrigger{KEY_Z, MODIFIER_CTRL}, Action::UNDO, "Undo"},
             {KeyTrigger{KEY_Y, MODIFIER_CTRL}, Action::REDO, "Redo"},
@@ -2229,7 +2232,7 @@ namespace lfs::vis::input {
         case Action::TOGGLE_INDEPENDENT_SPLIT_VIEW: return "Toggle Independent Split View";
         case Action::TOGGLE_GT_COMPARISON: return "Toggle GT Comparison";
         case Action::TOGGLE_DEPTH_MODE: return "Toggle Depth Box";
-        case Action::CYCLE_PLY: return "Cycle PLY";
+        case Action::CYCLE_NODE: return "Cycle Node";
         case Action::DELETE_SELECTED: return "Delete Selected Gaussians";
         case Action::DELETE_NODE: return "Delete Node";
         case Action::UNDO: return "Undo";
@@ -2345,7 +2348,7 @@ namespace lfs::vis::input {
         case Action::TOGGLE_INDEPENDENT_SPLIT_VIEW: return "toggle_independent_split_view";
         case Action::TOGGLE_GT_COMPARISON: return "toggle_gt_comparison";
         case Action::TOGGLE_DEPTH_MODE: return "toggle_depth_mode";
-        case Action::CYCLE_PLY: return "cycle_ply";
+        case Action::CYCLE_NODE: return "cycle_node";
         case Action::DELETE_SELECTED: return "delete_selected";
         case Action::DELETE_NODE: return "delete_node";
         case Action::UNDO: return "undo";
@@ -2474,6 +2477,7 @@ namespace lfs::vis::input {
                 if (!key.empty())
                     m.emplace(key, action);
             }
+            m.emplace("cycle_ply", Action::CYCLE_NODE);
             return m;
         }();
         std::string normalized(name);
@@ -3142,7 +3146,7 @@ namespace lfs::vis::input {
         case Action::TOGGLE_GT_COMPARISON:
         case Action::TOGGLE_CAMERA_FRUSTUMS:
         case Action::TOGGLE_GRID:
-        case Action::CYCLE_PLY:
+        case Action::CYCLE_NODE:
         case Action::CYCLE_SELECTION_VIS:
             return d_view_global_key;
 

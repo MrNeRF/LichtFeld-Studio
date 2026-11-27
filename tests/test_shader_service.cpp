@@ -873,7 +873,7 @@ namespace {
         EXPECT_FALSE(std::ranges::contains(service().candidate()->nodes, nodes[1], &NodeBindings::value_type::first));
         // Nor on a later scene change once there is room.
         ASSERT_TRUE(commands().unbind({.kind = Kind::Global}));
-        lfs::core::events::state::PLYAdded{}.emit();
+        lfs::core::events::state::NodeAdded{}.emit();
         EXPECT_EQ(effects(), shaders::kMaxBoundShaders - 1);
         EXPECT_FALSE(std::ranges::contains(service().candidate()->nodes, nodes[1], &NodeBindings::value_type::first));
     }

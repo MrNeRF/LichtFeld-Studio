@@ -1810,13 +1810,20 @@ namespace lfs::vis {
         auto render_lock = acquireLiveModelRenderLock(scene_manager_);
         SceneRenderState scene_state;
         std::shared_ptr<core::Tensor> screen_positions;
-        if (rendering_manager_->isPLYComparisonActive()) {
+        if (rendering_manager_->isNodeComparisonActive()) {
             scene_state = scene_manager_->buildRenderState({.metadata_only = true});
             const auto& scene = scene_manager_->getScene();
-            const auto sample = resolvePlyComparisonDepthSample(
-                scene, settings.split_view_offset, context.panel);
-            if (sample.node && sample.node->type == core::NodeType::MESH) {
-                // A mesh panel shows no Gaussians to pick.
+            const auto sample = resolveNodeComparisonDepthSample(
+                scene,
+                settings.split_view_offset,
+                context.panel,
+                settings.split_view_left_node_id,
+                settings.split_view_right_node_id);
+            if (sample.node &&
+                (sample.node->type != core::NodeType::SPLAT ||
+                 !scene.isNodeEffectivelyVisible(sample.node->id))) {
+                // Non-splat panels (meshes, point clouds) and hidden pinned splats
+                // are outside the visible Gaussian selection domain.
                 viewport_screen_positions_[panel_index].reset();
                 viewport_screen_position_keys_[panel_index] = {};
                 return nullptr;
@@ -1883,6 +1890,11 @@ namespace lfs::vis {
                     viewport_screen_positions_[panel_index] = screen_positions;
                     viewport_screen_position_keys_[panel_index] = key;
                     return screen_positions;
+                }
+                if (!found_node) {
+                    viewport_screen_positions_[panel_index].reset();
+                    viewport_screen_position_keys_[panel_index] = {};
+                    return nullptr;
                 }
             }
             // Owned-panel projection was not possible (consolidated nodes, empty

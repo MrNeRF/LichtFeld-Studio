@@ -51,9 +51,22 @@ namespace lfs::vis {
         [[nodiscard]] ModeChangeResult toggleMode(RenderSettings& settings,
                                                   SplitViewMode target_mode,
                                                   const Viewport* primary_viewport = nullptr);
+        [[nodiscard]] ModeChangeResult setMode(RenderSettings& settings,
+                                               SplitViewMode target_mode,
+                                               const Viewport* primary_viewport = nullptr);
+        [[nodiscard]] ModeChangeResult setNodeComparisonNodes(RenderSettings& settings,
+                                                              SceneManager* scene_manager,
+                                                              std::optional<int32_t> left_node_id,
+                                                              std::optional<int32_t> right_node_id,
+                                                              bool enter_comparison = true);
+        [[nodiscard]] ModeChangeResult setNodeComparisonNode(RenderSettings& settings,
+                                                             SceneManager* scene_manager,
+                                                             SplitViewPanelId panel,
+                                                             std::optional<int32_t> node_id,
+                                                             bool enter_comparison = true);
         [[nodiscard]] ModeChangeResult handleSceneLoaded(RenderSettings& settings);
         [[nodiscard]] ModeChangeResult handleSceneCleared(RenderSettings& settings);
-        [[nodiscard]] ModeChangeResult handleVisiblePLYsChanged(RenderSettings& settings, SceneManager* scene_manager);
+        [[nodiscard]] ModeChangeResult handleComparableNodesChanged(RenderSettings& settings, SceneManager* scene_manager);
         void advanceSplitOffset(RenderSettings& settings);
         [[nodiscard]] SplitViewInfo getInfo() const;
         [[nodiscard]] std::optional<SplitViewInfo> getInfoIfChanged(std::uint64_t& generation) const;

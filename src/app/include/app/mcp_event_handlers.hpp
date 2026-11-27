@@ -300,7 +300,7 @@ namespace lfs::app {
         register_handler.template operator()<core::events::state::SceneChanged>("scene.changed", [](const auto& event) {
             return nlohmann::json{{"mutation_flags", event.mutation_flags}};
         });
-        register_handler.template operator()<core::events::state::PLYAdded>("scene.node_added", [](const auto& event) {
+        register_handler.template operator()<core::events::state::NodeAdded>("scene.node_added", [](const auto& event) {
             return nlohmann::json{
                 {"name", event.name},
                 {"uuid", event.uuid.to_string()},
@@ -312,7 +312,7 @@ namespace lfs::app {
                 {"node_type", event.node_type},
             };
         });
-        register_handler.template operator()<core::events::state::PLYRemoved>("scene.node_removed", [](const auto& event) {
+        register_handler.template operator()<core::events::state::NodeRemoved>("scene.node_removed", [](const auto& event) {
             return nlohmann::json{
                 {"name", event.name},
                 {"uuid", event.uuid.to_string()},

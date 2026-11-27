@@ -301,6 +301,7 @@ namespace lfs::vis::gui {
         core::NodeId context_menu_node_id_ = core::NULL_NODE;
         core::NodeId drag_source_id_ = core::NULL_NODE;
         std::vector<core::NodeId> drag_node_ids_;
+        uint64_t drag_payload_token_ = 0;
         core::NodeId drop_into_group_id_ = core::NULL_NODE;
         core::NodeId drop_parent_id_ = core::NULL_NODE;
         int drop_index_ = -1;

@@ -2290,8 +2290,11 @@ namespace lfs::vis {
                 if (auto* const rendering = services().renderingOrNull();
                     rendering && (rendering->isGTComparisonActive() || rendering->hasGTComparisonAvailable())) {
                     cmd::ToggleGTComparison{}.emit();
+                } else if (auto* const rendering_for_nodes = services().renderingOrNull();
+                           rendering_for_nodes && rendering_for_nodes->isNodeComparisonActive()) {
+                    cmd::ToggleSplitView{}.emit();
                 } else if (const auto* const scene_manager = services().sceneOrNull();
-                           scene_manager && plyComparisonNodes(scene_manager->getScene()).size() >= 2) {
+                           scene_manager && nodeComparisonNodes(scene_manager->getScene()).size() >= 2) {
                     cmd::ToggleSplitView{}.emit();
                 }
                 return;
@@ -2391,8 +2394,8 @@ namespace lfs::vis {
                 }
                 return;
 
-            case input::Action::CYCLE_PLY:
-                cmd::CyclePLY{}.emit();
+            case input::Action::CYCLE_NODE:
+                cmd::CycleNode{}.emit();
                 return;
 
             case input::Action::CYCLE_SELECTION_VIS:

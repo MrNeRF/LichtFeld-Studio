@@ -695,7 +695,7 @@ namespace lfs::python {
             added->transient = transient;
         }
 
-        lfs::core::events::state::PLYAdded{
+        lfs::core::events::state::NodeAdded{
             .name = added_name,
             .uuid = added->uuid,
             .node_gaussians = gaussian_count,

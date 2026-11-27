@@ -77,10 +77,10 @@ TEST(ViewportTest, DefaultCameraStartsAboveWorldYAxis) {
     EXPECT_GT(viewport.camera.t.y, 0.0f);
 }
 
-TEST(ViewportTest, PlyComparisonPanelLayoutKeepsMarginWithinCachedRects) {
+TEST(ViewportTest, NodeComparisonPanelLayoutKeepsMarginWithinCachedRects) {
     constexpr int width = 1000;
     constexpr float cached_split = 0.5f;
-    const auto layouts = lfs::vis::makePlyComparisonPanelLayouts(width, cached_split);
+    const auto layouts = lfs::vis::makeNodeComparisonPanelLayouts(width, cached_split);
 
     EXPECT_EQ(layouts[0].panel.x, 0);
     EXPECT_EQ(layouts[0].panel.width, 625);
@@ -92,9 +92,9 @@ TEST(ViewportTest, PlyComparisonPanelLayoutKeepsMarginWithinCachedRects) {
     EXPECT_NEAR(0.5f * layouts[0].texcoord_scale.x + layouts[0].texcoord_offset.x, 0.8f, 1e-6f);
     EXPECT_NEAR(0.5f * layouts[1].texcoord_scale.x + layouts[1].texcoord_offset.x, 0.2f, 1e-6f);
 
-    EXPECT_TRUE(lfs::vis::plyComparisonSplitterWithinMargin(width, cached_split, 0.6f));
-    EXPECT_TRUE(lfs::vis::plyComparisonSplitterWithinMargin(width, cached_split, 0.4f));
-    EXPECT_FALSE(lfs::vis::plyComparisonSplitterWithinMargin(width, cached_split, 0.7f));
+    EXPECT_TRUE(lfs::vis::nodeComparisonSplitterWithinMargin(width, cached_split, 0.6f));
+    EXPECT_TRUE(lfs::vis::nodeComparisonSplitterWithinMargin(width, cached_split, 0.4f));
+    EXPECT_FALSE(lfs::vis::nodeComparisonSplitterWithinMargin(width, cached_split, 0.7f));
     EXPECT_EQ(layouts[0].panel.width, 625);
     EXPECT_EQ(layouts[1].panel.width, 625);
 }
@@ -107,7 +107,7 @@ TEST(ViewportTest, SplitViewPixelCentersDoNotStretchWithPanelWidth) {
     constexpr int full_width = 1000;
     constexpr int screen_pixel = 550;
     for (const float cached_split : {0.5f, 0.7f}) {
-        const auto layouts = lfs::vis::makePlyComparisonPanelLayouts(full_width, cached_split);
+        const auto layouts = lfs::vis::makeNodeComparisonPanelLayouts(full_width, cached_split);
         for (const auto& layout : layouts) {
             if (screen_pixel < layout.panel.x ||
                 screen_pixel >= layout.panel.x + layout.panel.width)
@@ -125,7 +125,7 @@ TEST(ViewportTest, SplitViewPixelCentersDoNotStretchWithPanelWidth) {
     }
 }
 
-TEST(ViewportTest, PlyComparisonClippedRequestKeepsFullViewportCamera) {
+TEST(ViewportTest, NodeComparisonClippedRequestKeepsFullViewportCamera) {
     constexpr glm::ivec2 full_size{1000, 600};
     constexpr float split_position = 0.5f;
     Viewport viewport(full_size.x, full_size.y);
@@ -138,7 +138,7 @@ TEST(ViewportTest, PlyComparisonClippedRequestKeepsFullViewportCamera) {
     };
 
     const auto full_request = lfs::vis::buildViewportRenderRequest(ctx, full_size);
-    const auto layouts = lfs::vis::makePlyComparisonPanelLayouts(full_size.x, split_position);
+    const auto layouts = lfs::vis::makeNodeComparisonPanelLayouts(full_size.x, split_position);
     const auto& left_layout = layouts[0].panel;
     const auto clipped_request = lfs::vis::buildViewportRenderRequest(
         ctx,

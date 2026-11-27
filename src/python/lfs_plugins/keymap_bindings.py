@@ -116,7 +116,7 @@ class KeymapBindingsSection:
             lf.keymap.Action.TOGGLE_GT_COMPARISON,
             lf.keymap.Action.TOGGLE_CAMERA_FRUSTUMS,
             lf.keymap.Action.TOGGLE_GRID,
-            lf.keymap.Action.CYCLE_PLY,
+            lf.keymap.Action.CYCLE_NODE,
             lf.keymap.Action.CYCLE_SELECTION_VIS,
         ],
         "tools_global": [
