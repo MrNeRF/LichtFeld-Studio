@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// LpipsOps kernels: the fp16 VGG path of lpips_kernels.cu, conv.cu and
-// conv3x3_mma.cu. Products of fp16 operands accumulate in fp32.
+// LpipsOps kernels of lpips_kernels.cu: the weight taps and the fused pool reduce. The convolutions run on the
+// nn convolution (lpips_metal.cpp). Products of fp16 operands accumulate in fp32.
 
 struct LpipsTapsParams {
     device const half* weight;
@@ -18,95 +18,6 @@ kernel void lpips_weight_taps(constant LpipsTapsParams& p [[buffer(0)]], uint in
     const uint n = (index / p.cin) % p.cout;
     const uint tap = index / (p.cin * p.cout);
     p.taps[index] = p.weight[(n * p.cin + ic) * 9 + tap];
-}
-
-struct LpipsRgbParams {
-    device const float* input;
-    device const half* weight;
-    device const half* bias;
-    device half* output;
-    float shift[3], scale[3];
-    uint official;
-    int n, h, w;
-};
-
-// First VGG layer: 64 output channels of a 3x3 conv over the scaled image,
-// the scaled pixels rounded to half as the CUDA gather stores them.
-kernel void lpips_rgb_conv(constant LpipsRgbParams& p [[buffer(0)]], uint index [[thread_position_in_grid]]) {
-    const int plane = p.h * p.w;
-    if (int(index) >= p.n * 64 * plane)
-        return;
-    const int pixel = int(index) % plane;
-    const int oc = (int(index) / plane) % 64;
-    const int ni = int(index) / (plane * 64);
-    const int oh = pixel / p.w, ow = pixel % p.w;
-    device const float* x = p.input + ni * 3 * plane;
-    float sum = 0.0f;
-    for (int ic = 0; ic < 3; ++ic) {
-        for (int kh = 0; kh < 3; ++kh) {
-            for (int kw = 0; kw < 3; ++kw) {
-                const int ih = oh + kh - 1, iw = ow + kw - 1;
-                if (uint(ih) >= uint(p.h) || uint(iw) >= uint(p.w))
-                    continue;
-                float v = x[ic * plane + ih * p.w + iw];
-                if (p.official != 0)
-                    v = v * 2.0f - 1.0f;
-                sum += float(half((v - p.shift[ic]) / p.scale[ic])) * float(p.weight[oc * 27 + ic * 9 + kh * 3 + kw]);
-            }
-        }
-    }
-    p.output[index] = half(fmax(sum + float(p.bias[oc]), 0.0f));
-}
-
-struct LpipsConvParams {
-    device const void* input;
-    device const void* weight;
-    device const void* bias; // may be null
-    device void* output;
-    int n, cin, h, w, cout, out_h, out_w, pad_h, pad_w, pad_mode, activation;
-    uint half_type;
-};
-
-static float lpips_load(device const void* data, const uint index, const bool half_type) {
-    return half_type ? float(((device const half*)data)[index]) : ((device const float*)data)[index];
-}
-
-// 3x3 implicit convolution with stride and dilation 1, as conv2d_implicit;
-// every operand has the input's dtype.
-kernel void lpips_conv(constant LpipsConvParams& p [[buffer(0)]], uint index [[thread_position_in_grid]]) {
-    const int spatial = p.out_h * p.out_w;
-    if (int(index) >= p.n * p.cout * spatial)
-        return;
-    const int pixel = int(index) % spatial;
-    const int oc = (int(index) / spatial) % p.cout;
-    const int ni = int(index) / (spatial * p.cout);
-    const int oh = pixel / p.out_w, ow = pixel % p.out_w;
-    const bool half_type = p.half_type != 0;
-    float sum = 0.0f;
-    for (int ic = 0; ic < p.cin; ++ic) {
-        const uint plane = uint((ni * p.cin + ic) * p.h);
-        for (int kh = 0; kh < 3; ++kh) {
-            for (int kw = 0; kw < 3; ++kw) {
-                int ih = oh - p.pad_h + kh, iw = ow - p.pad_w + kw;
-                if (p.pad_mode == 1) {
-                    ih = clamp(ih, 0, p.h - 1);
-                    iw = clamp(iw, 0, p.w - 1);
-                }
-                if (uint(ih) >= uint(p.h) || uint(iw) >= uint(p.w))
-                    continue;
-                sum += lpips_load(p.input, (plane + uint(ih)) * uint(p.w) + uint(iw), half_type) *
-                       lpips_load(p.weight, uint((oc * p.cin + ic) * 9 + kh * 3 + kw), half_type);
-            }
-        }
-    }
-    if (p.bias)
-        sum += lpips_load(p.bias, uint(oc), half_type);
-    if (p.activation == 1)
-        sum = fmax(sum, 0.0f);
-    if (half_type)
-        ((device half*)p.output)[index] = half(sum);
-    else
-        ((device float*)p.output)[index] = sum;
 }
 
 struct LpipsPoolParams {

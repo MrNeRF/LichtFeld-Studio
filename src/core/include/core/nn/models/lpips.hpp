@@ -100,6 +100,7 @@ namespace lfs::core::nn::models {
                                                    InputScaling scaling, const MaskWeights* mask);
         lfs::Result<MaskWeights> mask_weights(const Tensor& mask, std::size_t height, std::size_t width) const;
         [[nodiscard]] bool takes_fast_path() const;
+        [[nodiscard]] std::size_t crop_bytes_per_pixel() const;
         lfs::Result<std::array<Tensor, 5>> extract_normalized_features(
             const Tensor& input, InputScaling scaling);
         // Fast mode without taps: fused kernels writing ping-pong feature buffers,

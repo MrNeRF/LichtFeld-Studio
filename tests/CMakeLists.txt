@@ -1200,6 +1200,7 @@ if(NOT LFS_HAS_CUDA)
         test_viewport.cpp
         test_tensor_metal.cpp
         test_lpips_pool_reduce.cpp
+        test_lpips_fast_path.cpp
         test_lpips_pair.cpp
         test_camera_priors_portable.cpp
         test_undistort_portable.cpp
@@ -1753,6 +1754,7 @@ set(TEST_FILES
     test_sam2.cpp
     test_lpips.cpp
     test_lpips_pool_reduce.cpp
+    test_lpips_fast_path.cpp
     test_lpips_pair.cpp
     test_video_masking.cpp
     test_ppisp_regularization.cpp

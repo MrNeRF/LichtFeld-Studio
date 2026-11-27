@@ -1,14 +1,18 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// Metal LpipsOps; see ops/lpips_cuda.cpp for the reference behaviour.
+// Metal LpipsOps; see ops/lpips_cuda.cpp for the reference behaviour. The convolutions run on the nn
+// convolution (matrix kernels, bias and ReLU in their epilogue), so the fused fast path is the fast one here too.
 
+#include "core/nn/ops.hpp"
 #include "metal_families.hpp"
 #include "metal_kernels.hpp"
 
+#include <array>
 #include <format>
 #include <stdexcept>
 #include <string_view>
+#include <vector>
 
 namespace lfs::training {
     namespace {
@@ -23,6 +27,12 @@ namespace lfs::training {
         }
 
         bool is_half(const Tensor& tensor) { return tensor.dtype() == DataType::Float16; }
+
+        // What the fast path holds per crop pixel on this backend: the four float16 ping-pong buffers of 64 channels
+        // (512 bytes), the two float32 tile copies (24), a convolution's result before it is copied into its buffer
+        // (128) and the scaled RGB input (18), with the 64 MiB im2col chunk of the wide layers spread over a tile of
+        // about 700 x 700 (an evaluation's 384 MiB). Measured as the pool's high-water mark.
+        constexpr std::size_t kFastBytesPerPixel = 850;
 
         struct TapsParams {
             uint64_t weight, taps;
@@ -39,13 +49,8 @@ namespace lfs::training {
             mk::launch_items("lpips_weight_taps", params, {&weight, &taps}, weight.numel());
         }
 
-        struct RgbParams {
-            uint64_t input, weight, bias, output;
-            float shift[3], scale[3];
-            uint32_t official;
-            int32_t n, h, w;
-        };
-
+        // The input scaling as the exact path computes it (official scaling, then shift and scale in float32, rounded
+        // to the weights' float16), then the first convolution with its bias and ReLU.
         void rgb_conv(const Tensor& input, const Tensor& weight, const Tensor& bias, Tensor& output,
                       const gpu_ops::RGBConvParams& p) {
             require(input.ndim() == 4 && input.shape()[1] == 3 && input.dtype() == DataType::Float32,
@@ -55,27 +60,19 @@ namespace lfs::training {
             const auto n = input.shape()[0], h = input.shape()[2], w = input.shape()[3];
             require(is_half(output) && output.numel() == n * 64 * h * w,
                     "RGB conv needs a float16 [N, 64, H, W] output", output);
-            const RgbParams params{.input = mk::address(input),
-                                   .weight = mk::address(weight),
-                                   .bias = mk::address(bias),
-                                   .output = mk::address(output),
-                                   .shift = {p.shift[0], p.shift[1], p.shift[2]},
-                                   .scale = {p.scale[0], p.scale[1], p.scale[2]},
-                                   .official = p.official_scaling ? 1u : 0u,
-                                   .n = static_cast<int32_t>(n),
-                                   .h = static_cast<int32_t>(h),
-                                   .w = static_cast<int32_t>(w)};
-            mk::launch_items("lpips_rgb_conv", params, {&input, &weight, &bias, &output}, output.numel());
+            const auto channel = [&](const std::array<float, 3>& values) {
+                return Tensor::from_vector(std::vector<float>(values.begin(), values.end()), core::TensorShape({1, 3, 1, 1}),
+                                           core::Device::GPU);
+            };
+            const Tensor shifted = p.official_scaling ? input.mul(2.0f).sub(1.0f) : input;
+            const Tensor scaled = shifted.sub(channel(p.shift)).div(channel(p.scale)).contiguous().to(DataType::Float16);
+            core::nn::Conv2dParams params;
+            params.pad_h = params.pad_w = 1;
+            params.activation = core::nn::Activation::Relu;
+            output.copy_from(core::nn::conv2d(scaled, weight, &bias, params, nullptr));
         }
 
-        struct ConvParams {
-            uint64_t input, weight, bias, output;
-            int32_t n, cin, h, w, cout, out_h, out_w, pad_h, pad_w, pad_mode, activation;
-            uint32_t half_type;
-        };
-
-        // Stride and dilation are 1 and the kernel 3x3, as conv2d_implicit assumes;
-        // taps and scratch only feed CUDA's tensor-core path.
+        // Taps and scratch only feed CUDA's tensor-core path.
         void convolution(const Tensor& input, const Tensor& weight, const Tensor& /*taps*/, const Tensor& bias,
                          Tensor& output, Tensor& /*scratch*/, const gpu_ops::ConvParams& p) {
             require(input.ndim() == 4 && (is_half(input) || input.dtype() == DataType::Float32),
@@ -91,14 +88,7 @@ namespace lfs::training {
             if (p.activation != core::nn::Activation::None && p.activation != core::nn::Activation::Relu)
                 throw std::invalid_argument(std::format("LPIPS convolution supports no activation or ReLU, got {}",
                                                         static_cast<int>(p.activation)));
-            const ConvParams params{mk::address(input), mk::address(weight), mk::address(bias), mk::address(output),
-                                    static_cast<int32_t>(input.shape()[0]), static_cast<int32_t>(input.shape()[1]),
-                                    static_cast<int32_t>(input.shape()[2]), static_cast<int32_t>(input.shape()[3]),
-                                    static_cast<int32_t>(weight.shape()[0]), static_cast<int32_t>(output.shape()[2]),
-                                    static_cast<int32_t>(output.shape()[3]), p.pad_h, p.pad_w,
-                                    static_cast<int32_t>(p.pad_mode), static_cast<int32_t>(p.activation),
-                                    is_half(input) ? 1u : 0u};
-            mk::launch_items("lpips_conv", params, {&input, &weight, &bias, &output}, output.numel());
+            output.copy_from(core::nn::conv2d(input, weight, bias.is_valid() ? &bias : nullptr, p, nullptr));
         }
 
         struct PoolParams {
@@ -146,6 +136,7 @@ namespace lfs::training {
             .rgb_conv = rgb_conv,
             .convolution = convolution,
             .pool_reduce = pool_reduce,
+            .fast_bytes_per_pixel = kFastBytesPerPixel,
         }};
         return ops;
     }

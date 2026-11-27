@@ -184,7 +184,7 @@ namespace lfs::core::nn::models {
         const std::size_t pixels = static_cast<std::size_t>(height) * static_cast<std::size_t>(width);
         const std::size_t bytes_per_pixel = compute_ == DataType::Float16 && gpu_backend_of(weights_.begin()->second) == GpuBackend::CUDA
                                                 ? kFastBytesPerPixel
-                                                : kExactBytesPerPixel;
+                                                : crop_bytes_per_pixel();
         const auto untiled_bytes = compute_ == DataType::Float16 && gpu_backend_of(weights_.begin()->second) == GpuBackend::CUDA
                                        ? fast_activation_bytes(height, width, false)
                                        : pixels * bytes_per_pixel;
@@ -229,7 +229,7 @@ namespace lfs::core::nn::models {
                                               static_cast<std::size_t>(width >> block) * sizeof(float));
         }
         if (compute_ == DataType::Float32 || gpu_backend_of(weights_.begin()->second) != GpuBackend::CUDA) {
-            std::size_t bytes = crop_h * crop_w * kExactBytesPerPixel + mask_bytes;
+            std::size_t bytes = crop_h * crop_w * crop_bytes_per_pixel() + mask_bytes;
             if (compute_ == DataType::Float16 && dispatch_ &&
                 gpu_backend_of(weights_.begin()->second) == GpuBackend::Vulkan && !fast_weight_taps_.is_valid()) {
                 for (std::size_t i = 1; i < kLayers.size(); ++i)
@@ -469,9 +469,15 @@ namespace lfs::core::nn::models {
             return false;
         if (gpu_backend_of(weights_.begin()->second) == GpuBackend::CUDA)
             return true;
-        // Metal's family kernels are reference implementations; its nn
-        // convolutions (run_tiled and run_untiled) are the fast path there.
-        return dispatch_ != nullptr && gpu_backend_of(weights_.begin()->second) == GpuBackend::Vulkan;
+        // Metal's family convolutions run on its nn convolution.
+        return dispatch_ != nullptr && (gpu_backend_of(weights_.begin()->second) == GpuBackend::Vulkan ||
+                                        gpu_backend_of(weights_.begin()->second) == GpuBackend::Metal);
+    }
+
+    std::size_t Lpips::crop_bytes_per_pixel() const {
+        return takes_fast_path() && dispatch_ != nullptr && dispatch_->fast_bytes_per_pixel > 0
+                   ? dispatch_->fast_bytes_per_pixel
+                   : kExactBytesPerPixel;
     }
 
     std::optional<lfs::Error> Lpips::validate_pair(const Tensor& pred, const Tensor& target) const {
