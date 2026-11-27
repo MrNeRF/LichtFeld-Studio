@@ -107,6 +107,13 @@ namespace lfs::core::nn::models {
         // no activation arena, no intermediate copies.
         lfs::Result<float> run_fast(const Tensor& pred, const Tensor& target,
                                     InputScaling scaling, const MaskWeights* mask);
+        lfs::Result<std::array<float, 2>> run_fast_pair(const Tensor& pred_a, const Tensor& pred_b, const Tensor& target,
+                                                        InputScaling scaling, const MaskWeights* mask);
+        struct FastTaps {
+            std::array<Tensor, 13> views;
+            const unsigned char* base = nullptr;
+        };
+        lfs::Result<FastTaps> fast_taps(cudaStream_t stream, bool cuda_backend, const Tensor& like);
         std::optional<lfs::Error> validate_pair(const Tensor& pred, const Tensor& target) const;
         void bind_weights_to_stream(cudaStream_t stream);
         const Tensor& w(std::string_view name) const;

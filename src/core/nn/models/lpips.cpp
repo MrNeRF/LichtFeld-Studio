@@ -410,8 +410,9 @@ namespace lfs::core::nn::models {
         return run_pair(pred_a, pred_b, target, scaling.value_or(scaling_), &*weights);
     }
 
-    // Where the model tiles on the generic ops, both predictions share each tile's target features. Elsewhere (the
-    // fused fast path, or an image in one tile) each prediction takes a call of its own; the scores are the same.
+    // Both predictions share each tile's target features: on the fused fast path through run_fast_pair, and where the
+    // model tiles on the generic ops through run_tiled. An image in one tile on the generic ops takes a call per
+    // prediction.
     lfs::Result<std::array<float, 2>> Lpips::run_pair(const Tensor& pred_a, const Tensor& pred_b, const Tensor& target,
                                                       const InputScaling scaling, const MaskWeights* mask) {
         for (const Tensor* pred : {&pred_a, &pred_b})
@@ -420,7 +421,9 @@ namespace lfs::core::nn::models {
         GpuBackendScope backend_scope(*gpu_backend_of(pred_a));
         const int height = static_cast<int>(pred_a.shape()[pred_a.ndim() - 2]);
         const int width = static_cast<int>(pred_a.shape()[pred_a.ndim() - 1]);
-        if (pred_b.shape() == pred_a.shape() && !takes_fast_path() &&
+        if (pred_b.shape() == pred_a.shape() && takes_fast_path())
+            return run_fast_pair(pred_a, pred_b, target, scaling, mask);
+        if (pred_b.shape() == pred_a.shape() &&
             tile_size_for(height, width) < static_cast<std::size_t>(std::max(height, width))) {
             const std::array<const Tensor*, 2> preds{&pred_a, &pred_b};
             auto values = run_tiled(preds, target, scaling, mask);
@@ -511,34 +514,9 @@ namespace lfs::core::nn::models {
         weights_on_stream_ = true;
     }
 
-    lfs::Result<float> Lpips::run_fast(const Tensor& pred, const Tensor& target,
-                                       const InputScaling scaling, const MaskWeights* mask) {
-        if (auto error = validate_pair(pred, target))
-            return std::move(*error);
-        Tensor x_in = as_batch(pred).contiguous();
-        Tensor y_in = as_batch(target).contiguous();
-        const bool cuda_backend = gpu_backend_of(pred) == GpuBackend::CUDA;
-        const int height = static_cast<int>(x_in.shape()[2]);
-        const int width = static_cast<int>(x_in.shape()[3]);
-        const std::size_t tile = tile_size_for(height, width);
-        if (tile == 0)
-            return lpips_error(lfs::ErrorCode::InvalidArgument, "LPIPS tiled input has an empty shape");
-        const auto full_dim = [](const int dimension, const int block) {
-            return static_cast<int>(static_cast<std::size_t>(dimension) >> block);
-        };
-
-        const cudaStream_t stream = cuda_backend ? getCurrentCUDAStream() : nullptr;
-        x_in.sync_to_stream(stream);
-        y_in.sync_to_stream(stream);
-        bind_weights_to_stream(stream);
-
-        if (dispatch_ && !cuda_backend && gpu_backend_of(pred) == GpuBackend::Vulkan &&
-            !fast_features_[0].is_valid()) {
-            // Release completed transient storage at the phase boundary before
-            // weight taps and activations pin additional allocator blocks.
-            gpu_trim_cached_memory(GpuBackend::Vulkan);
-        }
-
+    // The fast path's 3x3 weight taps, made once: CUDA's tensor-core layout and Vulkan's tap-major one; none elsewhere.
+    lfs::Result<Lpips::FastTaps> Lpips::fast_taps(const cudaStream_t stream, const bool cuda_backend, const Tensor& like) {
+        FastTaps result;
         std::size_t taps_bytes = 0;
         if (cuda_backend) {
             for (std::size_t i = 1; i < kLayers.size(); ++i) {
@@ -546,13 +524,12 @@ namespace lfs::core::nn::models {
                 taps_bytes += kernels::conv2d_weight_scratch_bytes(kLayers[i].cout, kLayers[i].cin,
                                                                    DataType::Float16);
             }
-        } else if (dispatch_ && gpu_backend_of(pred) == GpuBackend::Vulkan) {
+        } else if (dispatch_ && gpu_backend_of(like) == GpuBackend::Vulkan) {
             for (std::size_t i = 1; i < kLayers.size(); ++i) {
                 fast_weight_tap_offsets_[i] = taps_bytes;
                 taps_bytes += static_cast<std::size_t>(9 * kLayers[i].cout * kLayers[i].cin) * sizeof(uint16_t);
             }
         }
-        std::array<Tensor, 13> tap_views;
         if (taps_bytes > 0 && !fast_weight_taps_.is_valid()) {
             fast_weight_taps_ = Tensor::empty(shape_of({taps_bytes / sizeof(uint16_t)}), Device::GPU,
                                               DataType::Float16);
@@ -585,14 +562,12 @@ namespace lfs::core::nn::models {
         }
         if (fast_weight_taps_.is_valid())
             fast_weight_taps_.set_stream(stream);
-        const auto* taps_base = taps_bytes > 0
-                                    ? static_cast<const unsigned char*>(fast_weight_taps_.data_ptr())
-                                    : nullptr;
+        result.base = taps_bytes > 0 ? static_cast<const unsigned char*>(fast_weight_taps_.data_ptr()) : nullptr;
 
-        if (dispatch_ && taps_base) {
+        if (dispatch_ && result.base) {
             for (std::size_t i = 1; i < kLayers.size(); ++i) {
                 const auto shape = shape_of({9, static_cast<std::size_t>(kLayers[i].cout), static_cast<std::size_t>(kLayers[i].cin)});
-                tap_views[i] = cuda_backend
+                result.views[i] = cuda_backend
                                    ? Tensor::from_blob(
                                          static_cast<unsigned char*>(fast_weight_taps_.data_ptr()) + fast_weight_tap_offsets_[i],
                                          shape, Device::GPU, DataType::Float16, stream)
@@ -603,6 +578,285 @@ namespace lfs::core::nn::models {
                                          .reshape(shape);
             }
         }
+
+        return result;
+    }
+
+    // Two predictions against one target on the fast path. Each tile's target runs through the network once and keeps
+    // its five stage features; then each prediction runs alone and is scored against them at every stage by the pool
+    // reduce a call of its own makes (prediction first, target second, the same interior, weights and scale), into
+    // its own scores. The stage features (122 float16 channels at the tile's size) take the place of the second
+    // image's ping-pong buffers, so a pair holds what one call holds and keeps that call's tiles.
+    lfs::Result<std::array<float, 2>> Lpips::run_fast_pair(const Tensor& pred_a, const Tensor& pred_b,
+                                                           const Tensor& target, const InputScaling scaling,
+                                                           const MaskWeights* mask) {
+        for (const Tensor* pred : {&pred_a, &pred_b})
+            if (auto error = validate_pair(*pred, target))
+                return std::move(*error);
+        std::array<Tensor, 2> x_in{as_batch(pred_a).contiguous(), as_batch(pred_b).contiguous()};
+        Tensor y_in = as_batch(target).contiguous();
+        const bool cuda_backend = gpu_backend_of(target) == GpuBackend::CUDA;
+        const int height = static_cast<int>(y_in.shape()[2]);
+        const int width = static_cast<int>(y_in.shape()[3]);
+        const std::size_t tile = tile_size_for(height, width);
+        if (tile == 0)
+            return lpips_error(lfs::ErrorCode::InvalidArgument, "LPIPS tiled input has an empty shape");
+        const auto full_dim = [](const int dimension, const int block) {
+            return static_cast<int>(static_cast<std::size_t>(dimension) >> block);
+        };
+        const cudaStream_t stream = cuda_backend ? getCurrentCUDAStream() : nullptr;
+        for (auto& input : x_in)
+            input.sync_to_stream(stream);
+        y_in.sync_to_stream(stream);
+        bind_weights_to_stream(stream);
+        auto prepared_taps = fast_taps(stream, cuda_backend, target);
+        if (!prepared_taps)
+            return std::move(prepared_taps.error());
+        const auto& tap_views = prepared_taps->views;
+        const auto* taps_base = prepared_taps->base;
+
+        const bool tiled = tile < static_cast<std::size_t>(std::max(height, width));
+        const auto crop_height = std::min<std::size_t>(height, tile + 2 * kTileHalo);
+        const auto crop_width = std::min<std::size_t>(width, tile + 2 * kTileHalo);
+        const std::size_t plane = crop_height * crop_width;
+        const auto fp16_buffer = [&](const std::size_t elements) {
+            auto buffer = Tensor::empty(shape_of({elements}), Device::GPU, DataType::Float16);
+            buffer.set_stream(stream);
+            return buffer;
+        };
+        // Ping-pong buffers of the image that runs; the target's stage features; and the second pooled output of the
+        // pool reduce, which nothing reads.
+        std::array<Tensor, 2> work{fp16_buffer(64 * plane), fp16_buffer(64 * plane)};
+        std::array<std::size_t, kBlocks> stage_offsets{};
+        std::size_t stage_elements = 0;
+        for (int stage = 0, layer = 0; stage < kBlocks; layer += kStageLayers[static_cast<std::size_t>(stage)], ++stage) {
+            stage_offsets[static_cast<std::size_t>(stage)] = stage_elements;
+            const auto channels = static_cast<std::size_t>(
+                kLayers[static_cast<std::size_t>(layer + kStageLayers[static_cast<std::size_t>(stage)] - 1)].cout);
+            stage_elements += channels * (crop_height >> stage) * (crop_width >> stage);
+        }
+        Tensor stages = fp16_buffer(stage_elements);
+        Tensor unread_pool = fp16_buffer(64 * (crop_height / 2) * (crop_width / 2));
+        Tensor tile_input;
+        if (tiled) {
+            tile_input = Tensor::empty(shape_of({1, 3, crop_height, crop_width}), Device::GPU);
+            tile_input.set_stream(stream);
+        }
+        // kBlocks scores per prediction, and one for the target's own pass (a zero distance).
+        auto scores = Tensor::zeros(shape_of({2 * kBlocks + 1}), Device::GPU, DataType::Float32);
+        scores.set_stream(stream);
+        const auto view = [](const Tensor& buffer, const std::size_t offset, const TensorShape& shape) {
+            return buffer.slice(0, offset, offset + shape.elements()).reshape(shape);
+        };
+        const auto nchw = [](const std::size_t c, const std::size_t h, const std::size_t w) {
+            return shape_of({1, c, h, w});
+        };
+
+        for (int y0 = 0; y0 < height; y0 += static_cast<int>(tile)) {
+            const int y1 = std::min(height, y0 + static_cast<int>(tile));
+            const int cy0 = std::max(0, y0 - static_cast<int>(kTileHalo));
+            const int cy1 = std::min(height, y1 + static_cast<int>(kTileHalo));
+            for (int x0 = 0; x0 < width; x0 += static_cast<int>(tile)) {
+                const int x1 = std::min(width, x0 + static_cast<int>(tile));
+                const int cx0 = std::max(0, x0 - static_cast<int>(kTileHalo));
+                const int cx1 = std::min(width, x1 + static_cast<int>(kTileHalo));
+                const auto crop_h = static_cast<std::size_t>(cy1 - cy0), crop_w = static_cast<std::size_t>(cx1 - cx0);
+                // The crop of one image, as run_fast copies it.
+                const auto crop_of = [&](const Tensor& source) -> Tensor {
+                    if (!tiled)
+                        return source;
+                    if (!cuda_backend) {
+                        if (tile_input.shape() != nchw(3, crop_h, crop_w)) {
+                            tile_input = Tensor::empty(nchw(3, crop_h, crop_w), Device::GPU);
+                            tile_input.set_stream(stream);
+                        }
+                        tile_input.copy_from(source.slice(2, static_cast<std::size_t>(cy0), static_cast<std::size_t>(cy1))
+                                                 .slice(3, static_cast<std::size_t>(cx0), static_cast<std::size_t>(cx1)));
+                        return tile_input;
+                    }
+#if LFS_HAS_CUDA
+                    const auto* src = static_cast<const float*>(source.data_ptr());
+                    auto* dst = static_cast<float*>(tile_input.data_ptr());
+                    const std::size_t source_plane = static_cast<std::size_t>(height) * width;
+                    for (int c = 0; c < 3; ++c)
+                        LFS_CUDA_CHECK(cudaMemcpy2DAsync(
+                            dst + static_cast<std::size_t>(c) * crop_h * crop_w, crop_w * sizeof(float),
+                            src + static_cast<std::size_t>(c) * source_plane + static_cast<std::size_t>(cy0) * width + cx0,
+                            static_cast<std::size_t>(width) * sizeof(float), crop_w * sizeof(float), crop_h,
+                            cudaMemcpyDeviceToDevice, stream));
+                    return Tensor::from_blob(tile_input.data_ptr(), nchw(3, crop_h, crop_w), Device::GPU,
+                                             DataType::Float32, stream);
+#else
+                    throw std::runtime_error("CUDA LPIPS tile copy is unavailable in this build");
+#endif
+                };
+                // One image through the network. side < 0: the target, whose stage features stay in `stages`; side
+                // 0 or 1: a prediction, scored against them.
+                const auto run_side = [&](const Tensor& input, const int side) -> std::optional<lfs::Error> {
+                    Tensor cur = input;
+                    int held = -1; // the work buffer that holds cur, -1 for the input or a stage feature
+                    std::size_t h = crop_h, wd = crop_w;
+                    int layer = 0;
+                    for (int stage = 0; stage < kBlocks; ++stage) {
+                        const int layers = kStageLayers[static_cast<std::size_t>(stage)];
+                        for (int i = 0; i < layers; ++i, ++layer) {
+                            const auto& spec = kLayers[static_cast<std::size_t>(layer)];
+                            const auto& weight = w(std::format("vgg.features.{}.weight", spec.index));
+                            const auto& bias = w(std::format("vgg.features.{}.bias", spec.index));
+                            const auto shape = nchw(static_cast<std::size_t>(spec.cout), h, wd);
+                            const bool keep = side < 0 && i + 1 == layers;
+                            const int target_buffer = keep ? -1 : (held == 0 ? 1 : 0);
+                            Tensor out = keep ? view(stages, stage_offsets[static_cast<std::size_t>(stage)], shape)
+                                              : view(work[static_cast<std::size_t>(target_buffer)], 0, shape);
+                            if (dispatch_) {
+                                if (layer == 0) {
+                                    dispatch_->rgb_conv(cur, weight, bias, out,
+                                                        {scaling_shift_, scaling_scale_, scaling == InputScaling::Normalize});
+                                } else {
+                                    Conv2dParams params;
+                                    params.pad_h = params.pad_w = 1;
+                                    params.activation = Activation::Relu;
+                                    Tensor scratch;
+                                    dispatch_->convolution(cur, weight, tap_views[static_cast<std::size_t>(layer)], bias, out,
+                                                           scratch, params);
+                                }
+                            } else {
+#if LFS_HAS_CUDA
+                                if (layer == 0) {
+                                    kernels::lpips_rgb_conv3x3(static_cast<const float*>(cur.data_ptr()), weight.data_ptr(),
+                                                               bias.data_ptr(), out.data_ptr(), scaling_shift_.data(),
+                                                               scaling_scale_.data(), scaling == InputScaling::Normalize, 1,
+                                                               static_cast<int>(h), static_cast<int>(wd), stream);
+                                } else {
+                                    const void* weight_taps =
+                                        taps_base ? taps_base + fast_weight_tap_offsets_[static_cast<std::size_t>(layer)]
+                                                  : nullptr;
+                                    kernels::conv2d_implicit(cur.data_ptr(), weight.data_ptr(), weight_taps, bias.data_ptr(),
+                                                             out.data_ptr(), nullptr, 1, spec.cin, static_cast<int>(h),
+                                                             static_cast<int>(wd), spec.cout, 3, 3, static_cast<int>(h),
+                                                             static_cast<int>(wd), 1, 1, 1, 1, 1, 1, 0,
+                                                             static_cast<int>(Activation::Relu), DataType::Float16, stream);
+                                }
+#else
+                                return lpips_error(lfs::ErrorCode::Unsupported,
+                                                   "CUDA LPIPS kernels are unavailable in this build");
+#endif
+                            }
+                            cur = out;
+                            held = target_buffer;
+                        }
+                        const int factor = 1 << stage;
+                        const int feature_h = full_dim(height, stage);
+                        const int feature_w = full_dim(width, stage);
+                        const int gy0 = y0 / factor;
+                        const int gy1 = std::min(feature_h, y1 / factor);
+                        const int gx0 = x0 / factor;
+                        const int gx1 = std::min(feature_w, x1 / factor);
+                        const int ih = static_cast<int>(h), iw = static_cast<int>(wd);
+                        const int interior_y0 = std::clamp(gy0 - cy0 / factor, 0, ih);
+                        const int interior_y1 = std::clamp(gy1 - cy0 / factor, 0, ih);
+                        const int interior_x0 = std::clamp(gx0 - cx0 / factor, 0, iw);
+                        const int interior_x1 = std::clamp(gx1 - cx0 / factor, 0, iw);
+                        const bool last = stage + 1 == kBlocks;
+                        const auto channels = static_cast<std::size_t>(kLayers[static_cast<std::size_t>(layer - 1)].cout);
+                        const Tensor target_feature =
+                            view(stages, stage_offsets[static_cast<std::size_t>(stage)], nchw(channels, h, wd));
+                        const int next_buffer = held == 0 ? 1 : 0;
+                        Tensor pooled, unread;
+                        if (!last) {
+                            pooled = view(work[static_cast<std::size_t>(next_buffer)], 0, nchw(channels, h / 2, wd / 2));
+                            unread = view(unread_pool, 0, nchw(channels, h / 2, wd / 2));
+                        }
+                        const std::size_t slot = side < 0 ? 2 * kBlocks : static_cast<std::size_t>(side) * kBlocks + stage;
+                        const float inverse_count =
+                            mask ? 1.0f : 1.0f / (static_cast<float>(feature_h) * static_cast<float>(feature_w));
+                        if (dispatch_) {
+                            Tensor score = scores.slice(0, slot, slot + 1);
+                            dispatch_->pool_reduce(cur, target_feature, w(std::format("lin{}.weight", stage)), score, pooled,
+                                                   unread,
+                                                   {interior_y0, interior_y1, interior_x0, interior_x1, inverse_count,
+                                                    mask ? &mask->maps[static_cast<std::size_t>(stage)] : nullptr,
+                                                    feature_w, cy0 / factor, cx0 / factor});
+                        } else {
+#if LFS_HAS_CUDA
+                            kernels::lpips_pool_reduce(
+                                cur.data_ptr(), target_feature.data_ptr(), w(std::format("lin{}.weight", stage)).data_ptr(),
+                                scores.ptr<float>() + slot, last ? nullptr : pooled.data_ptr(),
+                                last ? nullptr : unread.data_ptr(), 1, static_cast<int>(channels), ih, iw, interior_y0,
+                                interior_y1, interior_x0, interior_x1, inverse_count,
+                                mask ? mask->maps[static_cast<std::size_t>(stage)].ptr<float>() : nullptr, feature_w,
+                                cy0 / factor, cx0 / factor, stream);
+#else
+                            return lpips_error(lfs::ErrorCode::Unsupported,
+                                               "CUDA LPIPS kernels are unavailable in this build");
+#endif
+                        }
+                        if (!last) {
+                            cur = pooled;
+                            held = next_buffer;
+                            h /= 2;
+                            wd /= 2;
+                        }
+                    }
+                    return std::nullopt;
+                };
+                if (auto error = run_side(crop_of(y_in), -1))
+                    return std::move(*error);
+                for (int side = 0; side < 2; ++side)
+                    if (auto error = run_side(crop_of(x_in[static_cast<std::size_t>(side)]), side))
+                        return std::move(*error);
+            }
+        }
+
+        const auto values_cpu = scores.cpu();
+        const auto* values = values_cpu.ptr<float>();
+        std::array<float, 2> totals{};
+        for (int side = 0; side < 2; ++side) {
+            float total = 0.0f;
+            for (int stage = 0; stage < kBlocks; ++stage) {
+                const float value = values[side * kBlocks + stage];
+                total += mask ? static_cast<float>(value / mask->sums[static_cast<std::size_t>(stage)]) : value;
+            }
+            if (!std::isfinite(total))
+                return lpips_error(lfs::ErrorCode::Internal, "LPIPS produced a non-finite value");
+            totals[static_cast<std::size_t>(side)] = total;
+        }
+        return totals;
+    }
+
+    lfs::Result<float> Lpips::run_fast(const Tensor& pred, const Tensor& target,
+                                       const InputScaling scaling, const MaskWeights* mask) {
+        if (auto error = validate_pair(pred, target))
+            return std::move(*error);
+        Tensor x_in = as_batch(pred).contiguous();
+        Tensor y_in = as_batch(target).contiguous();
+        const bool cuda_backend = gpu_backend_of(pred) == GpuBackend::CUDA;
+        const int height = static_cast<int>(x_in.shape()[2]);
+        const int width = static_cast<int>(x_in.shape()[3]);
+        const std::size_t tile = tile_size_for(height, width);
+        if (tile == 0)
+            return lpips_error(lfs::ErrorCode::InvalidArgument, "LPIPS tiled input has an empty shape");
+        const auto full_dim = [](const int dimension, const int block) {
+            return static_cast<int>(static_cast<std::size_t>(dimension) >> block);
+        };
+
+        const cudaStream_t stream = cuda_backend ? getCurrentCUDAStream() : nullptr;
+        x_in.sync_to_stream(stream);
+        y_in.sync_to_stream(stream);
+        bind_weights_to_stream(stream);
+
+        if (dispatch_ && !cuda_backend && gpu_backend_of(pred) == GpuBackend::Vulkan &&
+            !fast_features_[0].is_valid()) {
+            // Release completed transient storage at the phase boundary before
+            // weight taps and activations pin additional allocator blocks.
+            gpu_trim_cached_memory(GpuBackend::Vulkan);
+        }
+
+        auto prepared_taps = fast_taps(stream, cuda_backend, pred);
+        if (!prepared_taps)
+            return std::move(prepared_taps.error());
+        std::array<Tensor, 13>& tap_views = prepared_taps->views;
+        const auto* taps_base = prepared_taps->base;
 
         const bool tiled = tile < static_cast<std::size_t>(std::max(height, width));
         const auto crop_height = std::min<std::size_t>(height, tile + 2 * kTileHalo);

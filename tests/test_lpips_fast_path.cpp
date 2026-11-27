@@ -92,3 +92,46 @@ TEST(LpipsFastPath, MatchesTheExactPath) {
         }
     }
 }
+
+// forward_pair on the fast path runs the target once per tile and scores both predictions against its kept stage
+// features with the pool reduce of a call of their own. Its scores must be those two calls give, within the spread
+// of the atomic score sums from run to run (about 1e-7 here): untiled and tiled, with and without a mask.
+TEST(LpipsFastPath, PairMatchesTwoCalls) {
+    const auto path = weights_path();
+    if (path.empty() || !fs::is_regular_file(path))
+        GTEST_SKIP() << "LPIPS weights absent: " << path;
+    const auto* dispatch = lfs::training::training_ops(lfs::core::default_gpu_backend()).lpips;
+    if (dispatch == nullptr)
+        GTEST_SKIP() << "No LPIPS dispatch on this backend";
+    const auto root = fs::path(PROJECT_ROOT_PATH);
+    const auto crop_a = root / "tests/data/nn/lpips_crop_a.png", crop_b = root / "tests/data/nn/lpips_crop_b.png";
+    if (!fs::is_regular_file(crop_a) || !fs::is_regular_file(crop_b))
+        GTEST_SKIP() << "LPIPS lossless crop pair is absent";
+    const auto a = load_rgb(crop_a), target = load_rgb(crop_b);
+    const auto b = (a * 0.6f + target * 0.4f).contiguous();
+    const auto height = a.shape()[1], width = a.shape()[2];
+    std::vector<float> mask_values(height * width);
+    for (std::size_t i = 0; i < mask_values.size(); ++i)
+        mask_values[i] = (i / 41) % 5 == 0 ? 0.0f : 1.0f;
+    const auto mask = Tensor::from_vector(mask_values, lfs::core::TensorShape({height, width}), Device::GPU);
+
+    for (const std::size_t budget : {std::size_t{1536} << 20, std::size_t{48} << 20}) {
+        auto fast = Lpips::load(path, Device::GPU, DataType::Float16, InputScaling::Identity, budget);
+        ASSERT_TRUE(fast.has_value()) << fast.error().detail();
+        fast->set_dispatch(*dispatch);
+        for (const bool masked : {false, true}) {
+            const auto first = masked ? fast->forward(a, target, mask) : fast->forward(a, target);
+            const auto second = masked ? fast->forward(b, target, mask) : fast->forward(b, target);
+            const auto pair = masked ? fast->forward_pair(a, b, target, mask) : fast->forward_pair(a, b, target);
+            ASSERT_TRUE(first.has_value()) << first.error().detail();
+            ASSERT_TRUE(second.has_value()) << second.error().detail();
+            ASSERT_TRUE(pair.has_value()) << pair.error().detail();
+            std::cout << "LPIPS_FAST_PAIR budget=" << (budget >> 20) << "MiB" << (masked ? " masked" : "") << " calls "
+                      << *first << " " << *second << " pair " << (*pair)[0] << " " << (*pair)[1] << " deltas "
+                      << std::abs((*pair)[0] - *first) << " " << std::abs((*pair)[1] - *second) << std::endl;
+            EXPECT_NEAR((*pair)[0], *first, 1e-6f);
+            EXPECT_NEAR((*pair)[1], *second, 1e-6f);
+            EXPECT_GT(std::abs(*first - *second), 1e-4f);
+        }
+    }
+}
