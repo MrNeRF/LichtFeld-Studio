@@ -18,6 +18,13 @@ struct Parameters {
     float second;
 };
 
+// Row i of `width` floats at its 64-bit byte address, its values as small indices from there: NVIDIA's Vulkan computes
+// an access chain's byte offset in 32 bits without VK_EXT_shader_64bit_indexing, and a per-Gaussian buffer of 3 floats
+// (means, scales, sh0) passes 4 GiB at 357.9M Gaussians, one of 4 (quaternions) at 268.4M.
+Ptr<float, Access.ReadWrite> float_row(uint64_t base, uint i, uint width) {
+    return (Ptr<float, Access.ReadWrite>)(base + uint64_t(i) * width * 4u);
+}
+
 uint4 philox_round(uint4 counter, uint2 key) {
     const uint64_t p0 = uint64_t(0xD2511F53u) * counter.x;
     const uint64_t p1 = uint64_t(0xCD9E8D57u) * counter.z;
@@ -70,10 +77,10 @@ void main(uint3 id : SV_DispatchThreadID, uniform Parameters p) {
     if (kOperation == 0u) {
         if (i >= p.count) return;
         Ptr<float, Access.Read> opacity = (Ptr<float, Access.Read>)p.a;
-        Ptr<float, Access.Read> scales = (Ptr<float, Access.Read>)p.b;
+        Ptr<float, Access.ReadWrite> scales = float_row(p.b, i, 3u);
         Ptr<int, Access.Read> ratios = (Ptr<int, Access.Read>)p.c;
         Ptr<float, Access.ReadWrite> new_opacity = (Ptr<float, Access.ReadWrite>)p.d;
-        Ptr<float, Access.ReadWrite> new_scales = (Ptr<float, Access.ReadWrite>)p.e;
+        Ptr<float, Access.ReadWrite> new_scales = float_row(p.e, i, 3u);
         Ptr<float, Access.Read> coeff = (Ptr<float, Access.Read>)p.f;
         const int n = ratios[i];
         const float o = clamp(opacity[i], 1e-6f, 1.0f - 1e-6f);
@@ -87,19 +94,19 @@ void main(uint3 id : SV_DispatchThreadID, uniform Parameters p) {
         if (denominator < 0.0f) safe_denominator = -safe_denominator;
         const float factor = clamp(o / safe_denominator, -1e6f, 1e6f);
         for (uint axis = 0; axis < 3; ++axis)
-            new_scales[i * 3u + axis] = max(abs(factor * scales[i * 3u + axis]), 1e-10f);
+            new_scales[axis] = max(abs(factor * scales[axis]), 1e-10f);
         return;
     }
     if (kOperation == 1u) {
         if (i >= p.count) return;
         Ptr<float, Access.Read> opacity = (Ptr<float, Access.Read>)p.a;
-        Ptr<float, Access.Read> scales = (Ptr<float, Access.Read>)p.b;
-        Ptr<float, Access.Read> quats = (Ptr<float, Access.Read>)p.c;
+        Ptr<float, Access.ReadWrite> scales = float_row(p.b, i, 3u);
+        Ptr<float, Access.ReadWrite> quats = float_row(p.c, i, 4u);
         Ptr<uint8_t, Access.Read> frozen = (Ptr<uint8_t, Access.Read>)p.d;
-        Ptr<float, Access.ReadWrite> means = (Ptr<float, Access.ReadWrite>)p.e;
+        Ptr<float, Access.ReadWrite> means = float_row(p.e, i, 3u);
         if (i < p.count2 && frozen[i] != 0u) return;
-        const float w = quats[i * 4u], x = quats[i * 4u + 1u];
-        const float y = quats[i * 4u + 2u], z = quats[i * 4u + 3u];
+        const float w = quats[0], x = quats[1];
+        const float y = quats[2], z = quats[3];
         const float inverse_norm = min(rsqrt(x*x + y*y + z*z + w*w), 1e12f);
         const float nw = w * inverse_norm, nx = x * inverse_norm;
         const float ny = y * inverse_norm, nz = z * inverse_norm;
@@ -112,9 +119,9 @@ void main(uint3 id : SV_DispatchThreadID, uniform Parameters p) {
         const float r20 = 2.0f * (nx*nz - nw*ny);
         const float r21 = 2.0f * (ny*nz + nw*nx);
         const float r22 = 1.0f - 2.0f * (nx*nx + ny*ny);
-        const float sx = cuda_exp(2.0f * scales[i * 3u]);
-        const float sy = cuda_exp(2.0f * scales[i * 3u + 1u]);
-        const float sz = cuda_exp(2.0f * scales[i * 3u + 2u]);
+        const float sx = cuda_exp(2.0f * scales[0]);
+        const float sy = cuda_exp(2.0f * scales[1]);
+        const float sz = cuda_exp(2.0f * scales[2]);
         const float c00 = (r00 * sx) * r00 + (r01 * sy) * r01 + (r02 * sz) * r02;
         const float c01 = (r00 * sx) * r10 + (r01 * sy) * r11 + (r02 * sz) * r12;
         const float c02 = (r00 * sx) * r20 + (r01 * sy) * r21 + (r02 * sz) * r22;
@@ -128,21 +135,21 @@ void main(uint3 id : SV_DispatchThreadID, uniform Parameters p) {
         const float sigmoid = 1.0f / (1.0f + cuda_exp(-opacity[i]));
         const float opacity_scale = 1.0f / (1.0f + cuda_exp(fma(100.0f, sigmoid, -0.5f)));
         const float factor = p.first * opacity_scale;
-        means[i * 3u] += factor * (c00 * noise.x + c01 * noise.y + c02 * noise.z);
-        means[i * 3u + 1u] += factor * (c10 * noise.x + c11 * noise.y + c12 * noise.z);
-        means[i * 3u + 2u] += factor * (c20 * noise.x + c21 * noise.y + c22 * noise.z);
+        means[0] += factor * (c00 * noise.x + c01 * noise.y + c02 * noise.z);
+        means[1] += factor * (c10 * noise.x + c11 * noise.y + c12 * noise.z);
+        means[2] += factor * (c20 * noise.x + c21 * noise.y + c22 * noise.z);
         return;
     }
     if (kOperation == 2u) {
         if (i >= p.count) return;
         Ptr<int64_t, Access.Read> indices = (Ptr<int64_t, Access.Read>)p.a;
-        Ptr<float, Access.Read> new_scales = (Ptr<float, Access.Read>)p.b;
+        Ptr<float, Access.ReadWrite> new_scales = float_row(p.b, i, 3u);
         Ptr<float, Access.Read> new_opacity = (Ptr<float, Access.Read>)p.c;
-        Ptr<float, Access.ReadWrite> scales = (Ptr<float, Access.ReadWrite>)p.d;
         Ptr<float, Access.ReadWrite> opacity = (Ptr<float, Access.ReadWrite>)p.e;
         const int64_t target = indices[i];
         if (target < 0 || target >= int64_t(p.count2)) return;
-        for (uint axis = 0; axis < 3; ++axis) scales[uint(target) * 3u + axis] = new_scales[i * 3u + axis];
+        Ptr<float, Access.ReadWrite> scales = float_row(p.d, uint(target), 3u);
+        for (uint axis = 0; axis < 3; ++axis) scales[axis] = new_scales[axis];
         opacity[target] = new_opacity[i];
         return;
     }
@@ -150,19 +157,16 @@ void main(uint3 id : SV_DispatchThreadID, uniform Parameters p) {
         if (i >= p.count) return;
         Ptr<int64_t, Access.Read> source_indices = (Ptr<int64_t, Access.Read>)p.a;
         Ptr<int64_t, Access.Read> destination_indices = (Ptr<int64_t, Access.Read>)p.b;
-        Ptr<float, Access.ReadWrite> means = (Ptr<float, Access.ReadWrite>)p.c;
-        Ptr<float, Access.ReadWrite> sh0 = (Ptr<float, Access.ReadWrite>)p.d;
-        Ptr<float, Access.ReadWrite> scales = (Ptr<float, Access.ReadWrite>)p.e;
-        Ptr<float, Access.ReadWrite> quats = (Ptr<float, Access.ReadWrite>)p.f;
         Ptr<float, Access.ReadWrite> opacity = (Ptr<float, Access.ReadWrite>)p.g;
         const int64_t source = source_indices[i], destination = destination_indices[i];
         if (source < 0 || source >= int64_t(p.count2) || destination < 0 || destination >= int64_t(p.count2)) return;
+        const uint from = uint(source), to = uint(destination);
         for (uint axis = 0; axis < 3; ++axis) {
-            means[uint(destination) * 3u + axis] = means[uint(source) * 3u + axis];
-            sh0[uint(destination) * 3u + axis] = sh0[uint(source) * 3u + axis];
-            scales[uint(destination) * 3u + axis] = scales[uint(source) * 3u + axis];
+            float_row(p.c, to, 3u)[axis] = float_row(p.c, from, 3u)[axis];
+            float_row(p.d, to, 3u)[axis] = float_row(p.d, from, 3u)[axis];
+            float_row(p.e, to, 3u)[axis] = float_row(p.e, from, 3u)[axis];
         }
-        for (uint axis = 0; axis < 4; ++axis) quats[uint(destination) * 4u + axis] = quats[uint(source) * 4u + axis];
+        for (uint axis = 0; axis < 4; ++axis) float_row(p.f, to, 4u)[axis] = float_row(p.f, from, 4u)[axis];
         opacity[destination] = opacity[source];
         return;
     }
@@ -171,18 +175,17 @@ void main(uint3 id : SV_DispatchThreadID, uniform Parameters p) {
         Ptr<float, Access.Read> cdf = (Ptr<float, Access.Read>)p.a;
         Ptr<int64_t, Access.Read> alive = (Ptr<int64_t, Access.Read>)p.b;
         Ptr<float, Access.Read> opacity = (Ptr<float, Access.Read>)p.c;
-        Ptr<float, Access.Read> scales = (Ptr<float, Access.Read>)p.d;
         Ptr<int64_t, Access.ReadWrite> indices = (Ptr<int64_t, Access.ReadWrite>)p.e;
         Ptr<float, Access.ReadWrite> output_opacity = (Ptr<float, Access.ReadWrite>)p.f;
-        Ptr<float, Access.ReadWrite> output_scales = (Ptr<float, Access.ReadWrite>)p.g;
         const uint domain_count = p.count2;
         const float total = cdf[domain_count - 1u];
         if (total <= 0.0f) {
             indices[i] = 0;
             output_opacity[i] = 0.0f;
-            output_scales[i * 3u] = 0.0f;
-            output_scales[i * 3u + 1u] = 0.0f;
-            output_scales[i * 3u + 2u] = 0.0f;
+            Ptr<float, Access.ReadWrite> zero_scales = float_row(p.g, i, 3u);
+            zero_scales[0] = 0.0f;
+            zero_scales[1] = 0.0f;
+            zero_scales[2] = 0.0f;
             return;
         }
         // Keep small positive draws normal even when the device flushes subnormals.
@@ -197,7 +200,8 @@ void main(uint3 id : SV_DispatchThreadID, uniform Parameters p) {
         const int64_t global_index = p.mode != 0u ? alive[selected] : int64_t(selected);
         indices[i] = global_index;
         output_opacity[i] = opacity[global_index];
-        for (uint axis = 0; axis < 3; ++axis) output_scales[i * 3u + axis] = cuda_exp(scales[uint(global_index) * 3u + axis]);
+        Ptr<float, Access.ReadWrite> sampled = float_row(p.d, uint(global_index), 3u), sampled_out = float_row(p.g, i, 3u);
+        for (uint axis = 0; axis < 3; ++axis) sampled_out[axis] = cuda_exp(sampled[axis]);
         return;
     }
     if (kOperation == 5u) {
