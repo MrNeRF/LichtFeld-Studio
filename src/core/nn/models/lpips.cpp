@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <format>
 #include <optional>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -359,6 +360,14 @@ namespace lfs::core::nn::models {
                                "LPIPS mask must be a GPU [H,W] tensor matching the images");
 
         const GpuBackendScope backend_scope(*gpu_backend_of(pred));
+        auto weights = mask_weights(mask, height, width);
+        if (!weights)
+            return std::move(weights.error());
+        return run(pred, target, scaling.value_or(scaling_), nullptr, &*weights);
+    }
+
+    lfs::Result<Lpips::MaskWeights> Lpips::mask_weights(const Tensor& mask, const std::size_t height,
+                                                       const std::size_t width) const {
         MaskWeights weights;
         weights.maps[0] = mask.to(DataType::Float32).clamp(0.0f, 1.0f).contiguous();
         for (int stage = 1; stage < kBlocks; ++stage) {
@@ -373,7 +382,59 @@ namespace lfs::core::nn::models {
             if (!(weights.sums[static_cast<std::size_t>(stage)] > 0.0))
                 return lpips_error(lfs::ErrorCode::InvalidArgument, "LPIPS mask covers no pixel");
         }
-        return run(pred, target, scaling.value_or(scaling_), nullptr, &weights);
+        return weights;
+    }
+
+    lfs::Result<std::array<float, 2>> Lpips::forward_pair(const Tensor& pred_a, const Tensor& pred_b,
+                                                          const Tensor& target,
+                                                          std::optional<InputScaling> scaling) {
+        return run_pair(pred_a, pred_b, target, scaling.value_or(scaling_), nullptr);
+    }
+
+    lfs::Result<std::array<float, 2>> Lpips::forward_pair(const Tensor& pred_a, const Tensor& pred_b,
+                                                          const Tensor& target, const Tensor& mask,
+                                                          std::optional<InputScaling> scaling) {
+        for (const Tensor* pred : {&pred_a, &pred_b})
+            if (auto error = validate_pair(*pred, target))
+                return std::move(*error);
+        const auto height = pred_a.shape()[pred_a.ndim() - 2];
+        const auto width = pred_a.shape()[pred_a.ndim() - 1];
+        if (!mask.is_valid() || mask.device() != Device::GPU || gpu_backend_of(mask) != gpu_backend_of(pred_a) ||
+            mask.ndim() != 2 || mask.shape()[0] != height || mask.shape()[1] != width)
+            return lpips_error(lfs::ErrorCode::InvalidArgument,
+                               "LPIPS mask must be a GPU [H,W] tensor matching the images");
+        const GpuBackendScope backend_scope(*gpu_backend_of(pred_a));
+        auto weights = mask_weights(mask, height, width);
+        if (!weights)
+            return std::move(weights.error());
+        return run_pair(pred_a, pred_b, target, scaling.value_or(scaling_), &*weights);
+    }
+
+    // Where the model tiles on the generic ops, both predictions share each tile's target features. Elsewhere (the
+    // fused fast path, or an image in one tile) each prediction takes a call of its own; the scores are the same.
+    lfs::Result<std::array<float, 2>> Lpips::run_pair(const Tensor& pred_a, const Tensor& pred_b, const Tensor& target,
+                                                      const InputScaling scaling, const MaskWeights* mask) {
+        for (const Tensor* pred : {&pred_a, &pred_b})
+            if (auto error = validate_pair(*pred, target))
+                return std::move(*error);
+        GpuBackendScope backend_scope(*gpu_backend_of(pred_a));
+        const int height = static_cast<int>(pred_a.shape()[pred_a.ndim() - 2]);
+        const int width = static_cast<int>(pred_a.shape()[pred_a.ndim() - 1]);
+        if (pred_b.shape() == pred_a.shape() && !takes_fast_path() &&
+            tile_size_for(height, width) < static_cast<std::size_t>(std::max(height, width))) {
+            const std::array<const Tensor*, 2> preds{&pred_a, &pred_b};
+            auto values = run_tiled(preds, target, scaling, mask);
+            if (!values)
+                return std::move(values.error());
+            return std::array<float, 2>{(*values)[0], (*values)[1]};
+        }
+        auto a = run(pred_a, target, scaling, nullptr, mask);
+        if (!a)
+            return std::move(a.error());
+        auto b = run(pred_b, target, scaling, nullptr, mask);
+        if (!b)
+            return std::move(b.error());
+        return std::array<float, 2>{*a, *b};
     }
 
     lfs::Result<LpipsTaps> Lpips::forward_with_taps(const Tensor& pred, const Tensor& target,
@@ -395,17 +456,22 @@ namespace lfs::core::nn::models {
             (pred.ndim() == 3 || pred.ndim() == 4) && pred.shape() == target.shape()) {
             const int height = static_cast<int>(pred.shape()[pred.ndim() - 2]);
             const int width = static_cast<int>(pred.shape()[pred.ndim() - 1]);
-            if (compute_ == DataType::Float16 && gpu_backend_of(weights_.begin()->second) == GpuBackend::CUDA)
-                return run_fast(pred, target, scaling, mask);
-            // Metal's family kernels are reference implementations; its nn
-            // convolutions (below) are the fast path there.
-            if (compute_ == DataType::Float16 && dispatch_ != nullptr &&
-                gpu_backend_of(weights_.begin()->second) == GpuBackend::Vulkan)
+            if (takes_fast_path())
                 return run_fast(pred, target, scaling, mask);
             if (tile_size_for(height, width) < static_cast<std::size_t>(std::max(height, width)))
                 return run_tiled(pred, target, scaling, mask);
         }
         return run_untiled(pred, target, scaling, taps, mask);
+    }
+
+    bool Lpips::takes_fast_path() const {
+        if (compute_ != DataType::Float16)
+            return false;
+        if (gpu_backend_of(weights_.begin()->second) == GpuBackend::CUDA)
+            return true;
+        // Metal's family kernels are reference implementations; its nn
+        // convolutions (run_tiled and run_untiled) are the fast path there.
+        return dispatch_ != nullptr && gpu_backend_of(weights_.begin()->second) == GpuBackend::Vulkan;
     }
 
     std::optional<lfs::Error> Lpips::validate_pair(const Tensor& pred, const Tensor& target) const {
@@ -832,6 +898,18 @@ namespace lfs::core::nn::models {
 
     lfs::Result<float> Lpips::run_tiled(const Tensor& pred, const Tensor& target,
                                         const InputScaling scaling, const MaskWeights* mask) {
+        const std::array<const Tensor*, 1> preds{&pred};
+        auto values = run_tiled(preds, target, scaling, mask);
+        if (!values)
+            return std::move(values.error());
+        return values->front();
+    }
+
+    // Every prediction is scored against the same target, which goes through the network once per tile. Each
+    // prediction's tiles and blocks run and add up in the order a call of its own takes.
+    lfs::Result<std::vector<float>> Lpips::run_tiled(std::span<const Tensor* const> preds, const Tensor& target,
+                                                     const InputScaling scaling, const MaskWeights* mask) {
+        const Tensor& pred = *preds.front();
         if (pred.ndim() != 3 && pred.ndim() != 4)
             return lpips_error(lfs::ErrorCode::InvalidArgument, "LPIPS tiled inputs must be rank 3 or 4");
         const int height = static_cast<int>(pred.shape()[pred.ndim() - 2]);
@@ -847,7 +925,7 @@ namespace lfs::core::nn::models {
             std::size_t region_count;
             Tensor value;
         };
-        std::vector<TileScore> tile_scores;
+        std::vector<std::vector<TileScore>> tile_scores(preds.size());
         std::array<std::size_t, kBlocks> counts{};
         const auto full_dim = [](const int dimension, const int block) {
             return static_cast<int>(static_cast<std::size_t>(dimension) >> block);
@@ -868,96 +946,100 @@ namespace lfs::core::nn::models {
                 const int cx0 = std::max(0, x0 - static_cast<int>(kTileHalo));
                 const int cx1 = std::min(width, x1 + static_cast<int>(kTileHalo));
                 const auto target_tile = crop(target, cy0, cy1, cx0, cx1);
-                const auto pred_tile = crop(pred, cy0, cy1, cx0, cx1);
 
                 LpipsTaps target_taps;
-                LpipsTaps pred_taps;
                 // Without the CUDA activation arena, extract each tile's features
                 // once instead of running the paired network on (tile, tile).
-                if (gpu_backend_of(pred) != GpuBackend::CUDA) {
-                    auto target_features = extract_normalized_features(target_tile, scaling);
-                    if (!target_features)
-                        return std::move(target_features.error());
-                    target_taps.normalized_features = std::move(*target_features);
-                    auto pred_features = extract_normalized_features(pred_tile, scaling);
-                    if (!pred_features)
-                        return std::move(pred_features.error());
-                    pred_taps.normalized_features = std::move(*pred_features);
-                } else {
-                    auto target_result = run_untiled(
-                        target_tile, target_tile, scaling, &target_taps, nullptr);
-                    if (!target_result)
-                        return std::move(target_result.error());
-                    release_activations();
-                    auto pred_result = run_untiled(
-                        pred_tile, pred_tile, scaling, &pred_taps, nullptr);
-                    if (!pred_result)
-                        return std::move(pred_result.error());
-                    release_activations();
-                }
-                for (int block = 0; block < kBlocks; ++block) {
-                    const int factor = 1 << block;
-                    const int feature_h = full_dim(height, block);
-                    const int feature_w = full_dim(width, block);
-                    const int gy0 = y0 / factor;
-                    const int gy1 = std::min(feature_h, y1 / factor);
-                    const int gx0 = x0 / factor;
-                    const int gx1 = std::min(feature_w, x1 / factor);
-                    const int ly0 = gy0 - cy0 / factor;
-                    const int ly1 = gy1 - cy0 / factor;
-                    const int lx0 = gx0 - cx0 / factor;
-                    const int lx1 = gx1 - cx0 / factor;
-                    if (ly1 <= ly0 || lx1 <= lx0)
-                        continue;
-                    const auto& target_feature = target_taps.normalized_features[block];
-                    const auto& pred_feature = pred_taps.normalized_features[block];
-                    const auto target_region = target_feature.slice(
-                                                                 2, static_cast<std::size_t>(ly0), static_cast<std::size_t>(ly1))
-                                                   .slice(3, static_cast<std::size_t>(lx0),
-                                                          static_cast<std::size_t>(lx1));
-                    const auto pred_region = pred_feature.slice(
-                                                             2, static_cast<std::size_t>(ly0), static_cast<std::size_t>(ly1))
-                                                 .slice(3, static_cast<std::size_t>(lx0),
-                                                        static_cast<std::size_t>(lx1));
-                    const auto difference = pred_region.sub(target_region).square();
-                    const auto linear_weight = w(std::format("lin{}.weight", block)).to(DataType::Float32);
-                    const auto score = conv(difference, linear_weight);
-                    const auto region_count = static_cast<std::size_t>(ly1 - ly0) *
-                                              static_cast<std::size_t>(lx1 - lx0);
-                    if (mask) {
-                        const auto region_weights =
-                            mask->maps[static_cast<std::size_t>(block)]
-                                .slice(0, static_cast<std::size_t>(gy0), static_cast<std::size_t>(gy1))
-                                .slice(1, static_cast<std::size_t>(gx0), static_cast<std::size_t>(gx1))
-                                .contiguous()
-                                .unsqueeze(0)
-                                .unsqueeze(0);
-                        tile_scores.push_back({block, region_count, score.mul(region_weights).sum()});
-                    } else {
-                        tile_scores.push_back({block, region_count, score.mean()});
+                const bool extract = gpu_backend_of(pred) != GpuBackend::CUDA;
+                const auto features_of = [&](const Tensor& tile_input, LpipsTaps& taps) -> std::optional<lfs::Error> {
+                    if (extract) {
+                        auto features = extract_normalized_features(tile_input, scaling);
+                        if (!features)
+                            return std::move(features.error());
+                        taps.normalized_features = std::move(*features);
+                        return std::nullopt;
                     }
-                    counts[block] += region_count;
+                    auto result = run_untiled(tile_input, tile_input, scaling, &taps, nullptr);
+                    if (!result)
+                        return std::move(result.error());
+                    release_activations();
+                    return std::nullopt;
+                };
+                if (auto error = features_of(target_tile, target_taps))
+                    return std::move(*error);
+                for (std::size_t p = 0; p < preds.size(); ++p) {
+                    const auto pred_tile = crop(*preds[p], cy0, cy1, cx0, cx1);
+                    LpipsTaps pred_taps;
+                    if (auto error = features_of(pred_tile, pred_taps))
+                        return std::move(*error);
+                    for (int block = 0; block < kBlocks; ++block) {
+                        const int factor = 1 << block;
+                        const int feature_h = full_dim(height, block);
+                        const int feature_w = full_dim(width, block);
+                        const int gy0 = y0 / factor;
+                        const int gy1 = std::min(feature_h, y1 / factor);
+                        const int gx0 = x0 / factor;
+                        const int gx1 = std::min(feature_w, x1 / factor);
+                        const int ly0 = gy0 - cy0 / factor;
+                        const int ly1 = gy1 - cy0 / factor;
+                        const int lx0 = gx0 - cx0 / factor;
+                        const int lx1 = gx1 - cx0 / factor;
+                        if (ly1 <= ly0 || lx1 <= lx0)
+                            continue;
+                        const auto& target_feature = target_taps.normalized_features[block];
+                        const auto& pred_feature = pred_taps.normalized_features[block];
+                        const auto target_region = target_feature.slice(
+                                                                     2, static_cast<std::size_t>(ly0), static_cast<std::size_t>(ly1))
+                                                       .slice(3, static_cast<std::size_t>(lx0),
+                                                              static_cast<std::size_t>(lx1));
+                        const auto pred_region = pred_feature.slice(
+                                                                 2, static_cast<std::size_t>(ly0), static_cast<std::size_t>(ly1))
+                                                     .slice(3, static_cast<std::size_t>(lx0),
+                                                            static_cast<std::size_t>(lx1));
+                        const auto difference = pred_region.sub(target_region).square();
+                        const auto linear_weight = w(std::format("lin{}.weight", block)).to(DataType::Float32);
+                        const auto score = conv(difference, linear_weight);
+                        const auto region_count = static_cast<std::size_t>(ly1 - ly0) *
+                                                  static_cast<std::size_t>(lx1 - lx0);
+                        if (mask) {
+                            const auto region_weights =
+                                mask->maps[static_cast<std::size_t>(block)]
+                                    .slice(0, static_cast<std::size_t>(gy0), static_cast<std::size_t>(gy1))
+                                    .slice(1, static_cast<std::size_t>(gx0), static_cast<std::size_t>(gx1))
+                                    .contiguous()
+                                    .unsqueeze(0)
+                                    .unsqueeze(0);
+                            tile_scores[p].push_back({block, region_count, score.mul(region_weights).sum()});
+                        } else {
+                            tile_scores[p].push_back({block, region_count, score.mean()});
+                        }
+                        if (p == 0)
+                            counts[block] += region_count;
+                    }
                 }
                 target_taps = LpipsTaps{};
-                pred_taps = LpipsTaps{};
             }
         }
         // The first readback waits for every tile; the rest find the GPU done.
-        std::array<double, kBlocks> weighted{};
-        for (const auto& score : tile_scores) {
-            const auto value = static_cast<double>(score.value.item<float>());
-            weighted[score.block] += mask ? value : value * score.region_count;
+        std::vector<float> totals;
+        for (const auto& scores : tile_scores) {
+            std::array<double, kBlocks> weighted{};
+            for (const auto& score : scores) {
+                const auto value = static_cast<double>(score.value.item<float>());
+                weighted[score.block] += mask ? value : value * score.region_count;
+            }
+            double total = 0.0;
+            for (int block = 0; block < kBlocks; ++block) {
+                const auto denominator = static_cast<std::size_t>(full_dim(height, block)) *
+                                         static_cast<std::size_t>(full_dim(width, block));
+                if (counts[block] != denominator)
+                    return lpips_error(lfs::ErrorCode::Internal, "LPIPS tiled coverage is incomplete");
+                total += weighted[block] /
+                         (mask ? mask->sums[static_cast<std::size_t>(block)] : static_cast<double>(denominator));
+            }
+            totals.push_back(static_cast<float>(total));
         }
-        double total = 0.0;
-        for (int block = 0; block < kBlocks; ++block) {
-            const auto denominator = static_cast<std::size_t>(full_dim(height, block)) *
-                                     static_cast<std::size_t>(full_dim(width, block));
-            if (counts[block] != denominator)
-                return lpips_error(lfs::ErrorCode::Internal, "LPIPS tiled coverage is incomplete");
-            total += weighted[block] /
-                     (mask ? mask->sums[static_cast<std::size_t>(block)] : static_cast<double>(denominator));
-        }
-        return static_cast<float>(total);
+        return totals;
     }
 
     lfs::Result<std::array<Tensor, kBlocks>> Lpips::extract_normalized_features(

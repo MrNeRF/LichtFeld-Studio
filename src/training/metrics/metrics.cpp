@@ -1992,8 +1992,11 @@ namespace lfs::training {
                     pending_lpips = std::async(std::launch::deferred, std::move(work));
                 }
             };
+            // With `paired` the second render is scored in the same call (forward_pair, into *paired_value): the
+            // reference goes through LPIPS's network once for both.
             const auto score_lpips = [&](const lfs::core::Tensor& image, const lfs::core::Tensor& pixels,
-                                         const bool timed) -> std::optional<float> {
+                                         const bool timed, const lfs::core::Tensor* paired = nullptr,
+                                         std::optional<float>* paired_value = nullptr) -> std::optional<float> {
                 try {
                     const auto pred_lpips = mask_image(image, pixels);
                     const auto target_lpips = mask_image(gt_float.to(lfs::core::Device::GPU), pixels);
@@ -2026,14 +2029,34 @@ namespace lfs::training {
                         lpips_allocator_trimmed = true;
                     }
                     auto evaluate_lpips = [this, pred_lpips, target_lpips, pixels, timed, &lpips, &lpips_elapsed_ms,
-                                           &lpips_timed_images, cam]() -> std::optional<float> {
+                                           &lpips_timed_images, cam, paired, paired_value]() -> std::optional<float> {
                         lfs::core::TensorLabelScope lpips_label("eval.lpips");
                         const auto lpips_wall_start = std::chrono::steady_clock::now();
-                        auto value = pixels.is_valid()
-                                         ? _lpips_metric->forward(pred_lpips, target_lpips, pixels,
-                                                                  lfs::core::nn::models::InputScaling::Identity)
-                                         : _lpips_metric->forward(pred_lpips, target_lpips,
-                                                                  lfs::core::nn::models::InputScaling::Identity);
+                        lfs::Result<float> value = 0.0f;
+                        if (paired) {
+                            const auto paired_lpips = mask_image(*paired, pixels);
+                            auto values = pixels.is_valid()
+                                              ? _lpips_metric->forward_pair(pred_lpips, paired_lpips, target_lpips, pixels,
+                                                                            lfs::core::nn::models::InputScaling::Identity)
+                                              : _lpips_metric->forward_pair(pred_lpips, paired_lpips, target_lpips,
+                                                                            lfs::core::nn::models::InputScaling::Identity);
+                            if (!values) {
+                                value = values.error();
+                            } else {
+                                value = (*values)[0];
+                                if (std::isfinite((*values)[1]))
+                                    *paired_value = (*values)[1];
+                                else
+                                    LOG_WARN("Eval: LPIPS produced a non-finite value for camera '{}'",
+                                             cam->image_name());
+                            }
+                        } else {
+                            value = pixels.is_valid()
+                                        ? _lpips_metric->forward(pred_lpips, target_lpips, pixels,
+                                                                 lfs::core::nn::models::InputScaling::Identity)
+                                        : _lpips_metric->forward(pred_lpips, target_lpips,
+                                                                 lfs::core::nn::models::InputScaling::Identity);
+                        }
                         if (value && std::isfinite(*value)) {
                             if (timed) {
                                 const auto elapsed_ms = std::chrono::duration<float, std::milli>(
@@ -2056,7 +2079,7 @@ namespace lfs::training {
                         }
                         return std::nullopt;
                     };
-                    if (timed && _lpips_metric->prefers_independent_queue() && cam->has_normal()) {
+                    if (timed && !paired && _lpips_metric->prefers_independent_queue() && cam->has_normal()) {
                         // Materialize on the producer queue before sharing with the worker.
                         (void)pred_lpips.data_ptr();
                         (void)target_lpips.data_ptr();
@@ -2077,8 +2100,29 @@ namespace lfs::training {
                 }
                 return std::nullopt;
             };
+            // The aligned render is made before LPIPS scores the plain one and goes into the same LPIPS call, so that
+            // the reference goes through the network once for both. Where LPIPS would run on a worker queue the two
+            // calls stay apart, the aligned one after FLIP.
+            lfs::core::Tensor aligned, aligned_displacement;
+            if (score_aligned) {
+                try {
+                    // Aligned from the render as rendered and rounded onto the reference's grid once, like the plain one.
+                    aligned = image_for_metrics(
+                        CalibrationCorrection::align_for_scoring(unrounded_render, image_as_float01(gt_image),
+                                                                 headline_pixels, aligned_displacement),
+                        view.bit_depth);
+                } catch (const std::exception& e) {
+                    aligned = {};
+                    LOG_WARN("Eval: camera '{}' has no aligned scores ({})", cam->image_name(), e.what());
+                }
+            }
+            const bool pair_lpips = _lpips_metric && aligned.is_valid() &&
+                                    !(_lpips_metric->prefers_independent_queue() && cam->has_normal());
+            std::optional<float> paired_aligned_lpips;
             if (_lpips_metric) {
-                view.lpips = score_lpips(r_output.image, headline_pixels, true);
+                view.lpips = pair_lpips
+                                 ? score_lpips(r_output.image, headline_pixels, true, &aligned, &paired_aligned_lpips)
+                                 : score_lpips(r_output.image, headline_pixels, true);
                 if (view.lpips)
                     lpips_values.push_back(*view.lpips);
                 for (auto& set : mask_sets) {
@@ -2122,14 +2166,9 @@ namespace lfs::training {
                         set.scores.flip.push_back(*set.metrics.flip);
                 }
             }
-            if (score_aligned) {
+            // Without an aligned render its warning is already in the log, from the alignment above.
+            if (score_aligned && aligned.is_valid()) {
                 try {
-                    lfs::core::Tensor displacement;
-                    // Aligned from the render as rendered and rounded onto the reference's grid once, like the plain one.
-                    const auto aligned = image_for_metrics(
-                        CalibrationCorrection::align_for_scoring(unrounded_render, image_as_float01(gt_image),
-                                                                 headline_pixels, displacement),
-                        view.bit_depth);
                     const float aligned_psnr = _psnr_metric->compute(aligned, gt_image, headline_pixels);
                     const float aligned_ssim = _ssim_metric->compute_evaluation(aligned, gt_image, headline_pixels,
                                                                                 headline_erodes, cam->image_name());
@@ -2140,11 +2179,11 @@ namespace lfs::training {
                         ssim_aligned_values.push_back(aligned_ssim);
                     }
                     if (_lpips_metric) {
-                        view.lpips_aligned = score_lpips(aligned, headline_pixels, false);
+                        view.lpips_aligned = pair_lpips ? paired_aligned_lpips : score_lpips(aligned, headline_pixels, false);
                         if (view.lpips_aligned)
                             lpips_aligned_values.push_back(*view.lpips_aligned);
                     }
-                    const auto offsets = displacement.to_vector();
+                    const auto offsets = aligned_displacement.to_vector();
                     for (size_t i = 0; i < offsets.size(); i += 2)
                         displacement_lengths.push_back(std::hypot(offsets[i], offsets[i + 1]));
                     aligned_images++;
