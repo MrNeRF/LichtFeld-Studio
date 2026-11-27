@@ -128,9 +128,15 @@ void main(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex, uniform Parameters 
         }
         return;
     }
-    if (operation == 2) { // block id = float32 floor(row / 256)
-        for (uint i = gid.x * 256 + lane; i < p.count; i += groups.x * 256)
-            ((Ptr<float, Access.ReadWrite>)p.destination)[i] = floor(float(((Ptr<int64_t, Access.Read>)p.source)[i]) * (1.0f / 256.0f));
+    if (operation == 2) { // block id = float32(row / 256), -1 for a negative row, as CUDA's and Metal's kernels have it
+        // The division is in integers. A row converted to float first rounds once it passes 2^24, and the rows
+        // within half the float spacing below a 256-row boundary land in the next block: the last row of a block
+        // from 16.8M rows, the last two from 33.6M, the last four from 67.1M. The re-encode then never sees their new
+        // values.
+        for (uint i = gid.x * 256 + lane; i < p.count; i += groups.x * 256) {
+            const int64_t row = ((Ptr<int64_t, Access.Read>)p.source)[i];
+            ((Ptr<float, Access.ReadWrite>)p.destination)[i] = row < 0 ? -1.0f : float(row / 256);
+        }
         return;
     }
     if (operation == 3) { // sorted block runs
