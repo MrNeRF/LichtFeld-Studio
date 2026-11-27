@@ -304,6 +304,21 @@ def test_getting_started_panel_escapes_thumbnail_paths(panel_modules, tmp_path):
     assert body.properties["decorator"] == f"image({expected_thumb})"
 
 
+def test_getting_started_defers_blender_preferences_until_after_click(panel_modules, monkeypatch):
+    _, getting_started = panel_modules
+    scheduled = []
+    opened = []
+    monkeypatch.setattr(getting_started.lf.ui, "schedule_on_ui_thread", scheduled.append, raising=False)
+    monkeypatch.setattr(getting_started.lf.ui, "open_preferences", opened.append, raising=False)
+
+    getting_started.GettingStartedPanel._on_open_blender()
+
+    assert opened == []
+    callback, = scheduled
+    callback()
+    assert opened == ["integrations"]
+
+
 def test_getting_started_panel_uses_dirty_update_policy(panel_modules):
     _, getting_started = panel_modules
     assert getting_started.GettingStartedPanel.update_policy == "dirty"

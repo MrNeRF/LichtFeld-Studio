@@ -7,6 +7,7 @@ from http.client import IncompleteRead
 import io
 import json
 from pathlib import Path
+import posixpath
 import sys
 import unittest
 from types import SimpleNamespace
@@ -192,18 +193,26 @@ class BlenderExtensionTests(unittest.TestCase):
         thread.assert_called_once_with(target=launch.return_value.wait, daemon=True)
         thread.return_value.start.assert_called_once()
 
-    def test_blender_child_preserves_library_paths_set_before_studio_launcher(self):
-        with (patch.object(integration.os, "name", "posix"),
-              patch.dict(integration.os.environ, {
-                  "LFS_LAUNCHER_LIBRARY_DIR": "/studio/bin/../lib",
-                  "LD_LIBRARY_PATH": "/studio/bin/../lib:/user/lib",
-                  "BLENDER_USER_CONFIG": "/user/config",
-              })):
-            env = integration._blender_environment()
-            self.assertEqual(env["LD_LIBRARY_PATH"], "/user/lib")
-            self.assertEqual(env["BLENDER_USER_CONFIG"], "/user/config")
-            self.assertNotIn("LFS_LAUNCHER_LIBRARY_DIR", env)
-            self.assertEqual(integration.os.environ["LD_LIBRARY_PATH"], "/studio/bin/../lib:/user/lib")
+    def test_blender_child_removes_only_studios_first_library_path(self):
+        for value, remaining in (
+            ("/studio/bin/../lib:/user/lib", "/user/lib"),
+            ("/studio/lib", None),
+            ("/user/lib:/studio/lib", "/user/lib:/studio/lib"),
+        ):
+            with (self.subTest(value=value),
+                  patch.object(integration.sys, "platform", "linux"),
+                  patch.object(integration.os, "readlink", return_value="/studio/bin/LichtFeld-Studio"),
+                  patch.object(integration.os, "path", posixpath),
+                  patch.dict(integration.os.environ, {
+                      "LD_LIBRARY_PATH": value, "BLENDER_USER_CONFIG": "/user/config",
+                  })):
+                env = integration._blender_environment()
+                if value.startswith("/user/"):
+                    self.assertIsNone(env)
+                else:
+                    self.assertEqual(env.get("LD_LIBRARY_PATH"), remaining)
+                    self.assertEqual(env["BLENDER_USER_CONFIG"], "/user/config")
+                self.assertEqual(integration.os.environ["LD_LIBRARY_PATH"], value)
 
     def test_release_failure_keeps_verified_profile_and_saves_path(self):
         info = {"installed": [], "destination": "/extensions"}

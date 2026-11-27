@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import tomllib
 import zipfile
@@ -190,17 +191,22 @@ def _executable_path(executable):
 
 
 def _blender_environment():
-    library_dir = os.environ.get("LFS_LAUNCHER_LIBRARY_DIR")
-    if os.name == "nt" or not library_dir:
+    first, _, remaining = os.environ.get("LD_LIBRARY_PATH", "").partition(":")
+    if sys.platform != "linux" or not first:
         return None
+    try:
+        executable = os.readlink("/proc/self/exe")
+    except OSError:
+        return None
+    library_dir = os.path.join(os.path.dirname(executable), "..", "lib")
+    if os.path.realpath(first) != os.path.realpath(library_dir):
+        return None
+
     env = os.environ.copy()
-    env.pop("LFS_LAUNCHER_LIBRARY_DIR")
-    first, _, remaining = env.get("LD_LIBRARY_PATH", "").partition(":")
-    if first == library_dir:
-        if remaining:
-            env["LD_LIBRARY_PATH"] = remaining
-        else:
-            env.pop("LD_LIBRARY_PATH", None)
+    if remaining:
+        env["LD_LIBRARY_PATH"] = remaining
+    else:
+        env.pop("LD_LIBRARY_PATH")
     return env
 
 

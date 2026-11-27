@@ -170,10 +170,10 @@
               <option value="beta">@tr:blender_integration.beta</option>
             </select>
           </div>
-          <div class="preferences-row" data-if="blender_version">
+          <div class="preferences-row" data-if="blender_version != ''">
             <span class="preferences-label">@tr:blender_integration.application</span><span>{{blender_version}}</span>
           </div>
-          <div class="preferences-row" data-if="blender_destination">
+          <div class="preferences-row" data-if="blender_destination != ''">
             <span class="preferences-label">@tr:blender_integration.destination</span><span>{{blender_destination}}</span>
           </div>
           <div class="preferences-row">

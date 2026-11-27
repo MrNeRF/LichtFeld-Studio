@@ -137,7 +137,8 @@ class GettingStartedPanel(Panel):
 
     @staticmethod
     def _on_open_blender(*_):
-        lf.ui.open_preferences("integrations")
+        # Let the floating panel finish handling the click before raising Preferences.
+        lf.ui.schedule_on_ui_thread(lambda: lf.ui.open_preferences("integrations"))
 
     def _on_open_url(self, _handle, event, _args):
         target = event.current_target()
