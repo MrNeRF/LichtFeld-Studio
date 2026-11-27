@@ -2147,6 +2147,34 @@ class IngestCLI(unittest.TestCase):
                 if detail:
                     self.assertIn(detail, result["error"]["message"])
 
+        # A1 stores payloads in slots and uses offsets from the trailer start.
+        data = b"padding" + first + insta360_fixture.SECOND + insta360_fixture.COMPACT
+        imu_offset = len(b"padding")
+        metadata_offset = imu_offset + len(first + insta360_fixture.SECOND)
+        empty = (0, 0, 0)
+        metadata_entry = (0x101, len(insta360_fixture.COMPACT), metadata_offset)
+        imu_entry = (3, len(first + insta360_fixture.SECOND), imu_offset)
+
+        def indexed(*entries):
+            directory = b"".join(struct.pack("<HII", *entry) for entry in entries)
+            return data + record(0, directory)
+
+        write(indexed(empty, metadata_entry, empty, imu_entry))
+        result, _ = self.invoke("probe", path, "--insta360-imu")
+        self.assertEqual(result["media"].pop("insta360_imu"), samples)
+        self.assertEqual(result, ordinary)
+
+        for entry, expected in (
+            ((3, imu_entry[1], len(data)), "DataLoss"),
+            ((3, imu_entry[1], 0xFFFFFFFF), "DataLoss"),
+            ((3, imu_entry[1], imu_offset + 1), "DataLoss"),
+            ((0x0300, imu_entry[1], imu_offset), "Unsupported"),
+        ):
+            with self.subTest(index_entry=entry):
+                write(indexed(empty, metadata_entry, empty, entry))
+                result, _ = self.invoke("probe", path, "--insta360-imu", code=3)
+                self.assertEqual(result["error"]["code"], expected)
+
         # Seek across a valid-sized compact record that exceeds retained storage.
         payload_size = 20 * 6_000_001
         with path.open("wb") as file:
