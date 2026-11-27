@@ -32,8 +32,13 @@ struct Projected {
     float mx, my, a, b, c, opacity, red, green, blue, depth, nx, ny, nz;
     uint xmin, xmax, ymin, ymax, depthKey;
 };
+// A work item's record at its 64-bit byte address. Records are 72 bytes (fast_state.hpp asserts the host's size) and
+// work ids are dense, one per Gaussian, so the buffer passes 4 GiB at 59.7M Gaussians at every SH degree; indexed from
+// its start, NVIDIA's Vulkan wraps an access chain's 32-bit byte offset there without VK_EXT_shader_64bit_indexing.
+static const uint kProjectedBytes = 72;
+uint64_t projectedAddress(FastPush p, uint work) { return p.projected + uint64_t(work) * kProjectedBytes; }
 Projected projectedAt(FastPush p, uint work) {
-    return ((Ptr<Projected, Access.Read>)p.projected)[work];
+    return ((Ptr<Projected, Access.Read>)projectedAddress(p, work))[0];
 }
 // Closed pixel-center rectangle test, conservative at the contribution boundary.
 bool overlapsSubtile(Projected o, float2 origin) {

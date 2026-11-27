@@ -410,7 +410,7 @@ result:
                 storeUint(p.originalToWork, i, touched != 0 ? i : 0xffffffffu);
                 storeUint(p.workToOriginal, i, i);
                 if (touched != 0)
-                    ((Ptr<Projected, Access.ReadWrite>)p.projected)[i] = o;
+                    ((Ptr<Projected, Access.ReadWrite>)projectedAddress(p, i))[0] = o;
                 ((Ptr<uint64_t, Access.ReadWrite>)p.counts)[i] = touched;
                 if (p.orderedCounts != 0)
                     ((Ptr<uint64_t, Access.ReadWrite>)p.orderedCounts)[i] = touched != 0 ? 1 : 0;
