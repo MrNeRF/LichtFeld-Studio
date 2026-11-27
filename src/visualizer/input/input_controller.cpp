@@ -1102,6 +1102,7 @@ namespace lfs::vis {
 
         if (is_left_button &&
             action == input::ACTION_PRESS &&
+            !over_gui && !over_gui_hover &&
             isInViewport(x, y) &&
             isNearSplitter(x, y)) {
             if (isIndependentSplitViewActive()) {
@@ -1754,6 +1755,7 @@ namespace lfs::vis {
         const bool over_transform_gizmo = isTransformGizmoOverOrUsing();
         const bool over_splitter =
             drag_mode_ == DragMode::None &&
+            !over_gui && !over_gui_hover &&
             isInViewport(x, y) &&
             isNearSplitter(x, y);
 
