@@ -4387,8 +4387,12 @@ namespace lfs::training {
     }
 
     namespace {
-        // What the save hooks say of a failed save: the message meant for people.
+        // What the save hooks say of a failed save: why it failed. Most save errors share one
+        // message meant for people, and only their detail says why.
         std::string save_error_text(const lfs::Error& error) {
+            if (const auto detail = error.detail(); !detail.empty()) {
+                return std::string(detail);
+            }
             const auto message = error.user_message();
             return message.empty() ? lfs::format_for_developer(error) : std::string(message);
         }
@@ -4417,25 +4421,11 @@ namespace lfs::training {
             }
         }
 
-        // A save given up on before its writer started: its start, then its end, not ok.
-        void notify_save_refused(HookContext ctx, std::string error) {
-            ControlBoundary::instance().notify(ControlHook::SaveStart, ctx);
-            auto end = std::make_shared<SaveRecord>(*ctx.save);
-            end->error = std::move(error);
-            ctx.save = std::move(end);
-            ctx.trainer = nullptr;
-            ControlBoundary::instance().notify(ControlHook::SaveEnd, ctx);
-        }
-
-        // Tells the save hooks how a save ended. Called by the writer thread: notify()
-        // only queues, and the hooks run on the training thread.
-        void notify_save_end(HookContext ctx, const bool ok, std::string error,
-                             const std::uint64_t generation,
-                             const std::filesystem::path& path,
-                             const std::chrono::steady_clock::time_point began) {
-            if (!ctx.save) {
-                return;
-            }
+        // What on_save_end is told: the save as it started, and how its write ended.
+        HookContext ended_save(HookContext ctx, const bool ok, std::string error,
+                               const std::uint64_t generation,
+                               const std::filesystem::path& path,
+                               const std::chrono::steady_clock::time_point began) {
             auto end = std::make_shared<SaveRecord>(*ctx.save);
             end->ok = ok;
             end->error = std::move(error);
@@ -4450,9 +4440,59 @@ namespace lfs::training {
                 }
             }
             ctx.save = std::move(end);
-            ControlBoundary::instance().notify(ControlHook::SaveEnd, ctx);
+            return ctx;
         }
     } // namespace
+
+    HookContext Trainer::save_hook_context(const int iteration, const lfs::core::Uuid& snapshot_uuid,
+                                           const std::filesystem::path& path, const bool standalone,
+                                           const ProjectSnapshotWriteKind write_kind) {
+        return HookContext{
+            .iteration = iteration,
+            .loss = current_loss_.load(),
+            .num_gaussians = strategy_ ? reported_gaussian_count(strategy_->get_model()) : 0,
+            // A save outside training (Save As through a finished trainer) may hold
+            // a strategy never initialized to train: it has no refine window.
+            .is_refining = strategy_ && isInitialized() ? strategy_->is_refining(iteration) : false,
+            .trainer = this,
+            .save = std::make_shared<SaveRecord>(SaveRecord{
+                .snapshot_id = snapshot_uuid.to_string(),
+                .path = lfs::core::path_to_utf8(path),
+                .type = save_type(standalone, write_kind,
+                                  saving_model_.load(std::memory_order_acquire),
+                                  pending_snapshot_finish_reason_)})};
+    }
+
+    void Trainer::run_save_hooks() {
+        decltype(save_hooks_) raised;
+        {
+            std::lock_guard lock(project_snapshot_mutex_);
+            raised.swap(save_hooks_);
+        }
+        save_hooks_running_.fetch_add(1, std::memory_order_acq_rel);
+        const auto running = makeScopeGuard([this] {
+            save_hooks_running_.fetch_sub(1, std::memory_order_acq_rel);
+        });
+        for (const auto& [hook, ctx] : raised) {
+            ControlBoundary::instance().dispatch(hook, *ctx);
+        }
+    }
+
+    void Trainer::finish_saves() {
+        wait_for_project_writer();
+        run_save_hooks();
+    }
+
+    void Trainer::queue_save_hook(const ControlHook hook, HookContext ctx) {
+        std::lock_guard lock(project_snapshot_mutex_);
+        save_hooks_.emplace_back(hook, std::make_shared<const HookContext>(std::move(ctx)));
+    }
+
+    void Trainer::queue_refused_save(const HookContext& ctx, std::string error) {
+        queue_save_hook(ControlHook::SaveStart, ctx);
+        queue_save_hook(ControlHook::SaveEnd, ended_save(ctx, false, std::move(error), 0, {},
+                                                         std::chrono::steady_clock::now()));
+    }
 
     void Trainer::prepare_project_snapshot_at_safe_point(
         const int capture_iteration,
@@ -4462,7 +4502,8 @@ namespace lfs::training {
         const ProjectSnapshotWriteKind write_kind,
         const lfs::core::Uuid
             base_explicit_commit_uuid,
-        const std::uint64_t autosave_sequence) {
+        const std::uint64_t autosave_sequence,
+        const bool retried_if_refused) {
         join_finished_project_writer();
         if (write_kind ==
             ProjectSnapshotWriteKind::Autosave) {
@@ -4610,25 +4651,11 @@ namespace lfs::training {
                 "Failed to prepare .licht training snapshot "
                 "at iteration {}: {}",
                 capture_iteration, message);
-            // Refused, not retried: say so to the save hooks.
-            notify_save_refused(
-                HookContext{
-                    .iteration = capture_iteration,
-                    .loss = current_loss_.load(),
-                    .num_gaussians = strategy_ ? reported_gaussian_count(strategy_->get_model()) : 0,
-                    // A save outside training (Save As through a finished trainer) may hold
-                    // a strategy never initialized to train: it has no refine window.
-                    .is_refining = strategy_ && isInitialized() ? strategy_->is_refining(capture_iteration) : false,
-                    .trainer = this,
-                    .save = std::make_shared<SaveRecord>(SaveRecord{
-                        .snapshot_id = snapshot_uuid.to_string(),
-                        .path = lfs::core::path_to_utf8(path),
-                        .type = save_type(standalone, write_kind,
-                                          saving_model_.load(std::memory_order_acquire),
-                                          pending_snapshot_finish_reason_),
-                        .is_paused = is_paused(),
-                        .iterations = get_total_iterations()})},
-                save_error_text(prepared.error()));
+            if (!retried_if_refused) {
+                queue_refused_save(
+                    save_hook_context(capture_iteration, snapshot_uuid, path, standalone, write_kind),
+                    save_error_text(prepared.error()));
+            }
             std::lock_guard lock(project_snapshot_mutex_);
             last_project_writer_typed_error_ =
                 prepared.error();
@@ -5007,21 +5034,8 @@ namespace lfs::training {
             }
             // A capture retried later is told of when it is retried.
             if (given_up) {
-                notify_save_refused(
-                    HookContext{
-                        .iteration = iteration,
-                        .loss = current_loss_.load(),
-                        .num_gaussians = strategy_ ? reported_gaussian_count(strategy_->get_model()) : 0,
-                        .is_refining = strategy_ && isInitialized() ? strategy_->is_refining(iteration) : false,
-                        .trainer = this,
-                        .save = std::make_shared<SaveRecord>(SaveRecord{
-                            .snapshot_id = snapshot_uuid.to_string(),
-                            .path = lfs::core::path_to_utf8(path),
-                            .type = save_type(chapters->standalone, write_kind,
-                                              saving_model_.load(std::memory_order_acquire),
-                                              pending_snapshot_finish_reason_),
-                            .is_paused = is_paused(),
-                            .iterations = get_total_iterations()})},
+                queue_refused_save(
+                    save_hook_context(iteration, snapshot_uuid, path, chapters->standalone, write_kind),
                     save_error_text(pending.error()));
             }
             return;
@@ -5055,30 +5069,16 @@ namespace lfs::training {
                 .arm_after_snapshot(iteration);
             retained_source = retained_project_source_;
         }
+        // Before the writer starts, which queues the save's end once it is written.
+        const auto save_ctx =
+            save_hook_context(iteration, snapshot_uuid, path, chapters->standalone, write_kind);
+        queue_save_hook(ControlHook::SaveStart, save_ctx);
+
         project_writer_done_.store(
             false, std::memory_order_release);
         project_writer_in_flight_.store(
             true, std::memory_order_release);
         lfs::diagnostics::VramProfiler::instance().mark("save");
-
-        // The save hooks: its start now, its end once the writer is done with it.
-        HookContext save_ctx{
-            .iteration = iteration,
-            .loss = current_loss_.load(),
-            .num_gaussians = strategy_ ? reported_gaussian_count(strategy_->get_model()) : 0,
-            .is_refining = strategy_ && isInitialized() ? strategy_->is_refining(iteration) : false,
-            .trainer = this,
-            .save = std::make_shared<SaveRecord>(SaveRecord{
-                .snapshot_id = snapshot_uuid.to_string(),
-                .path = lfs::core::path_to_utf8(path),
-                .type = save_type(chapters->standalone, write_kind,
-                                  saving_model_.load(std::memory_order_acquire),
-                                  pending_snapshot_finish_reason_),
-                .is_paused = is_paused(),
-                .iterations = get_total_iterations()})};
-        ControlBoundary::instance().notify(ControlHook::SaveStart, save_ctx);
-        // The end may be heard after this trainer is gone, so it names none.
-        save_ctx.trainer = nullptr;
 
         try {
             project_writer_thread_ = std::jthread(
@@ -5845,9 +5845,15 @@ namespace lfs::training {
                         return captured->metrics;
                     }();
 
+                    auto save_end = std::make_shared<const HookContext>(ended_save(
+                        save_ctx, writer_result.has_value(),
+                        writer_result ? std::string{} : save_error_text(writer_result.error()),
+                        written_generation, path, save_began));
                     {
                         std::lock_guard lock(
                             project_snapshot_mutex_);
+                        // With the outcome, so whoever sees this save finished finds its end.
+                        save_hooks_.emplace_back(ControlHook::SaveEnd, std::move(save_end));
                         // A standalone file is not the project being trained.
                         if (!chapters->standalone)
                             last_project_snapshot_path_ = path;
@@ -5890,10 +5896,6 @@ namespace lfs::training {
                             lfs::format_for_developer(
                                 writer_result.error()));
                     }
-                    // Before the writer counts as done, so a wait for it finds the end queued.
-                    notify_save_end(save_ctx, writer_result.has_value(),
-                                    writer_result ? std::string{} : save_error_text(writer_result.error()),
-                                    written_generation, path, save_began);
                     project_writer_in_flight_.store(
                         false,
                         std::memory_order_release);
@@ -5902,24 +5904,24 @@ namespace lfs::training {
                         std::memory_order_release);
                 });
         } catch (const std::exception& error) {
-            notify_save_end(save_ctx, false,
-                            std::string("Failed to start .licht project writer: ") + error.what(),
-                            0, path, std::chrono::steady_clock::now());
             project_writer_in_flight_.store(
                 false, std::memory_order_release);
             project_writer_done_.store(
                 true, std::memory_order_release);
             const std::lock_guard lock(
                 project_snapshot_mutex_);
+            save_hooks_.emplace_back(
+                ControlHook::SaveEnd,
+                std::make_shared<const HookContext>(ended_save(
+                    save_ctx, false,
+                    std::string("Failed to start .licht project writer: ") + error.what(),
+                    0, path, std::chrono::steady_clock::now())));
             fail_project_request_locked(
                 request_id, error.what());
             LOG_ERROR(
                 "Failed to start .licht project writer: {}",
                 error.what());
         }
-        // Run the save hooks now, not at the next safe point: a terminal save is
-        // written before there is one. Every caller holds no lock here.
-        ControlBoundary::instance().drain_callbacks();
     }
 
     void Trainer::observe_training_step_duration(
@@ -5995,6 +5997,8 @@ namespace lfs::training {
                !stop_requested_.load(std::memory_order_acquire) &&
                !stop_token.stop_requested()) {
             consume_requested_project_snapshot(project_snapshot_iteration());
+            // Paused, the step's end, where its save hooks run, is not reached.
+            run_save_hooks();
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             handle_control_requests(iteration, stop_token);
         }
@@ -6558,6 +6562,8 @@ namespace lfs::training {
                 while (is_paused_.load() && !stop_requested_.load() && !stop_token.stop_requested()) {
                     consume_requested_project_snapshot(
                         project_snapshot_iteration());
+                    // Paused, the step's end, where its save hooks run, is not reached.
+                    run_save_hooks();
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                     handle_control_requests(iter, stop_token);
                 }
@@ -8998,9 +9004,12 @@ namespace lfs::training {
                             !(popspa_enabled() && target > get_regular_iterations()) &&
                             iter + 1 == target &&
                             !prepared_project_snapshot_) {
+                            // Prepared again at the target if refused here.
                             prepare_project_snapshot_at_safe_point(
                                 target,
-                                project_hook_destination);
+                                project_hook_destination, {}, 0,
+                                ProjectSnapshotWriteKind::Explicit, {}, 0,
+                                /*retried_if_refused=*/true);
                         }
                         if (iter == target) {
                             // The explicit request consumed above may have started
@@ -9164,6 +9173,8 @@ namespace lfs::training {
     }
 
     lfs::Status Trainer::train(std::stop_token stop_token) {
+        // A save made before this run, between runs or while paused, ends before it starts.
+        finish_saves();
         // A failed evaluation is reported by the run that recorded it.
         deferred_evaluation_error_.reset();
         const std::uint64_t train_start_epoch = mutation_epoch_;
@@ -9738,6 +9749,8 @@ namespace lfs::training {
                 // Transition to safe control phase and execute deferred Python callbacks
                 lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::SafeControl);
                 lfs::training::ControlBoundary::instance().drain_callbacks();
+                // After the step's other hooks: its saves were made after they were raised.
+                run_save_hooks();
 
                 if (*step_result == StepDisposition::Stop) {
                     break;
@@ -9865,6 +9878,9 @@ namespace lfs::training {
             : user_stopped
                 ? lfs::io::project::TrainingFinishReason::UserStopped
                 : lfs::io::project::TrainingFinishReason::Completed;
+        // A failed step leaves its hooks queued: they come before the terminal saves' hooks.
+        lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::SafeControl);
+        lfs::training::ControlBoundary::instance().drain_callbacks();
         // A save-project-at-iter capture that needed replan is re-queued for
         // the next post-step. When the target is the final iteration there is
         // no next post-step; drain here (layout is stable) before the terminal save.
@@ -10110,6 +10126,8 @@ namespace lfs::training {
                 ctx, get_total_iterations(), is_paused_.load(), false, user_stopped,
                 lfs::training::TrainingPhase::SafeControl);
             auto& boundary = lfs::training::ControlBoundary::instance();
+            // The terminal saves' hooks, before training's end.
+            run_save_hooks();
             boundary.notify(lfs::training::ControlHook::TrainingEnd, ctx);
             boundary.drain_callbacks();
         } catch (const std::exception& e) {
@@ -10274,6 +10292,7 @@ namespace lfs::training {
         capture_project_snapshot_at_safe_point(
             iteration);
         finish_project_writer();
+        run_save_hooks();
 
         std::lock_guard lock(project_snapshot_mutex_);
         if (!last_project_writer_error_.empty()) {

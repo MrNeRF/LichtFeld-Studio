@@ -114,7 +114,7 @@ class ControlSession:
 
     def on_save_start(self, arg: Callable, /) -> None:
         """
-        Register a callback called as the trainer begins writing a project file; it receives the save's dict
+        Register a callback called for each project file the trainer saves, before that save's on_save_end; it receives the save's dict
         """
 
     def on_save_end(self, arg: Callable, /) -> None:
@@ -811,7 +811,7 @@ def on_training_end(callback: Callable) -> Callable:
 
 def on_save_start(callback: Callable) -> Callable:
     """
-    Decorator for a handler called as the trainer begins writing a project file
+    Decorator for a handler called for each project file the trainer saves, before that save's on_save_end
     """
 
 def on_save_end(callback: Callable) -> Callable:

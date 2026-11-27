@@ -6161,6 +6161,15 @@ namespace lfs::vis::project {
         applyStartupRecoveryScan();
         settleScratchLocationCheck();
         settleProjectWrite();
+        // With no training thread, Save and Save As run the trainer's save themselves and no
+        // step is left to run its save hooks: a frame runs them, the end once the writer is
+        // done. Before a pending training start, so a save's hooks come before training's.
+        if (auto* const trainer = viewer_.getTrainer()) {
+            if (const auto* const manager = viewer_.getTrainerManager();
+                !manager || !manager->hasLiveTrainingThread()) {
+                trainer->run_save_hooks();
+            }
+        }
         processPendingTrainingStart();
         if (pending_training_cancel_settlement_ && !pending_training_start_ &&
             !project_write_job_ && !viewer_.jobs().anyRunning(JobType::DatasetEmbed)) {

@@ -11,6 +11,7 @@
 #include "components/ppisp_controller_pool.hpp"
 #include "core/camera.hpp"
 #include "core/error.hpp"
+#include "core/event_bridge/control_boundary.hpp"
 #include "core/parameters.hpp"
 #include "core/tensor.hpp"
 #include "dataset.hpp"
@@ -453,6 +454,20 @@ namespace lfs::training {
             int iteration,
             std::optional<ProjectSnapshotDocumentContext>
                 document_context = std::nullopt);
+        // Runs the save hooks raised since it last ran, in order, on this thread. Training runs
+        // them after each step's other hooks, and while paused; an owner that saves through
+        // the trainer while no training thread runs calls it once the save settles.
+        // Call it with no lock held.
+        void run_save_hooks();
+        // Whether run_save_hooks() is running them now. A hook can ask for the trainer to be
+        // released, and the trainer must outlive its hooks: an owner refuses then.
+        [[nodiscard]] bool is_running_save_hooks() const {
+            return save_hooks_running_.load(std::memory_order_acquire) > 0;
+        }
+        // Waits for a save still being written, then runs the save hooks left, its end
+        // included: as training starts, and for an owner about to release the trainer.
+        // Call it with no lock held and no other thread running save hooks.
+        void finish_saves();
         std::expected<int, std::string> load_checkpoint(const std::filesystem::path& checkpoint_path);
         CheckpointLoadResult load_checkpoint(
             std::istream& source,
@@ -503,6 +518,7 @@ namespace lfs::training {
         friend struct TrainerCameraErrorTestAccess;
         friend struct TrainerCropboxMaskTestAccess;
         friend struct TrainerPausedProgressTestAccess;
+        friend struct TrainerSaveHooksTestAccess;
 
         // Helper for deferred event emission to prevent deadlocks
         struct DeferredEvents {
@@ -758,7 +774,10 @@ namespace lfs::training {
                 ProjectSnapshotWriteKind::Explicit,
             lfs::core::Uuid
                 base_explicit_commit_uuid = {},
-            std::uint64_t autosave_sequence = 0);
+            std::uint64_t autosave_sequence = 0,
+            // A prepare made a step ahead, prepared again at its iteration if refused:
+            // its refusal is not the save's, so the save hooks are not told of it.
+            bool retried_if_refused = false);
         [[nodiscard]] lfs::Result<
             std::shared_ptr<ProjectSnapshotChapters>>
         reserve_project_snapshot_chapters() const;
@@ -766,6 +785,15 @@ namespace lfs::training {
         initialize_project_snapshot_service();
         void capture_project_snapshot_at_safe_point(int iteration);
         void consume_requested_project_snapshot(int iteration);
+        // What the save hooks are told of one save as it starts.
+        [[nodiscard]] HookContext save_hook_context(
+            int iteration, const lfs::core::Uuid& snapshot_uuid,
+            const std::filesystem::path& path, bool standalone,
+            ProjectSnapshotWriteKind write_kind);
+        // Raise a save hook, for run_save_hooks(). Call them with no lock held.
+        void queue_save_hook(ControlHook hook, HookContext ctx);
+        // A save given up on before its writer started: its start, and its end, not ok.
+        void queue_refused_save(const HookContext& ctx, std::string error);
         // Several --save-project-at-iter iterations with --save-project-path
         // write one standalone project each; a single one keeps saving through
         // the regular snapshot path.
@@ -924,6 +952,12 @@ namespace lfs::training {
         std::atomic<bool> project_writer_done_{true};
         std::atomic<bool> project_writer_in_flight_{false};
         mutable std::mutex project_snapshot_mutex_;
+        // The save hooks raised and not yet run, in the order raised: a save's start before
+        // its writer starts, its end as the writer publishes how it ended. One writer runs at
+        // a time, so each save's end comes before the next one's start. Guarded by
+        // project_snapshot_mutex_.
+        std::vector<std::pair<ControlHook, std::shared_ptr<const HookContext>>> save_hooks_;
+        std::atomic<int> save_hooks_running_{0};
         std::optional<std::filesystem::path>
             requested_project_path_;
         std::vector<std::byte>

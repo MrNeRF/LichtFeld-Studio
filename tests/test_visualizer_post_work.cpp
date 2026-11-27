@@ -6,8 +6,10 @@
 
 #include "core/checkpoint_format.hpp"
 #include "core/error_bus.hpp"
+#include "core/event_bridge/control_boundary.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/executable_path.hpp"
 #include "core/guarded_task.hpp"
@@ -15807,7 +15809,8 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
         // is_paused() true with no live training thread.
         // File Save must still route through the
         // trainer, inline-flush, and finish the
-        // ProjectWrite job.
+        // ProjectWrite job; with no training step left
+        // to run them, a frame runs its save hooks.
         if (!cuda_device_available()) {
             GTEST_SKIP() << "CUDA device unavailable";
         }
@@ -15894,6 +15897,15 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
             ASSERT_TRUE(
                 trainer->can_flush_project_snapshot());
 
+            using lfs::training::ControlHook;
+            std::vector<std::pair<ControlHook, lfs::training::HookContext>> heard;
+            lfs::event::ScopedHandler hooks;
+            for (const auto hook : {ControlHook::SaveStart, ControlHook::SaveEnd}) {
+                hooks.subscribe_hook(hook, [&heard, hook](const lfs::training::HookContext& ctx) {
+                    heard.emplace_back(hook, ctx);
+                });
+            }
+
             auto saved = lifecycle->save(false);
             ASSERT_TRUE(saved)
                 << lfs::format_for_developer(
@@ -15914,6 +15926,20 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
                 JobType::ProjectWrite));
             EXPECT_TRUE(std::filesystem::is_regular_file(
                 project_path));
+
+            lifecycle->updateMaintenance();
+            ASSERT_EQ(heard.size(), 2u);
+            const auto& [start_hook, start] = heard[0];
+            const auto& [end_hook, end] = heard[1];
+            EXPECT_EQ(start_hook, ControlHook::SaveStart);
+            EXPECT_EQ(end_hook, ControlHook::SaveEnd);
+            ASSERT_TRUE(start.save);
+            ASSERT_TRUE(end.save);
+            EXPECT_EQ(end.save->snapshot_id, start.save->snapshot_id);
+            EXPECT_EQ(lfs::core::utf8_to_path(end.save->path).lexically_normal(),
+                      project_path.lexically_normal());
+            EXPECT_TRUE(end.save->ok) << end.save->error;
+            EXPECT_GT(end.save->bytes, 0u);
             const auto metrics =
                 trainer->get_project_snapshot_metrics();
             EXPECT_GT(

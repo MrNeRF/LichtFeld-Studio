@@ -1202,6 +1202,14 @@ namespace lfs::vis {
     bool TrainerManager::clearTrainer() {
         LOG_DEBUG("Clearing trainer");
 
+        // A save hook, as lf.clear_scene() from one does, cannot release the trainer that
+        // runs it; refused before anything changes. A training thread's hooks end with it,
+        // which the stop below waits for.
+        if (trainer_ && !hasLiveTrainingThread() && trainer_->is_running_save_hooks()) {
+            LOG_ERROR("Trainer clear refused: its save hooks are running");
+            return false;
+        }
+
         const auto state = state_machine_.getState();
         if (state == TrainingState::Running || state == TrainingState::Paused) {
             LOG_INFO("Stopping active training before clearing");
@@ -1222,6 +1230,13 @@ namespace lfs::vis {
                 LOG_ERROR("Trainer clear deferred: training worker did not reach its terminal state");
                 return false;
             }
+        }
+
+        // A save still being written ends here, not with the trainer: with no training
+        // thread, only a later frame would have run its on_save_end. Before the snapshot
+        // is reset, so its hooks still see the trainer.
+        if (trainer_) {
+            trainer_->finish_saves();
         }
 
         // Pause events and no-thread stops do not run TrainingEnd's clear_snapshot.

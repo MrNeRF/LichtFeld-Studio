@@ -97,6 +97,26 @@ namespace lfs::training {
         }
     }
 
+    void ControlBoundary::dispatch(ControlHook hook, const HookContext& ctx) {
+        // Copied, so a callback runs, and its last copy is dropped, with the lock let go.
+        std::vector<Registration> local;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            const auto it = callbacks_.find(hook);
+            if (it != callbacks_.end()) {
+                local = it->second;
+            }
+        }
+
+        for (const auto& reg : local) {
+            try {
+                reg.cb(ctx);
+            } catch (...) {
+                spdlog::error("Hook callback threw");
+            }
+        }
+    }
+
     void ControlBoundary::clear_all() {
         std::lock_guard<std::mutex> lock(mutex_);
         callbacks_.clear();

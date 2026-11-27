@@ -346,9 +346,23 @@ reported as `"unknown"`; adapters must not treat it as successful completion.
 the trainer writes. Their payload adds `snapshot_id`, the same for a save's
 start and its end, `path`, and `type`: `"save"`, `"autosave"`, `"standalone"`,
 `"final"`, `"stopped"`, or `"emergency"`. `on_save_end` also receives `ok`;
-`error`, which is `None` when the save succeeded; the project's `generation`;
-the file's size in `bytes`; and `seconds`, how long the write took. A save
-given up before it was written still calls both, with `ok` false.
+`error`, which is `None` when the save succeeded and otherwise says why it
+failed; the project's `generation`; the file's size in `bytes`; and `seconds`,
+how long the write took. Every `on_save_start` is followed by exactly one
+`on_save_end` with the same `snapshot_id`, with `ok` false when the file was
+not written, unless the app exits while the file is being written. A save the
+trainer refuses to write, for example because the model is empty, still calls
+both, with `ok` false; a request it drops without trying, for example one with
+no project file to save to, calls neither.
+
+Both are called whether training is running or not. During training they run
+on the training thread with its other hooks: at the end of each step, after
+that step's `on_iteration_start` and `on_post_step`, and also while training is
+paused. A save's end comes before `on_training_end`, except a save still being
+written when training ends: its end comes after, once the file is written.
+Outside training they run on the thread that saves; for a save from the app
+that is its main thread, at the next frame, with a save's end at the frame
+after its file is written.
 
 Inside a model read boundary, `SplatData.shN_rows(rows, degree)` copies only the
 requested SH-rest rows and bands into owned Float32 CPU storage with shape

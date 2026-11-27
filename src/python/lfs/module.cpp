@@ -419,7 +419,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -628,11 +628,6 @@ namespace {
         payload["generation"] = save.generation;
         payload["bytes"] = save.bytes;
         payload["seconds"] = save.seconds;
-        // A save's end may come once its trainer is gone: its state as the save began.
-        if (!ctx.trainer) {
-            payload["is_paused"] = save.is_paused;
-            payload["iterations"] = save.iterations;
-        }
     }
 
     void invoke_python_dict_hook(const nb::object& callback, const ControlHook hook, const HookContext& ctx) {
@@ -656,6 +651,21 @@ namespace {
         } catch (const std::exception& e) {
             LOG_ERROR("Python hook threw: {}", e.what());
         }
+    }
+
+    // Registers `callback` for `hook`; it is called with the hook's payload dict.
+    std::size_t register_dict_hook(ControlHook hook, const SafePyCallback& callback) {
+        return ControlBoundary::instance().register_callback(hook, [callback, hook](const HookContext& ctx) {
+            invoke_python_dict_hook(*callback, hook, ctx);
+        });
+    }
+
+    // Hook registration helper
+    std::size_t register_hook(ControlHook hook, nb::callable cb) {
+        if (!cb)
+            return 0;
+        LOG_INFO("Python hook registered for hook {}", static_cast<int>(hook));
+        return register_dict_hook(hook, make_safe_py_callback(nb::cast<nb::object>(cb)));
     }
 
     class PyControlSession {
@@ -701,15 +711,11 @@ namespace {
             owned_callbacks_.push_back(std::move(callback));
         }
 
+        // Holds its own reference, as add() does: unregistering drops the boundary's copy
+        // under its lock, which must not be the last one.
         void add_dict(ControlHook hook, nb::callable fn) {
-            nb::object fn_obj = std::move(fn);
-            auto callback = make_safe_py_callback(std::move(fn_obj));
-            auto cb = [callback, hook](const HookContext& ctx) {
-                invoke_python_dict_hook(*callback, hook, ctx);
-            };
-
-            const auto id = ControlBoundary::instance().register_callback(hook, std::move(cb));
-            registrations_.push_back({hook, id});
+            auto callback = make_safe_py_callback(std::move(fn));
+            registrations_.push_back({hook, register_dict_hook(hook, callback)});
             owned_callbacks_.push_back(std::move(callback));
         }
 
@@ -941,17 +947,6 @@ namespace {
         }
     };
 
-    // Hook registration helper
-    std::size_t register_hook(ControlHook hook, nb::callable cb) {
-        if (!cb)
-            return 0;
-        const auto callback = make_safe_py_callback(nb::cast<nb::object>(cb));
-        LOG_INFO("Python hook registered for hook {}", static_cast<int>(hook));
-        return ControlBoundary::instance().register_callback(hook, [callback, hook](const HookContext& ctx) {
-            invoke_python_dict_hook(*callback, hook, ctx);
-        });
-    }
-
     // Get Scene from application context, trainer, or operation context
     lfs::core::Scene* get_scene_internal() {
         // Priority 1: Application scene (persistent, works from background threads)
@@ -1055,7 +1050,7 @@ NB_MODULE(lichtfeld, m) {
         .def("on_post_step", &PyControlSession::on_post_step, "Register post-step callback")
         .def("on_training_end", &PyControlSession::on_training_end, "Register training end callback")
         .def("on_save_start", &PyControlSession::on_save_start,
-             "Register a callback called as the trainer begins writing a project file; it receives the save's dict")
+             "Register a callback called for each project file the trainer saves, before that save's on_save_end; it receives the save's dict")
         .def("on_save_end", &PyControlSession::on_save_end,
              "Register a callback called once a project file is written, or failed; it receives the save's dict")
         .def("clear", &PyControlSession::clear, "Unregister all callbacks");
@@ -3597,7 +3592,7 @@ NB_MODULE(lichtfeld, m) {
             register_hook(ControlHook::SaveStart, cb);
             return cb;
         },
-        nb::arg("callback"), "Decorator for a handler called as the trainer begins writing a project file");
+        nb::arg("callback"), "Decorator for a handler called for each project file the trainer saves, before that save's on_save_end");
 
     m.def(
         "on_save_end", [](nb::callable cb) {

@@ -17,6 +17,7 @@
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <set>
@@ -25,6 +26,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -34,6 +36,7 @@
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/event_bridge/control_boundary.hpp"
+#include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/native_fs.hpp"
@@ -3151,6 +3154,285 @@ namespace {
         EXPECT_GT(require_result(ProjectReader::open(path)).commit().generation, before);
         trainer.shutdown();
         EXPECT_TRUE(trainer.get_project_snapshot_metrics().last_writer_error.empty());
+    }
+
+    // With no training loop left, a save still runs both save hooks before save_project_to
+    // returns, paired by snapshot_id; a save refused before its writer started ends not ok.
+    TEST_F(ProjectCheckpointTrainerInstall, SaveHooksHearStartAndEndOfSaveAfterTraining) {
+        using namespace lfs::training;
+        using namespace lfs::test::licht;
+        TemporaryDirectory temporary;
+        auto params = make_tiny_headless_params(temporary.path, 1);
+        params.optimization.enable_eval = false;
+
+        lfs::core::Scene scene;
+        ASSERT_TRUE(loadTrainingDataIntoScene(params, scene));
+        ASSERT_TRUE(initializeTrainingModel(params, scene));
+        Trainer trainer(scene);
+        ASSERT_TRUE(trainer.initialize(params));
+        grant_headless_project_saves(trainer, params);
+        const auto trained = trainer.train();
+        ASSERT_TRUE(trained) << lfs::format_for_developer(trained.error());
+
+        const auto path = temporary.path / "after_training.licht";
+        std::vector<std::pair<ControlHook, HookContext>> heard;
+        {
+            lfs::event::ScopedHandler hooks;
+            for (const auto hook : {ControlHook::SaveStart, ControlHook::SaveEnd}) {
+                hooks.subscribe_hook(hook, [&heard, hook](const HookContext& ctx) {
+                    heard.emplace_back(hook, ctx);
+                });
+            }
+
+            ASSERT_TRUE(trainer.save_project_to(path, 1));
+            ASSERT_EQ(heard.size(), 2u);
+
+            // An empty model fails during preparation, before the writer starts.
+            auto& means = trainer.get_strategy_mutable().get_model().means();
+            auto original_means = std::move(means);
+            means = lfs::core::Tensor::zeros({0, 3}, lfs::core::Device::CUDA);
+            EXPECT_FALSE(trainer.save_project_to(temporary.path / "refused.licht", 1));
+            means = std::move(original_means);
+        }
+        trainer.shutdown();
+
+        ASSERT_EQ(heard.size(), 4u);
+        for (const auto& [hook, ctx] : heard) {
+            ASSERT_TRUE(ctx.save);
+            EXPECT_EQ(ctx.iteration, 1);
+            EXPECT_EQ(ctx.trainer, &trainer);
+            EXPECT_EQ(ctx.save->type, SaveType::Save);
+        }
+
+        const auto& [written_start_hook, written_start] = heard[0];
+        const auto& [written_end_hook, written_end] = heard[1];
+        EXPECT_EQ(written_start_hook, ControlHook::SaveStart);
+        EXPECT_EQ(written_end_hook, ControlHook::SaveEnd);
+        EXPECT_FALSE(written_start.save->snapshot_id.empty());
+        EXPECT_EQ(written_end.save->snapshot_id, written_start.save->snapshot_id);
+        EXPECT_EQ(written_end.save->path, lfs::core::path_to_utf8(path));
+        EXPECT_TRUE(written_end.save->ok);
+        EXPECT_TRUE(written_end.save->error.empty());
+        EXPECT_GT(written_end.save->generation, 0u);
+        EXPECT_EQ(written_end.save->bytes, std::filesystem::file_size(path));
+
+        const auto& [refused_start_hook, refused_start] = heard[2];
+        const auto& [refused_end_hook, refused_end] = heard[3];
+        EXPECT_EQ(refused_start_hook, ControlHook::SaveStart);
+        EXPECT_EQ(refused_end_hook, ControlHook::SaveEnd);
+        EXPECT_NE(refused_start.save->snapshot_id, written_start.save->snapshot_id);
+        EXPECT_EQ(refused_end.save->snapshot_id, refused_start.save->snapshot_id);
+        EXPECT_FALSE(refused_end.save->ok);
+        EXPECT_FALSE(refused_end.save->error.empty());
+        EXPECT_EQ(refused_end.save->bytes, 0u);
+    }
+
+    // While training is paused, the paused loop takes a save and runs both its hooks on the
+    // training thread: its on_save_end does not wait for training to resume.
+    TEST_F(ProjectCheckpointTrainerInstall, SaveWhilePausedEndsBeforeTrainingResumes) {
+        using namespace lfs::training;
+        using namespace lfs::test::licht;
+        TemporaryDirectory temporary;
+        auto params = make_tiny_headless_params(temporary.path, 3);
+        params.optimization.enable_eval = false;
+
+        lfs::core::Scene scene;
+        ASSERT_TRUE(loadTrainingDataIntoScene(params, scene));
+        ASSERT_TRUE(initializeTrainingModel(params, scene));
+        Trainer trainer(scene);
+        ASSERT_TRUE(trainer.initialize(params));
+        grant_headless_project_saves(trainer, params);
+
+        struct Heard {
+            ControlHook hook;
+            HookContext ctx;
+            std::thread::id thread;
+            bool paused = false;
+        };
+        std::mutex mutex;
+        std::vector<Heard> heard;
+        std::thread::id training_thread;
+        const auto heard_count = [&] {
+            std::lock_guard lock(mutex);
+            return heard.size();
+        };
+        std::optional<lfs::Status> trained;
+        {
+            lfs::event::ScopedHandler hooks;
+            hooks.subscribe_hook(ControlHook::PostStep, [&](const HookContext& ctx) {
+                if (ctx.trainer == &trainer && ctx.iteration == 1) {
+                    std::lock_guard lock(mutex);
+                    training_thread = std::this_thread::get_id();
+                    trainer.request_pause();
+                }
+            });
+            for (const auto hook : {ControlHook::SaveStart, ControlHook::SaveEnd}) {
+                hooks.subscribe_hook(hook, [&, hook](const HookContext& ctx) {
+                    std::lock_guard lock(mutex);
+                    heard.push_back({hook, ctx, std::this_thread::get_id(), trainer.is_paused()});
+                });
+            }
+
+            // Leaving this scope stops and joins training, so a failed check cannot leave it paused.
+            std::jthread training([&](const std::stop_token stop) { trained.emplace(trainer.train(stop)); });
+            ASSERT_TRUE(waitUntil([&] { return trainer.is_paused(); }, std::chrono::seconds(60)));
+            ASSERT_NE(trainer.request_project_save(), 0u);
+            const bool ended = waitUntil([&] { return heard_count() >= 2; }, std::chrono::seconds(60));
+            trainer.request_resume();
+            ASSERT_TRUE(ended) << "on_save_end did not run while training was paused";
+            training.join();
+        }
+        ASSERT_TRUE(trained.has_value());
+        ASSERT_TRUE(*trained) << lfs::format_for_developer(trained->error());
+        trainer.shutdown();
+
+        // The save made while paused, then the final save once training completed.
+        ASSERT_EQ(heard.size(), 4u);
+        const auto& start = heard[0];
+        const auto& end = heard[1];
+        EXPECT_EQ(start.hook, ControlHook::SaveStart);
+        EXPECT_EQ(end.hook, ControlHook::SaveEnd);
+        for (const auto* event : {&start, &end}) {
+            ASSERT_TRUE(event->ctx.save);
+            EXPECT_TRUE(event->paused);
+            EXPECT_EQ(event->thread, training_thread);
+            EXPECT_EQ(event->ctx.trainer, &trainer);
+            EXPECT_EQ(event->ctx.save->type, SaveType::Save);
+        }
+        EXPECT_FALSE(start.ctx.save->snapshot_id.empty());
+        EXPECT_EQ(end.ctx.save->snapshot_id, start.ctx.save->snapshot_id);
+        EXPECT_EQ(end.ctx.save->path, lfs::core::path_to_utf8(params.dataset.project_file()));
+        EXPECT_TRUE(end.ctx.save->ok) << end.ctx.save->error;
+        EXPECT_GT(end.ctx.save->bytes, 0u);
+
+        const auto& final_start = heard[2];
+        const auto& final_end = heard[3];
+        EXPECT_EQ(final_start.hook, ControlHook::SaveStart);
+        EXPECT_EQ(final_end.hook, ControlHook::SaveEnd);
+        ASSERT_TRUE(final_end.ctx.save);
+        EXPECT_FALSE(final_end.paused);
+        EXPECT_EQ(final_end.ctx.save->type, SaveType::Final);
+        EXPECT_GT(final_end.ctx.save->generation, end.ctx.save->generation);
+    }
+
+    // Stopped as the app stops training, which makes no save of its own at a stop, with a save
+    // still to write: that save still ends, on the training thread, before on_training_end.
+    TEST_F(ProjectCheckpointTrainerInstall, SaveLeftAtStopEndsBeforeTrainingEnd) {
+        using namespace lfs::training;
+        using namespace lfs::test::licht;
+        TemporaryDirectory temporary;
+        auto params = make_tiny_headless_params(temporary.path, 4);
+        params.optimization.enable_eval = false;
+
+        lfs::core::Scene scene;
+        ASSERT_TRUE(loadTrainingDataIntoScene(params, scene));
+        ASSERT_TRUE(initializeTrainingModel(params, scene));
+        Trainer trainer(scene);
+        ASSERT_TRUE(trainer.initialize(params));
+        grant_headless_project_saves(trainer, params);
+        trainer.set_trainer_project_save_policy({
+            .on_completion = true,
+            .on_stop_or_error = false,
+            .at_step_boundaries = true,
+        });
+
+        std::mutex mutex;
+        std::vector<std::tuple<ControlHook, HookContext, std::thread::id>> heard;
+        std::uint64_t request = 0;
+        {
+            lfs::event::ScopedHandler hooks;
+            // PostStep runs after its step took any save request, and the stop is seen at the
+            // start of the next step: the save is taken, and written, as training stops.
+            hooks.subscribe_hook(ControlHook::PostStep, [&](const HookContext& ctx) {
+                if (ctx.trainer == &trainer && ctx.iteration == 1 && request == 0) {
+                    request = trainer.request_project_save();
+                    trainer.request_stop();
+                }
+            });
+            for (const auto hook : {ControlHook::SaveStart, ControlHook::SaveEnd, ControlHook::TrainingEnd}) {
+                hooks.subscribe_hook(hook, [&, hook](const HookContext& ctx) {
+                    std::lock_guard lock(mutex);
+                    heard.emplace_back(hook, ctx, std::this_thread::get_id());
+                });
+            }
+            const auto trained = trainer.train();
+            ASSERT_TRUE(trained) << lfs::format_for_developer(trained.error());
+        }
+        EXPECT_LT(trainer.get_current_iteration(), 4);
+        trainer.shutdown();
+
+        ASSERT_NE(request, 0u);
+        ASSERT_EQ(heard.size(), 3u);
+        const auto& [start_hook, start, start_thread] = heard[0];
+        const auto& [end_hook, end, end_thread] = heard[1];
+        const auto& [training_end_hook, training_end, training_end_thread] = heard[2];
+        EXPECT_EQ(start_hook, ControlHook::SaveStart);
+        EXPECT_EQ(end_hook, ControlHook::SaveEnd);
+        EXPECT_EQ(training_end_hook, ControlHook::TrainingEnd);
+        // train() ran on this thread; none of them ran on the writer's.
+        for (const auto& thread : {start_thread, end_thread, training_end_thread}) {
+            EXPECT_EQ(thread, std::this_thread::get_id());
+        }
+        ASSERT_TRUE(start.save);
+        ASSERT_TRUE(end.save);
+        EXPECT_EQ(end.save->snapshot_id, start.save->snapshot_id);
+        EXPECT_EQ(end.save->type, SaveType::Save);
+        EXPECT_TRUE(end.save->ok) << end.save->error;
+        EXPECT_EQ(end.save->bytes, std::filesystem::file_size(params.dataset.project_file()));
+        EXPECT_FALSE(training_end.save);
+    }
+
+    // A save made during a step runs its hooks with that step's other hooks, after them:
+    // after on_training_start, and after the on_iteration_start and on_post_step of its step.
+    TEST_F(ProjectCheckpointTrainerInstall, SaveHooksRunAfterTheirStepsOtherHooks) {
+        using namespace lfs::training;
+        using namespace lfs::test::licht;
+        TemporaryDirectory temporary;
+        auto params = make_tiny_headless_params(temporary.path, 3);
+        params.optimization.enable_eval = false;
+
+        lfs::core::Scene scene;
+        ASSERT_TRUE(loadTrainingDataIntoScene(params, scene));
+        ASSERT_TRUE(initializeTrainingModel(params, scene));
+        Trainer trainer(scene);
+        ASSERT_TRUE(trainer.initialize(params));
+        grant_headless_project_saves(trainer, params);
+
+        std::mutex mutex;
+        std::vector<std::pair<ControlHook, int>> heard;
+        {
+            lfs::event::ScopedHandler hooks;
+            for (const auto hook : {ControlHook::TrainingStart, ControlHook::IterationStart, ControlHook::PostStep,
+                                    ControlHook::SaveStart, ControlHook::SaveEnd, ControlHook::TrainingEnd}) {
+                hooks.subscribe_hook(hook, [&, hook](const HookContext& ctx) {
+                    if (hook == ControlHook::PostStep && ctx.iteration == 1) {
+                        EXPECT_NE(trainer.request_project_save(), 0u); // taken by step 2
+                    }
+                    std::lock_guard lock(mutex);
+                    heard.emplace_back(hook, ctx.iteration);
+                });
+            }
+            const auto trained = trainer.train();
+            ASSERT_TRUE(trained) << lfs::format_for_developer(trained.error());
+        }
+        trainer.shutdown();
+
+        ASSERT_FALSE(heard.empty());
+        EXPECT_EQ(heard.front().first, ControlHook::TrainingStart);
+        EXPECT_EQ(heard.back().first, ControlHook::TrainingEnd);
+        const auto index_of = [&](const ControlHook hook, const int iteration) {
+            const auto found = std::ranges::find(heard, std::pair{hook, iteration});
+            EXPECT_TRUE(found != heard.end()) << "hook " << static_cast<int>(hook) << " at " << iteration;
+            return found - heard.begin();
+        };
+        const auto start = std::ranges::find(heard, ControlHook::SaveStart, &std::pair<ControlHook, int>::first);
+        ASSERT_TRUE(start != heard.end());
+        const int step = start->second;
+        EXPECT_EQ(step, 2);
+        const auto start_at = start - heard.begin();
+        EXPECT_LT(index_of(ControlHook::IterationStart, step), start_at);
+        EXPECT_LT(index_of(ControlHook::PostStep, step), start_at);
+        EXPECT_LT(start_at, index_of(ControlHook::SaveEnd, step));
     }
 
     TEST_F(ProjectCheckpointTrainerInstall,

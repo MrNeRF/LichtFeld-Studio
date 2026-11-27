@@ -37,16 +37,13 @@ namespace lfs::training {
                           Stopped,
                           Emergency };
 
-    // One project file the trainer writes, or refuses to. SaveStart fills snapshot_id, path,
-    // type and the trainer's state; SaveEnd also how the write ended. Both carry the same
-    // snapshot_id, the one the save's checkpoint is stored under in the file.
+    // One project file the trainer writes, or refuses to. SaveStart fills snapshot_id, path
+    // and type; SaveEnd also how the write ended. Both carry the same snapshot_id, the one
+    // the save's checkpoint is stored under in the file.
     struct SaveRecord {
         std::string snapshot_id;
         std::string path;
         SaveType type = SaveType::Save;
-        // The trainer's state as the save began, for an end heard once the trainer is gone.
-        bool is_paused = false;
-        int iterations = 0;
         bool ok = false;
         std::string error;
         std::uint64_t generation = 0;
@@ -86,6 +83,9 @@ namespace lfs::training {
         void unregister_callback(ControlHook hook, std::size_t handle);
         void notify(ControlHook hook, const HookContext& ctx);
         void drain_callbacks();
+        // Runs the callbacks registered for `hook` now, on this thread, and leaves the queue
+        // to its drain: for hooks raised where the trainer is, not between a step's phases.
+        void dispatch(ControlHook hook, const HookContext& ctx);
         void clear_all();
 
     private:

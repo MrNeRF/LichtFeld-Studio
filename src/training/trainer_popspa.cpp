@@ -245,6 +245,8 @@ namespace lfs::training {
                 handle_control_requests(completed_iteration, stop_token);
                 while (is_paused_.load() && !stop_requested_.load() && !stop_token.stop_requested()) {
                     consume_popspa_project_snapshot(completed_iteration);
+                    // Paused, the step's end, where its save hooks run, is not reached.
+                    run_save_hooks();
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                     handle_control_requests(completed_iteration, stop_token);
                 }
