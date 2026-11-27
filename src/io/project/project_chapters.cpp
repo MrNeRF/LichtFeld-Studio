@@ -2823,6 +2823,11 @@ namespace lfs::io::project {
                 }
                 result.payload = std::move(*parsed);
             }
+            if (const Json* role = JsonChapterDom::read_json_ref(element, "secondary_crop")) {
+                if (!role->is_boolean())
+                    return fail<SceneNodeRecord>(lfs::ErrorCode::DataLoss, "Invalid crop role.", "secondary_crop must be boolean", "SCNG", "nodes.secondary_crop");
+                result.secondary_crop = role->get<bool>();
+            }
             if (const Json* cropbox =
                     JsonChapterDom::read_json_ref(element, "cropbox");
                 cropbox) {
@@ -3069,6 +3074,11 @@ namespace lfs::io::project {
             element["visible"] = value.visible;
             element["locked"] = value.locked;
             element["training_enabled"] = value.training_enabled;
+            // Primary is the default role; only a secondary crop stores the key.
+            if (value.secondary_crop)
+                element["secondary_crop"] = true;
+            else
+                element.erase("secondary_crop");
             element["payload_diverged"] = value.payload_diverged;
             if (value.point_cloud_source)
                 element["point_cloud_source"] = true;

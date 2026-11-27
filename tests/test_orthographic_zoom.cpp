@@ -2,7 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#include "core/crop_polygon.hpp"
 #include "core/event_bridge/event_bridge.hpp"
+#include "core/point_cloud.hpp"
 #include "core/services.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_manager.hpp"
@@ -13,6 +15,7 @@
 #include "rendering/render_pass.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "visualizer/gui_capabilities.hpp"
 #include "visualizer/visualizer_impl.hpp"
 #include <cmath>
 #include <cstdlib>
@@ -269,6 +272,73 @@ namespace lfs::vis {
         EXPECT_NEAR(renderedScale(secondary, rendering), 220.0f, 1e-4f);
         EXPECT_FLOAT_EQ(renderedScale(primary, rendering), 100.0f);
         EXPECT_FLOAT_EQ(rendering.getSettings().ortho_scale, 70.0f);
+    }
+
+    TEST_F(OrthographicZoomTest, PointCloudCropRolesKeepDistinctVisibleGuideColors) {
+        for (const bool reverse : {false, true}) {
+            SCOPED_TRACE(reverse);
+            VisualizerImpl viewer(projectOptions());
+            auto& viewport = viewer.getViewport();
+            viewport.windowSize = {400, 200};
+            viewport.setViewMatrix(glm::mat3(1.0f), {0.0f, 0.0f, 10.0f});
+            viewport.ortho_scale_override = 60.0f;
+            auto* rendering = viewer.getRenderingManager();
+            configure(*rendering);
+            auto settings = rendering->getSettings();
+            settings.show_crop_box = true;
+            settings.show_coord_axes = false;
+            rendering->updateSettings(settings);
+            auto* manager = viewer.getSceneManager();
+            auto& scene = manager->getScene();
+            // The dataset point cloud that training starts from owns the ROI and the Crop.
+            const auto cloud = scene.addPointCloud(
+                "Cloud",
+                std::make_shared<core::PointCloud>(
+                    core::Tensor::from_vector({-1.f, 0.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f}, {3, 3}, core::Device::CPU),
+                    core::Tensor::ones({3, 3}, core::Device::CPU)),
+                scene.addDataset("Dataset"));
+            ASSERT_NE(cloud, core::NULL_NODE);
+            const auto make = [&](const core::CropRole role, const core::NodeType shape) -> core::NodeId {
+                if (shape == core::NodeType::CROPBOX)
+                    return cap::ensureCropBox(*manager, rendering, cloud, role).value_or(core::NULL_NODE);
+                if (shape == core::NodeType::ELLIPSOID)
+                    return cap::ensureEllipsoid(*manager, rendering, cloud, role).value_or(core::NULL_NODE);
+                core::CropPolygonData data;
+                data.vertices = {{-1.f, -1.f}, {1.f, -1.f}, {0.f, 1.f}};
+                data.half_depth = 1.f;
+                data.role = role;
+                const auto polygon = cap::createCropPolygon(*manager, rendering, cloud, data, glm::mat4(1.0f));
+                return polygon ? *polygon : core::NULL_NODE;
+            };
+            const auto first_role = reverse ? core::CropRole::Secondary : core::CropRole::Primary;
+            const auto second_role = reverse ? core::CropRole::Primary : core::CropRole::Secondary;
+            ASSERT_NE(make(first_role, core::NodeType::CROPBOX), core::NULL_NODE);
+            ASSERT_NE(make(second_role, core::NodeType::CROPBOX), core::NULL_NODE);
+            // The ROI is a box or a polygon; the Crop also takes an ellipsoid.
+            for (const auto roi_shape : {core::NodeType::CROPBOX, core::NodeType::CROP_POLYGON}) {
+                for (const auto crop_shape : {core::NodeType::CROPBOX, core::NodeType::ELLIPSOID, core::NodeType::CROP_POLYGON}) {
+                    SCOPED_TRACE(std::to_string(static_cast<int>(roi_shape)) + "/" + std::to_string(static_cast<int>(crop_shape)));
+                    const auto roi = make(core::CropRole::Primary, roi_shape);
+                    const auto crop = make(core::CropRole::Secondary, crop_shape);
+                    ASSERT_NE(roi, core::NULL_NODE);
+                    ASSERT_NE(crop, core::NULL_NODE);
+                    ASSERT_NE(roi, crop);
+                    for (const auto selected : {roi, crop}) {
+                        manager->selectNode(selected);
+                        const auto result = overlays(viewer);
+                        bool purple = false;
+                        bool yellow = false;
+                        for (const auto& vertex : result.shape_overlay_triangles) {
+                            const auto& c = vertex.color;
+                            purple |= c.r > 0.4f && c.b > 0.6f && c.g < 0.7f;
+                            yellow |= c.r > 0.8f && c.g > 0.8f && c.b < 0.2f;
+                        }
+                        EXPECT_TRUE(purple) << "ROI outline missing";
+                        EXPECT_TRUE(yellow) << "Crop outline missing";
+                    }
+                }
+            }
+        }
     }
 
     TEST_F(OrthographicZoomTest, FrustumCacheAndGridRespectViewportScale) {

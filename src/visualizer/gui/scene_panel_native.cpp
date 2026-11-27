@@ -151,6 +151,7 @@ namespace lfs::vis::gui {
     NativeScenePanel::NativeScenePanel(RmlUIManager* manager)
         : manager_(manager),
           host_(manager, "scene_panel_native", "rmlui/scene_tree.rml") {
+        host_.setPanelId("lfs.scene");
         listener_.owner = this;
     }
 

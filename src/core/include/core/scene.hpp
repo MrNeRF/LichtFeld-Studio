@@ -88,6 +88,9 @@ namespace lfs::core {
         PointCloud = 2,
     };
 
+    enum class CropRole : uint8_t { Primary,
+                                    Secondary };
+
     struct CropBoxData {
         glm::vec3 min{-1.0f, -1.0f, -1.0f};
         glm::vec3 max{1.0f, 1.0f, 1.0f};
@@ -96,6 +99,7 @@ namespace lfs::core {
         glm::vec3 color{1.0f, 1.0f, 0.0f};
         float line_width = 2.0f;
         float flash_intensity = 0.0f;
+        CropRole role = CropRole::Primary;
     };
 
     struct EllipsoidData {
@@ -105,6 +109,7 @@ namespace lfs::core {
         glm::vec3 color{1.0f, 1.0f, 0.0f};
         float line_width = 2.0f;
         float flash_intensity = 0.0f;
+        CropRole role = CropRole::Primary;
     };
 
     inline constexpr std::size_t kMaxCropPolygonVertices = crop_polygon::kMaxVertices;
@@ -120,6 +125,7 @@ namespace lfs::core {
         glm::vec3 color{1.0f, 1.0f, 0.0f};
         float line_width = 2.0f;
         float flash_intensity = 0.0f;
+        CropRole role = CropRole::Primary;
     };
 
     struct GeoreferencePose {
@@ -221,6 +227,16 @@ namespace lfs::core {
         lfs::core::prop::AnimatableProperty<glm::mat4> local_transform{glm::mat4{1.0f}};
         lfs::core::prop::AnimatableProperty<bool> visible{true};
         lfs::core::prop::AnimatableProperty<bool> locked{false};
+
+        [[nodiscard]] std::optional<CropRole> cropRole() const {
+            if (cropbox)
+                return cropbox->role;
+            if (ellipsoid)
+                return ellipsoid->role;
+            if (crop_polygon)
+                return crop_polygon->role;
+            return std::nullopt;
+        }
 
         [[nodiscard]] const glm::mat4& transform() const { return local_transform.get(); }
         [[nodiscard]] bool isExternalPreview() const { return external_preview_; }
@@ -414,9 +430,10 @@ namespace lfs::core {
         // Scene-owner thread only. Render/visibility invalidation is not a content edit.
         [[nodiscard]] std::optional<CollisionSourceIdentity> collisionSourceIdentity(NodeId id) const;
         [[nodiscard]] struct CollisionSource captureCollisionSource(NodeId id, CollisionSourceIdentity* identity = nullptr) const;
-        NodeId addCropBox(const std::string& name, NodeId parent_id);
-        NodeId addEllipsoid(const std::string& name, NodeId parent_id);
-        // Returns the existing polygon of parent_id, or NULL_NODE for an invalid outline.
+        // Each returns the parent's existing volume of the same role and shape instead of a second one.
+        NodeId addCropBox(const std::string& name, NodeId parent_id, CropRole role = CropRole::Primary);
+        NodeId addEllipsoid(const std::string& name, NodeId parent_id, CropRole role = CropRole::Primary);
+        // Returns the existing polygon of parent_id with data.role, or NULL_NODE for an invalid outline.
         NodeId addCropPolygon(const std::string& name, NodeId parent_id, CropPolygonData data,
                               const glm::mat4& local_transform = glm::mat4(1.0f));
         NodeId addDataset(const std::string& name);
@@ -469,6 +486,8 @@ namespace lfs::core {
         // Robust local bounds for reveal timing; ignores the most distant sampled splats.
         [[nodiscard]] bool getNodeRevealBounds(NodeId id, glm::vec3& out_min, glm::vec3& out_max) const;
 
+        [[nodiscard]] NodeId getCropForRole(NodeId owner_id, CropRole role, NodeType type) const;
+        // The *ForSplat lookups return the primary volume: the splat's crop or the training ROI.
         [[nodiscard]] NodeId getCropBoxForSplat(NodeId splat_id) const;
         [[nodiscard]] NodeId getOrCreateCropBoxForSplat(NodeId splat_id);
         [[nodiscard]] CropBoxData* getCropBoxData(NodeId cropbox_id);

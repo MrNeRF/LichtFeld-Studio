@@ -496,6 +496,7 @@ namespace lfs::python {
             adapter = std::make_shared<gui::RmlImModePanelAdapter>(
                 lfs::python::get_rml_manager(),
                 instance,
+                panel_id,
                 has_poll,
                 default_immediate_document_for_space(space));
         } else {

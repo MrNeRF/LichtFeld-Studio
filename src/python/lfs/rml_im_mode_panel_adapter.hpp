@@ -21,7 +21,7 @@ namespace lfs::vis::gui {
 
     class RmlImModePanelAdapter : public IPanel {
     public:
-        RmlImModePanelAdapter(void* manager, nb::object panel_instance, bool has_poll,
+        RmlImModePanelAdapter(void* manager, nb::object panel_instance, const std::string& panel_id, bool has_poll,
                               const std::string& rml_path = "rmlui/im_mode_panel.rml");
         ~RmlImModePanelAdapter() override;
 
@@ -55,6 +55,7 @@ namespace lfs::vis::gui {
 
         void* host_ = nullptr;
         void* manager_;
+        std::string panel_id_;
         std::string rml_path_;
         nb::object panel_instance_;
         bool has_poll_;

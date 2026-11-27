@@ -461,6 +461,7 @@ namespace lfs::training {
             install.parent_id = context.parent_id;
             install.point_cloud_node_id = context.point_cloud_node_id;
             install.node_transform = context.node_transform;
+            install.roi_identity = context.roi_identity;
             install.has_preserved_cropbox = context.has_preserved_cropbox;
             install.preserved_cropbox_data = context.preserved_cropbox_data;
             install.preserved_cropbox_transform = context.preserved_cropbox_transform;
@@ -1182,13 +1183,14 @@ namespace lfs::training {
                        : glm::inverse(scene.getWorldTransform(context.point_cloud_node_id)) *
                              scene.getWorldTransform(volume.id);
         };
-        if (const auto* polygon_node = scene.getNodeById(scene.getCropPolygonForSplat(context.point_cloud_node_id));
+        if (const auto* polygon_node = scene.getNodeById(scene.getCropForRole(context.point_cloud_node_id, lfs::core::CropRole::Primary, lfs::core::NodeType::CROP_POLYGON));
             polygon_node && polygon_node->crop_polygon) {
+            context.roi_identity = PreservedRoiIdentity{polygon_node->uuid, polygon_node->name, polygon_node->visible, polygon_node->locked};
             context.preserved_crop_polygon = *polygon_node->crop_polygon;
             context.preserved_crop_polygon_transform = local_to_point_cloud(*polygon_node);
         }
 
-        const lfs::core::NodeId cropbox_id = scene.getCropBoxForSplat(context.point_cloud_node_id);
+        const lfs::core::NodeId cropbox_id = scene.getCropForRole(context.point_cloud_node_id, lfs::core::CropRole::Primary, lfs::core::NodeType::CROPBOX);
         if (cropbox_id == lfs::core::NULL_NODE) {
             return context;
         }
@@ -1196,6 +1198,7 @@ namespace lfs::training {
         if (!cropbox_node || !cropbox_node->cropbox) {
             return context;
         }
+        context.roi_identity = PreservedRoiIdentity{cropbox_node->uuid, cropbox_node->name, cropbox_node->visible, cropbox_node->locked};
         context.preserved_cropbox_data = *cropbox_node->cropbox;
         context.preserved_cropbox_transform = local_to_point_cloud(*cropbox_node);
         context.has_preserved_cropbox = true;
@@ -1389,6 +1392,26 @@ namespace lfs::training {
             scene.setNodeTransform(model_id, install.node_transform);
         }
         scene.setTrainingModelNode(model_id);
+        if (install.roi_identity && (install.has_preserved_cropbox || install.preserved_crop_polygon)) {
+            lfs::core::Scene::RestoreNodeDesc desc;
+            desc.uuid = install.roi_identity->uuid;
+            desc.name = install.roi_identity->name;
+            desc.parent = model_id;
+            desc.visible = install.roi_identity->visible;
+            desc.locked = install.roi_identity->locked;
+            if (install.has_preserved_cropbox) {
+                desc.type = lfs::core::NodeType::CROPBOX;
+                desc.local_transform = install.preserved_cropbox_transform;
+                desc.cropbox = std::make_unique<lfs::core::CropBoxData>(install.preserved_cropbox_data);
+            } else {
+                desc.type = lfs::core::NodeType::CROP_POLYGON;
+                desc.local_transform = install.preserved_crop_polygon_transform;
+                desc.crop_polygon = std::make_unique<lfs::core::CropPolygonData>(*install.preserved_crop_polygon);
+            }
+            if (scene.restoreNodeWithUuid(std::move(desc)) == lfs::core::NULL_NODE)
+                return std::unexpected("Failed to preserve the training ROI in the scene");
+            return {};
+        }
         if (install.has_preserved_cropbox) {
             const lfs::core::NodeId model_cropbox_id = scene.addCropBox("Model_cropbox", model_id);
             if (model_cropbox_id != lfs::core::NULL_NODE) {
@@ -1418,7 +1441,7 @@ namespace lfs::training {
                 .detection = LFS_SOURCE_SITE_CURRENT(),
             }));
         }
-        lfs::core::NodeId cropbox_id = scene.getCropBoxForSplat(model->id);
+        lfs::core::NodeId cropbox_id = scene.getCropForRole(model->id, lfs::core::CropRole::Primary, lfs::core::NodeType::CROPBOX);
         if (cropbox_id == lfs::core::NULL_NODE) {
             cropbox_id = scene.addCropBox("Model_cropbox", model->id);
         }

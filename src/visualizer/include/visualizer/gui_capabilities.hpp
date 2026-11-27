@@ -166,10 +166,12 @@ namespace lfs::vis::cap {
     [[nodiscard]] LFS_VIS_API std::expected<core::NodeId, std::string> resolveCropBoxId(
         const SceneManager& scene_manager,
         const std::optional<std::string>& requested_node);
+    // The parent's crop box of the role, converting or replacing only that role's ellipsoid or polygon.
     [[nodiscard]] LFS_VIS_API std::expected<core::NodeId, std::string> ensureCropBox(
         SceneManager& scene_manager,
         RenderingManager* rendering_manager,
-        core::NodeId parent_id);
+        core::NodeId parent_id,
+        core::CropRole role = core::CropRole::Primary);
     [[nodiscard]] LFS_VIS_API std::expected<void, std::string> updateCropBox(
         SceneManager& scene_manager,
         RenderingManager* rendering_manager,
@@ -194,7 +196,8 @@ namespace lfs::vis::cap {
     [[nodiscard]] LFS_VIS_API std::expected<core::NodeId, std::string> ensureEllipsoid(
         SceneManager& scene_manager,
         RenderingManager* rendering_manager,
-        core::NodeId parent_id);
+        core::NodeId parent_id,
+        core::CropRole role = core::CropRole::Primary);
     [[nodiscard]] LFS_VIS_API std::expected<void, std::string> updateEllipsoid(
         SceneManager& scene_manager,
         RenderingManager* rendering_manager,
@@ -245,7 +248,7 @@ namespace lfs::vis::cap {
         std::vector<glm::vec2> vertices);
 
     // Adds an enabled polygon under a splat in one history entry, replacing the
-    // splat's existing crop box, ellipsoid or polygon.
+    // splat's existing crop box, ellipsoid or polygon of the same role (data.role).
     [[nodiscard]] LFS_VIS_API lfs::Result<core::NodeId> createCropPolygon(
         SceneManager& scene_manager,
         RenderingManager* rendering_manager,

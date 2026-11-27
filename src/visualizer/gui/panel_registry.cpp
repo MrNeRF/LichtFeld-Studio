@@ -25,6 +25,7 @@
 #include <cmath>
 #include <optional>
 #include <string>
+#include <tuple>
 
 namespace lfs::vis::gui {
 
@@ -32,6 +33,11 @@ namespace lfs::vis::gui {
         std::string localized_label(const std::string& source) {
             const auto& localization = lfs::event::LocalizationManager::getInstance();
             return localization.hasKey(source) ? std::string(localization.get(source)) : source;
+        }
+
+        auto floatingStackKey(const bool minimized, const uint64_t stack_order,
+                              const int order, const std::string_view label) {
+            return std::tuple{minimized, stack_order, order, label};
         }
 
         bool supportsWindowControls(const PanelInfo& panel) {
@@ -688,15 +694,10 @@ apply_registered_chrome:
         if (space == PanelSpace::Floating) {
             std::stable_sort(snapshots.begin(), snapshots.end(),
                              [](const PanelSnapshot& a, const PanelSnapshot& b) {
-                                 const bool am = a.float_window_state == FloatingWindowState::Minimized;
-                                 const bool bm = b.float_window_state == FloatingWindowState::Minimized;
-                                 if (am != bm)
-                                     return !am;
-                                 if (a.float_stack_order != b.float_stack_order)
-                                     return a.float_stack_order < b.float_stack_order;
-                                 if (a.order != b.order)
-                                     return a.order < b.order;
-                                 return a.label < b.label;
+                                 return floatingStackKey(a.float_window_state == FloatingWindowState::Minimized,
+                                                         a.float_stack_order, a.order, a.label) <
+                                        floatingStackKey(b.float_window_state == FloatingWindowState::Minimized,
+                                                         b.float_stack_order, b.order, b.label);
                              });
         }
 
@@ -1270,22 +1271,24 @@ apply_registered_chrome:
                         }
 
                         const float forced = layout.window_state != FloatingWindowState::Normal ? h : ((has_user_height && drawn_h > 0 && h > drawn_h) ? h : 0.0f);
-                        PanelInputState masked_resize_input;
+                        const bool covered = hovered_floating_direct >= 0 &&
+                                             static_cast<int>(snap_idx) != hovered_floating_direct;
+                        PanelInputState masked_pointer_input;
                         const PanelInputState* panel_input = input;
-                        if (resize_owns_input && input) {
-                            masked_resize_input = *input;
-                            masked_resize_input.mouse_x = -1.0e9f;
-                            masked_resize_input.mouse_y = -1.0e9f;
-                            for (auto& down : masked_resize_input.mouse_down)
+                        if ((resize_owns_input || covered) && input) {
+                            masked_pointer_input = *input;
+                            masked_pointer_input.mouse_x = -1.0e9f;
+                            masked_pointer_input.mouse_y = -1.0e9f;
+                            for (auto& down : masked_pointer_input.mouse_down)
                                 down = false;
-                            for (auto& clicked : masked_resize_input.mouse_clicked)
+                            for (auto& clicked : masked_pointer_input.mouse_clicked)
                                 clicked = false;
-                            for (auto& released : masked_resize_input.mouse_released)
+                            for (auto& released : masked_pointer_input.mouse_released)
                                 released = false;
-                            masked_resize_input.mouse_button_events.clear();
-                            masked_resize_input.mouse_wheel = 0.0f;
-                            masked_resize_input.mouse_wheel_x = 0.0f;
-                            panel_input = &masked_resize_input;
+                            masked_pointer_input.mouse_button_events.clear();
+                            masked_pointer_input.mouse_wheel = 0.0f;
+                            masked_pointer_input.mouse_wheel_x = 0.0f;
+                            panel_input = &masked_pointer_input;
                         }
                         const auto result = snap.panel->renderDirect({
                                                                          .mode = PanelDirectRenderMode::Draw,
@@ -1542,11 +1545,22 @@ apply_registered_chrome:
         return y_offset;
     }
 
-    bool PanelRegistry::isPositionOverFloatingPanel(const double x, const double y) const {
+    bool PanelRegistry::isPositionOverFloatingPanel(const double x, const double y, const std::string_view above_panel) const {
         const double kResizeEdge = static_cast<double>(floatingResizeEdge());
         const double rounding = std::max(0.0f, theme().sizes.window_rounding);
 
         std::lock_guard lock(mutex_);
+        std::optional<decltype(floatingStackKey(false, 0, 0, {}))> above;
+        if (!above_panel.empty()) {
+            const auto owner = std::ranges::find(panels_, above_panel, &PanelInfo::id);
+            if (owner == panels_.end())
+                return false;
+            const auto found = floating_interactions_.find(owner->id);
+            if (found == floating_interactions_.end())
+                return false;
+            above = floatingStackKey(found->second.window_state == FloatingWindowState::Minimized,
+                                     found->second.stack_order, owner->order, owner->label);
+        }
         for (const auto& panel : panels_) {
             const auto interaction_it = floating_interactions_.find(panel.id);
             if (panel.space != PanelSpace::Floating || !panel.enabled || panel.error_disabled ||
@@ -1556,6 +1570,9 @@ apply_registered_chrome:
             }
 
             const auto& interaction = interaction_it->second;
+            if (above && floatingStackKey(interaction.window_state == FloatingWindowState::Minimized,
+                                          interaction.stack_order, panel.order, panel.label) <= *above)
+                continue;
             if (interaction.window_state != FloatingWindowState::Normal &&
                 (x < interaction.last_x || x >= interaction.last_x + interaction.last_width ||
                  y < interaction.last_y || y >= interaction.last_y + interaction.last_height))

@@ -48,9 +48,10 @@ namespace lfs::vis::gui {
     } // namespace
 
     RmlImModePanelAdapter::RmlImModePanelAdapter(void* manager, nb::object panel_instance,
-                                                 const bool has_poll,
+                                                 const std::string& panel_id, const bool has_poll,
                                                  const std::string& rml_path)
         : manager_(manager),
+          panel_id_(panel_id),
           rml_path_(rml_path),
           panel_instance_(std::move(panel_instance)),
           has_poll_(has_poll) {
@@ -85,8 +86,10 @@ namespace lfs::vis::gui {
         assert(ops.create);
 
         static int ctx_counter = 0;
-        std::string ctx_name = "im_mode_" + std::to_string(ctx_counter++);
+        const std::string ctx_name = "im_mode_" + std::to_string(ctx_counter++);
         host_ = ops.create(manager_, ctx_name.c_str(), rml_path_.c_str(), "");
+        if (host_ && ops.set_panel_id)
+            ops.set_panel_id(host_, panel_id_.c_str());
 
         if (host_ && ops.set_height_mode)
             ops.set_height_mode(host_, 1);

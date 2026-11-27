@@ -93,14 +93,29 @@ namespace lfs::vis {
             });
         }
 
-        void activateCropToolShape(const char* shape) {
+        void activateCropToolShape(const char* shape, const core::CropRole role = core::CropRole::Primary) {
             if (auto* editor = services().editorOrNull()) {
-                editor->setActiveOperator("builtin.cropbox", "translate");
+                editor->setActiveOperator(cropToolIdForRole(role), "translate");
             }
-            UnifiedToolRegistry::instance().setActiveTool("builtin.cropbox");
+            UnifiedToolRegistry::instance().setActiveTool(cropToolIdForRole(role));
             if (auto* gui = services().guiOrNull()) {
                 gui->gizmo().setCropToolShape(shape);
             }
+        }
+        // A pre-training ROI bounds training and never removes points, whatever asks it to crop.
+        [[nodiscard]] bool rejectsRoiCrop(const core::Scene& scene, const core::NodeId target_node_id) {
+            const auto* target = scene.getNodeById(target_node_id);
+            if (!target || !isPointCloudRoi(scene, *target))
+                return false;
+            LOG_WARN("'{}' is the training ROI and cannot crop the point cloud", target->name);
+            return true;
+        }
+
+        // The crop role an add command edits: a selected volume's own role, else the active tool's.
+        [[nodiscard]] core::CropRole requestedCropRole(const core::SceneNode& target, const core::SceneNode* owner) {
+            if (const auto role = target.cropRole())
+                return *role;
+            return activeCropRole(owner);
         }
         [[nodiscard]] op::SceneGraphCaptureOptions sceneGraphCaptureOptions(
             const bool include_selected_nodes = true,
@@ -3019,9 +3034,10 @@ namespace lfs::vis {
             return node->id;
         }
 
+        // A point cloud's secondary Crop is selected directly, never through its owner.
         for (const core::NodeId child_id : node->children) {
             const auto* const child = scene_.getNodeById(child_id);
-            if (child && child->type == core::NodeType::CROPBOX) {
+            if (child && child->type == core::NodeType::CROPBOX && child->cropRole() == core::CropRole::Primary) {
                 return child_id;
             }
         }
@@ -3101,9 +3117,10 @@ namespace lfs::vis {
             return node->id;
         }
 
+        // A point cloud's secondary Crop is selected directly, never through its owner.
         for (const core::NodeId child_id : node->children) {
             const auto* const child = scene_.getNodeById(child_id);
-            if (child && child->type == core::NodeType::ELLIPSOID) {
+            if (child && child->type == core::NodeType::ELLIPSOID && child->cropRole() == core::CropRole::Primary) {
                 return child_id;
             }
         }
@@ -4120,6 +4137,8 @@ namespace lfs::vis {
     }
 
     void SceneManager::handleCropActivePly(const lfs::geometry::BoundingBox& crop_box, const bool inverse, const core::NodeId target_node_id) {
+        if (rejectsRoiCrop(scene_, target_node_id))
+            return;
         std::vector<std::string> splat_node_names;
         std::vector<std::string> pointcloud_node_names;
         bool had_selection = false;
@@ -4184,8 +4203,13 @@ namespace lfs::vis {
             return local_crop_box;
         };
 
-        const auto disable_crop_box_for_node = [this](const core::NodeId node_id) {
-            const core::NodeId cropbox_id = scene_.getCropBoxForSplat(node_id);
+        const auto disable_crop_box_for_node = [this, target_node_id](const core::NodeId node_id) {
+            const auto* source = scene_.getNodeById(target_node_id);
+            core::NodeId cropbox_id = source && source->type == core::NodeType::CROPBOX && source->parent_id == node_id
+                                          ? source->id
+                                          : scene_.getCropForRole(node_id, core::CropRole::Secondary, core::NodeType::CROPBOX);
+            if (cropbox_id == core::NULL_NODE && (!source || source->type != core::NodeType::CROPBOX))
+                cropbox_id = scene_.getCropBoxForSplat(node_id);
             if (cropbox_id == core::NULL_NODE)
                 return;
 
@@ -4241,6 +4265,12 @@ namespace lfs::vis {
             const size_t filtered_count = indices.size(0);
 
             if (filtered_count > 0 && filtered_count < num_points) {
+                const op::SceneGraphCaptureOptions history_options{
+                    .mode = op::SceneGraphCaptureMode::FULL,
+                    .include_selected_nodes = false,
+                    .include_scene_context = false,
+                };
+                auto history_before = op::SceneGraphPatchEntry::captureState(*this, {node_name}, history_options);
                 node->point_cloud = std::make_shared<lfs::core::PointCloud>(
                     means.index_select(0, indices), colors.index_select(0, indices));
                 node->gaussian_count.store(filtered_count, std::memory_order_release);
@@ -4249,6 +4279,9 @@ namespace lfs::vis {
                 LOG_INFO("Cropped PointCloud '{}': {} -> {} points", node_name, num_points, filtered_count);
 
                 disable_crop_box_for_node(node->id);
+                op::undoHistory().push(std::make_unique<op::SceneGraphPatchEntry>(
+                    *this, "Crop Box", std::move(history_before),
+                    op::SceneGraphPatchEntry::captureState(*this, {node_name}, history_options)));
             }
         }
 
@@ -4317,6 +4350,8 @@ namespace lfs::vis {
     }
 
     void SceneManager::handleCropByEllipsoid(const glm::mat4& world_transform, const glm::vec3& radii, const bool inverse, const core::NodeId target_node_id) {
+        if (rejectsRoiCrop(scene_, target_node_id))
+            return;
         std::vector<std::string> splat_node_names;
         std::vector<std::string> pointcloud_node_names;
         bool had_selection = false;
@@ -4408,11 +4443,20 @@ namespace lfs::vis {
             const size_t filtered_count = indices.size(0);
 
             if (filtered_count > 0 && filtered_count < num_points) {
+                const op::SceneGraphCaptureOptions history_options{
+                    .mode = op::SceneGraphCaptureMode::FULL,
+                    .include_selected_nodes = false,
+                    .include_scene_context = false,
+                };
+                auto history_before = op::SceneGraphPatchEntry::captureState(*this, {node_name}, history_options);
                 node->point_cloud = std::make_shared<lfs::core::PointCloud>(
                     means.index_select(0, indices), colors.index_select(0, indices));
                 node->gaussian_count.store(filtered_count, std::memory_order_release);
                 scene_.markPayloadDiverged(node->id);
                 LOG_INFO("Ellipsoid cropped PointCloud '{}': {} -> {} points", node_name, num_points, filtered_count);
+                op::undoHistory().push(std::make_unique<op::SceneGraphPatchEntry>(
+                    *this, "Crop Ellipsoid", std::move(history_before),
+                    op::SceneGraphPatchEntry::captureState(*this, {node_name}, history_options)));
             }
         }
 
@@ -4479,11 +4523,16 @@ namespace lfs::vis {
     void SceneManager::handleCropByPolygon(const glm::mat4& world_transform,
                                            const core::CropPolygonData& polygon,
                                            const core::NodeId target_node_id) {
+        if (rejectsRoiCrop(scene_, target_node_id))
+            return;
         const auto* target = scene_.getNodeById(target_node_id);
-        if (target && target->type == core::NodeType::CROP_POLYGON)
+        const core::NodeId source_volume_id = target && target->type == core::NodeType::CROP_POLYGON
+                                                  ? target->id
+                                                  : core::NULL_NODE;
+        if (source_volume_id != core::NULL_NODE)
             target = scene_.getNodeById(target->parent_id);
         if (target && target->type == core::NodeType::POINTCLOUD) {
-            cropPointCloudByPolygon(target->id, world_transform, polygon);
+            cropPointCloudByPolygon(target->id, world_transform, polygon, source_volume_id);
             return;
         }
         if (!target || target->type != core::NodeType::SPLAT || !target->model)
@@ -4530,7 +4579,7 @@ namespace lfs::vis {
 
     void SceneManager::cropPointCloudByPolygon(const core::NodeId node_id,
                                                const glm::mat4& world_transform,
-                                               const core::CropPolygonData& polygon) {
+                                               const core::CropPolygonData& polygon, const core::NodeId source_volume_id) {
         const auto* target = scene_.getNodeById(node_id);
         if (!target || !target->point_cloud || target->point_cloud->size() == 0 ||
             !core::crop_polygon::isValidOutline(polygon.vertices) ||
@@ -4566,8 +4615,14 @@ namespace lfs::vis {
         scene_.markPayloadDiverged(node->id);
         LOG_INFO("Polygon cropped PointCloud '{}': {} -> {} points", node_name, num_points, filtered_count);
 
-        // Like the crop box, the polygon stops filtering the cloud it cropped.
-        if (auto* const data = scene_.getCropPolygonData(scene_.getCropPolygonForSplat(node->id)))
+        // Disable the volume that supplied the crop, preserving any sibling ROI.
+        const auto* source = scene_.getNodeById(source_volume_id);
+        core::NodeId polygon_id = source && source->type == core::NodeType::CROP_POLYGON && source->parent_id == node->id
+                                      ? source->id
+                                      : scene_.getCropForRole(node->id, core::CropRole::Secondary, core::NodeType::CROP_POLYGON);
+        if (polygon_id == core::NULL_NODE && source_volume_id == core::NULL_NODE)
+            polygon_id = scene_.getCropPolygonForSplat(node->id);
+        if (auto* const data = scene_.getCropPolygonData(polygon_id))
             data->enabled = false;
 
         op::undoHistory().push(std::make_unique<op::SceneGraphPatchEntry>(
@@ -5469,7 +5524,8 @@ namespace lfs::vis {
                 ? target->parent_id
                 : node_id;
 
-        auto cropbox_id = cap::ensureCropBox(*this, services().renderingOrNull(), parent_id);
+        const auto role = requestedCropRole(*target, scene_.getNodeById(parent_id));
+        auto cropbox_id = cap::ensureCropBox(*this, services().renderingOrNull(), parent_id, role);
         if (!cropbox_id) {
             const auto* parent = scene_.getNodeById(parent_id);
             LOG_WARN("Failed to add cropbox for '{}': {}",
@@ -5488,7 +5544,7 @@ namespace lfs::vis {
         }
 
         selectNode(*cropbox_id);
-        activateCropToolShape("box");
+        activateCropToolShape("box", role);
 
         LOG_INFO("Added cropbox '{}' as child of '{}'", cropbox->name, parent->name);
     }
@@ -5510,7 +5566,13 @@ namespace lfs::vis {
                 ? target->parent_id
                 : node_id;
 
-        auto ellipsoid_id = cap::ensureEllipsoid(*this, services().renderingOrNull(), parent_id);
+        const auto* owner = scene_.getNodeById(parent_id);
+        const auto role = requestedCropRole(*target, owner);
+        if (rejectsRoiEllipsoid(scene_, owner, role)) {
+            LOG_WARN("The training ROI of '{}' cannot be an ellipsoid; use a box or polygon", owner->name);
+            return;
+        }
+        auto ellipsoid_id = cap::ensureEllipsoid(*this, services().renderingOrNull(), parent_id, role);
         if (!ellipsoid_id) {
             const auto* parent = scene_.getNodeById(parent_id);
             LOG_WARN("Failed to add ellipsoid for '{}': {}",
@@ -5529,7 +5591,7 @@ namespace lfs::vis {
         }
 
         selectNode(*ellipsoid_id);
-        activateCropToolShape("ellipsoid");
+        activateCropToolShape("ellipsoid", role);
 
         LOG_INFO("Added ellipsoid '{}' as child of '{}'", ellipsoid->name, parent->name);
     }

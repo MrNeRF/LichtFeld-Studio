@@ -440,7 +440,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool has_active_floating_drag() const;
         void cancel_floating_interactions();
         void suspend_input(PanelSpace space);
-        bool isPositionOverFloatingPanel(double x, double y) const;
+        bool isPositionOverFloatingPanel(double x, double y, std::string_view above_panel = {}) const;
         void set_panel_enabled(const std::string& id, bool enabled);
         bool bring_panel_to_front(const std::string& id);
         [[nodiscard]] std::optional<FloatingWindowState> floating_window_state(const std::string& id) const;

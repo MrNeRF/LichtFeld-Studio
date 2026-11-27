@@ -4547,7 +4547,7 @@ namespace lfs::core {
         return core::captureCollisionSource(*model, captured_identity->world_transform, begin, count);
     }
 
-    NodeId Scene::addCropBox(const std::string& name, const NodeId parent_id) {
+    NodeId Scene::addCropBox(const std::string& name, const NodeId parent_id, const CropRole role) {
         assert(parent_id != NULL_NODE && "CropBox must have a parent splat node");
 
         const auto* parent = getNodeById(parent_id);
@@ -4559,11 +4559,8 @@ namespace lfs::core {
             LOG_WARN("Cannot add cropbox '{}': parent is incompatible", name);
             return NULL_NODE;
         }
-        for (const NodeId child_id : parent->children) {
-            const auto* child = getNodeById(child_id);
-            if (child && child->type == NodeType::CROPBOX) {
-                return child_id;
-            }
+        if (const NodeId existing = getCropForRole(parent_id, role, NodeType::CROPBOX); existing != NULL_NODE) {
+            return existing;
         }
 
         const std::string unique_name = makeUniqueNodeName(name_to_id_, name);
@@ -4573,6 +4570,7 @@ namespace lfs::core {
         node->type = NodeType::CROPBOX;
         node->name = unique_name;
         node->cropbox = std::make_unique<CropBoxData>();
+        node->cropbox->role = role;
 
         glm::vec3 bounds_min, bounds_max;
         if (getNodeBounds(parent_id, bounds_min, bounds_max)) {
@@ -4589,7 +4587,7 @@ namespace lfs::core {
         return id;
     }
 
-    NodeId Scene::addEllipsoid(const std::string& name, const NodeId parent_id) {
+    NodeId Scene::addEllipsoid(const std::string& name, const NodeId parent_id, const CropRole role) {
         assert(parent_id != NULL_NODE && "Ellipsoid must have a parent splat node");
 
         const auto* parent = getNodeById(parent_id);
@@ -4601,11 +4599,8 @@ namespace lfs::core {
             LOG_WARN("Cannot add ellipsoid '{}': parent is incompatible", name);
             return NULL_NODE;
         }
-        for (const NodeId child_id : parent->children) {
-            const auto* child = getNodeById(child_id);
-            if (child && child->type == NodeType::ELLIPSOID) {
-                return child_id;
-            }
+        if (const NodeId existing = getCropForRole(parent_id, role, NodeType::ELLIPSOID); existing != NULL_NODE) {
+            return existing;
         }
 
         const std::string unique_name = makeUniqueNodeName(name_to_id_, name);
@@ -4615,6 +4610,7 @@ namespace lfs::core {
         node->type = NodeType::ELLIPSOID;
         node->name = unique_name;
         node->ellipsoid = std::make_unique<EllipsoidData>();
+        node->ellipsoid->role = role;
 
         glm::vec3 bounds_min, bounds_max;
         if (getNodeBounds(parent_id, bounds_min, bounds_max)) {
@@ -4641,7 +4637,7 @@ namespace lfs::core {
             LOG_WARN("Cannot add crop polygon '{}': parent is not a splat or point cloud", name);
             return NULL_NODE;
         }
-        if (const NodeId existing = getCropPolygonForSplat(parent_id); existing != NULL_NODE) {
+        if (const NodeId existing = getCropForRole(parent_id, data.role, NodeType::CROP_POLYGON); existing != NULL_NODE) {
             return existing;
         }
         if (!crop_polygon::isValidOutline(data.vertices) || !crop_polygon::isValidHalfDepth(data.half_depth)) {
@@ -5288,7 +5284,7 @@ namespace lfs::core {
             } else if (src_type == NodeType::CROPBOX) {
                 const auto* src_for_cropbox = getNodeById(src_id);
                 if (src_for_cropbox && src_for_cropbox->cropbox && parent_id != NULL_NODE) {
-                    new_id = addCropBox(new_name, parent_id);
+                    new_id = addCropBox(new_name, parent_id, src_for_cropbox->cropbox->role);
                     if (auto* new_node = getNodeById(new_id)) {
                         if (new_node->cropbox) {
                             *new_node->cropbox = *src_for_cropbox->cropbox;
@@ -5298,7 +5294,7 @@ namespace lfs::core {
             } else if (src_type == NodeType::ELLIPSOID) {
                 const auto* src_for_ellipsoid = getNodeById(src_id);
                 if (src_for_ellipsoid && src_for_ellipsoid->ellipsoid && parent_id != NULL_NODE) {
-                    new_id = addEllipsoid(new_name, parent_id);
+                    new_id = addEllipsoid(new_name, parent_id, src_for_ellipsoid->ellipsoid->role);
                     if (auto* new_node = getNodeById(new_id)) {
                         if (new_node->ellipsoid) {
                             *new_node->ellipsoid = *src_for_ellipsoid->ellipsoid;
@@ -6390,23 +6386,20 @@ namespace lfs::core {
         return glm::vec3(0.0f);
     }
 
-    NodeId Scene::getCropBoxForSplat(const NodeId splat_id) const {
-        if (splat_id == NULL_NODE) {
+    NodeId Scene::getCropForRole(const NodeId owner_id, const CropRole role, const NodeType type) const {
+        const auto* owner = getNodeById(owner_id);
+        if (!owner)
             return NULL_NODE;
-        }
-
-        const auto* splat = getNodeById(splat_id);
-        if (!splat) {
-            return NULL_NODE;
-        }
-
-        for (const NodeId child_id : splat->children) {
-            const auto* child = getNodeById(child_id);
-            if (child && child->type == NodeType::CROPBOX) {
-                return child_id;
-            }
+        for (const NodeId id : owner->children) {
+            const auto* child = getNodeById(id);
+            if (child && child->type == type && child->cropRole() == role)
+                return id;
         }
         return NULL_NODE;
+    }
+
+    NodeId Scene::getCropBoxForSplat(const NodeId splat_id) const {
+        return getCropForRole(splat_id, CropRole::Primary, NodeType::CROPBOX);
     }
 
     NodeId Scene::getOrCreateCropBoxForSplat(const NodeId splat_id) {
@@ -6445,7 +6438,10 @@ namespace lfs::core {
         if (!node || node->type != NodeType::CROPBOX || !node->cropbox) {
             return;
         }
+        // The role is the volume's identity; data updates never change it.
+        const CropRole role = node->cropbox->role;
         *node->cropbox = data;
+        node->cropbox->role = role;
     }
 
     std::vector<Scene::RenderableCropBox> Scene::getRenderableCropBoxes() const {
@@ -6477,22 +6473,7 @@ namespace lfs::core {
     }
 
     NodeId Scene::getEllipsoidForSplat(const NodeId splat_id) const {
-        if (splat_id == NULL_NODE) {
-            return NULL_NODE;
-        }
-
-        const auto* splat = getNodeById(splat_id);
-        if (!splat) {
-            return NULL_NODE;
-        }
-
-        for (const NodeId child_id : splat->children) {
-            const auto* child = getNodeById(child_id);
-            if (child && child->type == NodeType::ELLIPSOID) {
-                return child_id;
-            }
-        }
-        return NULL_NODE;
+        return getCropForRole(splat_id, CropRole::Primary, NodeType::ELLIPSOID);
     }
 
     EllipsoidData* Scene::getEllipsoidData(const NodeId ellipsoid_id) {
@@ -6516,7 +6497,10 @@ namespace lfs::core {
         if (!node || node->type != NodeType::ELLIPSOID || !node->ellipsoid) {
             return;
         }
+        // The role is the volume's identity; data updates never change it.
+        const CropRole role = node->ellipsoid->role;
         *node->ellipsoid = data;
+        node->ellipsoid->role = role;
     }
 
     std::vector<Scene::RenderableEllipsoid> Scene::getRenderableEllipsoids() const {
@@ -6548,18 +6532,7 @@ namespace lfs::core {
     }
 
     NodeId Scene::getCropPolygonForSplat(const NodeId splat_id) const {
-        const auto* splat = splat_id == NULL_NODE ? nullptr : getNodeById(splat_id);
-        if (!splat) {
-            return NULL_NODE;
-        }
-
-        for (const NodeId child_id : splat->children) {
-            const auto* child = getNodeById(child_id);
-            if (child && child->type == NodeType::CROP_POLYGON) {
-                return child_id;
-            }
-        }
-        return NULL_NODE;
+        return getCropForRole(splat_id, CropRole::Primary, NodeType::CROP_POLYGON);
     }
 
     CropPolygonData* Scene::getCropPolygonData(const NodeId polygon_id) {
@@ -6587,7 +6560,9 @@ namespace lfs::core {
             LOG_WARN("Rejected invalid crop polygon data for '{}'", node->name);
             return false;
         }
+        const CropRole role = node->crop_polygon->role;
         *node->crop_polygon = data;
+        node->crop_polygon->role = role;
         return true;
     }
 
