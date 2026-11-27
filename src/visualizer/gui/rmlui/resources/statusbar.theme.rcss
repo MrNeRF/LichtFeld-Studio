@@ -147,3 +147,20 @@ body,
 #gpu-icon {
     image-color: @{text_dim};
 }
+
+#gpu-icon:hover {
+    image-color: @{alpha(text, 0.84)};
+}
+
+#gpu-icon.active {
+    image-color: @{text};
+}
+
+#progress-container.tessle {
+    background-color: @{surface};
+}
+
+#progress-text.progress-text--tessle {
+    color: @{text};
+    background-color: @{surface};
+}

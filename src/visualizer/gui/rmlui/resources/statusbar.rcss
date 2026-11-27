@@ -351,15 +351,6 @@ body {
     height: 14dp;
     margin-right: 4dp;
     cursor: pointer;
-    image-color: rgba(255, 255, 255, 150);
-}
-
-#gpu-icon:hover {
-    image-color: rgba(255, 255, 255, 215);
-}
-
-#gpu-icon.active {
-    image-color: rgba(255, 255, 255, 255);
 }
 
 #gpu-model {
@@ -550,8 +541,6 @@ body.fit-8 #fps-group { margin-left: 6dp; }
 
 /* Tessle eats leaf snacks along the training track. */
 #progress-container.tessle {
-    background-color: #1d1f22;
-
     decorator: none;
 
     box-sizing: border-box;
@@ -582,8 +571,6 @@ body.fit-8 #fps-group { margin-left: 6dp; }
     width: auto;
     padding: 0 3dp;
     line-height: 14dp;
-    color: #e4e6e9;
-    background-color: #1d1f22;
     text-align: left;
 }
 
