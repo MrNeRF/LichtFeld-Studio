@@ -326,8 +326,6 @@ namespace lfs::app {
             checkpoint_params.cli_iterations_set = params.cli_iterations_set;
             checkpoint_params.cli_step_values_set = params.cli_step_values_set;
             checkpoint_params.no_download = params.no_download;
-            checkpoint_params.refit_depth_anchors = params.refit_depth_anchors;
-            checkpoint_params.depth_anchor_refit_source = params.depth_anchor_refit_source;
             checkpoint_params.cli_bg_color_set = params.cli_bg_color_set;
             if (params.cli_iterations_set)
                 checkpoint_params.optimization.iterations = params.optimization.iterations;
@@ -611,8 +609,6 @@ namespace lfs::app {
             checkpoint_params.server =
                 cli_params.server;
             checkpoint_params.no_download = cli_params.no_download;
-            checkpoint_params.refit_depth_anchors = cli_params.refit_depth_anchors;
-            checkpoint_params.depth_anchor_refit_source = cli_params.depth_anchor_refit_source;
             checkpoint_params.python_scripts =
                 cli_params.python_scripts;
             checkpoint_params.resume_checkpoint.reset();

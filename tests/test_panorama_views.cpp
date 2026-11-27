@@ -58,16 +58,14 @@ namespace lfs::training {
 
     struct TrainerDepthAnchorTestAccess {
         // Fits the anchors of the drawn cameras as training does at start; the strategy is handed back.
-        static lfs::Result<std::unordered_map<int, kernels::DepthAnchor>> fit(
+        static std::unordered_map<int, kernels::DepthAnchor> fit(
             Trainer& trainer, const core::param::TrainingParameters& params,
             std::vector<std::shared_ptr<core::Camera>> drawn, std::unique_ptr<IStrategy>& strategy) {
             trainer.params_ = params;
             trainer.train_dataset_ = std::make_shared<CameraDataset>(drawn, DatasetConfig{});
             trainer.strategy_ = std::move(strategy);
-            auto result = trainer.fitDepthAnchors(drawn.size());
+            trainer.fitDepthAnchors(drawn.size());
             strategy = std::move(trainer.strategy_);
-            if (!result)
-                return std::move(result).error();
             return trainer.depth_anchors_;
         }
         static void resume(Trainer& trainer, std::optional<std::uint64_t> seed) {
@@ -660,12 +658,11 @@ namespace {
             for (const auto& drawn : {views, views, std::vector{photo}}) {
                 const auto anchors = TrainerDepthAnchorTestAccess::fit(trainer, params, drawn, strategy);
                 EXPECT_EQ(lfs::test::licht::read_file_bytes(sidecar), prepared);
-                ASSERT_TRUE(anchors) << anchors.error().detail();
-                ASSERT_EQ(anchors->size(), drawn.size());
+                ASSERT_EQ(anchors.size(), drawn.size());
                 for (const auto& camera : drawn) {
-                    ASSERT_TRUE(anchors->contains(camera->uid()));
-                    EXPECT_EQ(anchors->at(camera->uid()).disparity.scale, 7);
-                    EXPECT_EQ(anchors->at(camera->uid()).disparity.samples, 999);
+                    ASSERT_TRUE(anchors.contains(camera->uid()));
+                    EXPECT_EQ(anchors.at(camera->uid()).disparity.scale, 7);
+                    EXPECT_EQ(anchors.at(camera->uid()).disparity.samples, 999);
                 }
             }
 
@@ -686,46 +683,34 @@ namespace {
             Trainer legacy(scene);
             TrainerDepthAnchorTestAccess::resume(legacy, std::nullopt);
             const auto recovered = TrainerDepthAnchorTestAccess::fit(legacy, legacy_params, {photo}, strategy);
-            ASSERT_TRUE(recovered) << recovered.error().detail();
-            ASSERT_TRUE(recovered->contains(photo->uid()));
-            EXPECT_EQ(recovered->at(photo->uid()).disparity.samples, 999);
+            ASSERT_TRUE(recovered.contains(photo->uid()));
+            EXPECT_EQ(recovered.at(photo->uid()).disparity.samples, 999);
             EXPECT_EQ(lfs::test::licht::read_file_bytes(sidecar), prepared);
         }
 
         Trainer resumed(scene);
         TrainerDepthAnchorTestAccess::resume(resumed, saved_seed);
         const auto loaded = TrainerDepthAnchorTestAccess::fit(resumed, params, {photo}, strategy);
-        ASSERT_TRUE(loaded) << loaded.error().detail();
-        ASSERT_TRUE(loaded->contains(photo->uid()));
-        EXPECT_EQ(loaded->at(photo->uid()).disparity.samples, 999);
+        ASSERT_TRUE(loaded.contains(photo->uid()));
+        EXPECT_EQ(loaded.at(photo->uid()).disparity.samples, 999);
         EXPECT_EQ(lfs::test::licht::read_file_bytes(sidecar), prepared);
 
-        // Changed depth bytes invalidate the cache even with the saved seed. With no
-        // original cloud available, resume must fail without replacing the sidecar.
+        // Changed depth bytes invalidate the cache. With no source cloud, fall
+        // back to the restored model and persist the geometry actually used.
         depth[0] += 1;
         ASSERT_TRUE(save_png(photo->depth_path(), depth.data(), 128, 64, 1, 16, 0));
-        const auto rejected = TrainerDepthAnchorTestAccess::fit(resumed, params, {photo}, strategy);
-        ASSERT_FALSE(rejected);
-        EXPECT_NE(rejected.error().detail().find("Cannot recover the initial point cloud"), std::string_view::npos);
-        EXPECT_EQ(lfs::test::licht::read_file_bytes(sidecar), prepared);
+        TrainerDepthAnchorTestAccess::fit(resumed, params, {photo}, strategy);
+        const auto restored_seed = computeAnchorSeedFingerprint(strategy->get_model().means());
+        EXPECT_EQ(TrainerDepthAnchorTestAccess::snapshot_params(resumed).depth_anchor_seed_v1, restored_seed);
+        EXPECT_TRUE(readDepthAnchorSidecar(sidecar, computeAnchorFingerprint(restored_seed, {photo})));
 
-        const auto wrong_seed_path = temp.path / "wrong-init.ply";
-        const PointCloud wrong_seed(strategy->get_model().means().cpu(), Tensor::zeros({2000, 3}, Device::CPU));
-        ASSERT_TRUE(lfs::io::save_ply(wrong_seed, {.output_path = wrong_seed_path}));
-        auto wrong_seed_params = params;
-        wrong_seed_params.init_path = path_to_utf8(wrong_seed_path);
-        const auto mismatched = TrainerDepthAnchorTestAccess::fit(resumed, wrong_seed_params, {photo}, strategy);
-        ASSERT_FALSE(mismatched);
-        EXPECT_NE(mismatched.error().detail().find("differs from the checkpoint"), std::string_view::npos);
-        EXPECT_EQ(lfs::test::licht::read_file_bytes(sidecar), prepared);
-
+        ASSERT_TRUE(std::filesystem::remove(sidecar));
         // A checkpoint without a seed can initialize depth against the original cloud
         // when its sidecar is missing or stale.
         auto first_depth_params = params;
         first_depth_params.init_path = path_to_utf8(temp.path / "init.ply");
         TrainerDepthAnchorTestAccess::resume(resumed, std::nullopt);
-        const auto first_fit = TrainerDepthAnchorTestAccess::fit(resumed, first_depth_params, {photo}, strategy);
-        ASSERT_TRUE(first_fit) << first_fit.error().detail();
+        TrainerDepthAnchorTestAccess::fit(resumed, first_depth_params, {photo}, strategy);
         EXPECT_EQ(TrainerDepthAnchorTestAccess::snapshot_params(resumed).depth_anchor_seed_v1, saved_seed);
         EXPECT_TRUE(readDepthAnchorSidecar(sidecar, computeAnchorFingerprint(means, {photo})));
         EXPECT_FALSE(readDepthAnchorSidecar(sidecar, computeAnchorFingerprint(strategy->get_model().means(), {photo})));
@@ -734,22 +719,16 @@ namespace {
         // after replacing the sidecar but before writing its next checkpoint.
         const auto old_write_time = std::filesystem::last_write_time(sidecar) - std::chrono::seconds(10);
         std::filesystem::last_write_time(sidecar, old_write_time);
-        auto retry_params = first_depth_params;
-        retry_params.refit_depth_anchors = true;
-        TrainerDepthAnchorTestAccess::resume(resumed, computeAnchorSeedFingerprint(strategy->get_model().means()));
-        const auto retried = TrainerDepthAnchorTestAccess::fit(resumed, retry_params, {photo}, strategy);
-        ASSERT_TRUE(retried) << retried.error().detail();
+        TrainerDepthAnchorTestAccess::resume(resumed, restored_seed);
+        TrainerDepthAnchorTestAccess::fit(resumed, first_depth_params, {photo}, strategy);
         EXPECT_EQ(std::filesystem::last_write_time(sidecar), old_write_time);
         EXPECT_EQ(TrainerDepthAnchorTestAccess::snapshot_params(resumed).depth_anchor_seed_v1, saved_seed);
 
-        auto random_legacy_params = first_depth_params;
-        random_legacy_params.init_path.reset();
-        random_legacy_params.depth_anchor_refit_source = first_depth_params.init_path;
-        random_legacy_params.refit_depth_anchors = true;
-        random_legacy_params.optimization.random = true;
+        auto capped_legacy_params = first_depth_params;
+        capped_legacy_params.optimization.max_cap = 1000;
         TrainerDepthAnchorTestAccess::resume(resumed, std::nullopt);
-        const auto random_recovered = TrainerDepthAnchorTestAccess::fit(resumed, random_legacy_params, {photo}, strategy);
-        ASSERT_TRUE(random_recovered) << random_recovered.error().detail();
+        TrainerDepthAnchorTestAccess::fit(resumed, capped_legacy_params, {photo}, strategy);
+        EXPECT_EQ(TrainerDepthAnchorTestAccess::snapshot_params(resumed).depth_anchor_seed_v1, saved_seed);
         EXPECT_EQ(std::filesystem::last_write_time(sidecar), old_write_time);
     }
 

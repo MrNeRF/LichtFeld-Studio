@@ -605,8 +605,6 @@ namespace lfs::core {
             // must not make a later normal launch enter safe mode.
             bool safe_mode = false;
             bool no_download = false;
-            bool refit_depth_anchors = false;
-            std::optional<std::string> depth_anchor_refit_source;
             bool reset_preferences = false;
             bool reset_layout = false;
             bool reset_all_settings = false;

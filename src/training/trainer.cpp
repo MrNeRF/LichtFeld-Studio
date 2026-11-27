@@ -2782,25 +2782,11 @@ namespace lfs::training {
     // Fits each camera's depth-prior alignment against the initial point
     // cloud once, so the supervision target is absolute and multi-view
     // consistent instead of chasing the current render.
-    lfs::Result<void> Trainer::fitDepthAnchors(const size_t cameras_with_depth) {
-        nvtxRangePush("fit_depth_anchors");
+    void Trainer::fitDepthAnchors(const size_t cameras_with_depth) {
+        nvtxRangePush("depth_anchors/fit");
         struct FitRange {
             ~FitRange() { nvtxRangePop(); }
         } fit_range;
-        const auto unavailable = [](std::string detail) {
-            return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
-                .code = lfs::ErrorCode::FailedPrecondition,
-                .domain = lfs::ErrorDomain::Training,
-                .user_message = "Training failed.",
-                .detail = std::format(
-                    "Cannot resume depth supervision: {} Restore the original depth maps and anchor sidecar, "
-                    "restore the initial geometry, or disable depth supervision before retrying. "
-                    "Use --refit-depth-anchors to allow new targets in headless mode. If the source cloud moved, "
-                    "supply its path with --init.",
-                    detail),
-                .detection = LFS_SOURCE_SITE_CURRENT(),
-            }));
-        };
         const auto fit_start = std::chrono::steady_clock::now();
         const auto phase_ms = [](std::chrono::steady_clock::time_point start) {
             return std::chrono::duration<double, std::milli>(
@@ -2814,52 +2800,20 @@ namespace lfs::training {
         resolved_depth_prior_ = configured_depth_prior;
         const bool resumed = current_iteration_.load() > 0;
         std::optional<std::uint64_t> seed;
-        bool allow_new_targets = false;
-        std::optional<std::string> refit_source;
         {
             std::lock_guard lock(params_mutex_);
             seed = depth_anchor_seed_;
-            allow_new_targets = std::exchange(params_.refit_depth_anchors, false);
-            refit_source = std::exchange(params_.depth_anchor_refit_source, std::nullopt);
         }
         lfs::core::Tensor means;
+        const char* geometry = "initial point cloud";
         if (!resumed) {
             means = strategy_->get_model().means();
             if (!means.is_valid() || means.numel() == 0) {
                 LOG_WARN("Depth anchors: no initial point cloud available; depth supervision is disabled without anchors");
-                return {};
+                return;
             }
             seed = computeAnchorSeedFingerprint(means);
         }
-        const bool resume_without_seed = resumed && !seed;
-        const auto recover_seed = [&]() -> lfs::Result<void> {
-            auto source = getParams();
-            if (allow_new_targets && refit_source)
-                source.init_path = refit_source;
-            auto loaded = loadInitialPointCloud(source, scene_->getTrainingDataOrigin());
-            if (!loaded)
-                return unavailable(std::format("Cannot recover the initial point cloud: {}", lfs::format_for_developer(loaded.error())));
-            if (!*loaded || !(*loaded)->means.is_valid() || (*loaded)->means.numel() == 0)
-                return unavailable("The original training geometry is unavailable.");
-            means = (*loaded)->means.to(lfs::core::DataType::Float32).contiguous();
-            const auto recovered = computeAnchorSeedFingerprint(means);
-            const auto& opt = source.optimization;
-            const bool lost_legacy_geometry =
-                resume_without_seed &&
-                (opt.random || !source.add_splat_paths.empty() || !opt.noise_infill_mesh.empty() ||
-                 (opt.max_cap > 0 && (*loaded)->size() > opt.max_cap));
-            if ((seed && recovered != *seed) || lost_legacy_geometry) {
-                if (!allow_new_targets) {
-                    if (lost_legacy_geometry)
-                        return unavailable("This checkpoint has no anchor seed and its initial model cannot be "
-                                           "reconstructed from the source cloud alone.");
-                    return unavailable("The recovered point cloud differs from the checkpoint's original anchor geometry.");
-                }
-                LOG_WARN("Depth anchors: --refit-depth-anchors authorized new supervision targets from the source point cloud");
-            }
-            seed = recovered;
-            return {};
-        };
 
         // Prefer a precomputed sidecar (written by `preprocess` or a prior run);
         // fall back to fitting here and write it through so the next run is fast.
@@ -2879,15 +2833,10 @@ namespace lfs::training {
             cameras.push_back(group.photograph);
         const auto sidecar = depthAnchorSidecarPath(cameras);
 
-        if (resume_without_seed) {
-            LOG_INFO("Depth anchors: recovering the initial point cloud for a resume without a saved anchor seed");
-            if (auto result = recover_seed(); !result)
-                return result;
-        }
         DepthAnchorFingerprint fingerprint;
         double fingerprint_ms = 0.0;
         double source_ms = 0.0;
-        const auto try_cached_anchors = [&] {
+        const auto try_cached_anchors = [&]() -> std::optional<RawDepthAnchorMap> {
             LOG_INFO("Depth anchors: validating depth files for {} photographs", cameras.size());
             {
                 nvtxRangePush("depth_anchors/fingerprint");
@@ -2904,29 +2853,47 @@ namespace lfs::training {
             const auto start = std::chrono::steady_clock::now();
             auto result = readDepthAnchorSidecar(sidecar, fingerprint);
             source_ms += phase_ms(start);
-            if (!result)
+            if (!result) {
                 LOG_INFO("Depth anchors: cache miss after {:.1f} ms fingerprinting ({})", fingerprint_ms, result.error());
-            return result;
+                return std::nullopt;
+            }
+            return std::move(*result);
         };
 
-        auto cached = try_cached_anchors();
+        auto cached = seed ? try_cached_anchors() : std::nullopt;
         if (!cached && resumed) {
-            if (fingerprint.version == 0)
-                return unavailable("The depth files could not be fingerprinted.");
-            if (resume_without_seed) {
-                LOG_WARN("Depth anchors: no saved seed or matching sidecar; fitting against the recovered initial point cloud");
-            } else {
-                const auto saved_seed = seed;
-                if (auto result = recover_seed(); !result)
-                    return result;
-                if (seed != saved_seed) {
-                    // A prior authorized refit may have written the sidecar before
-                    // the training run reached its next checkpoint.
-                    cached = try_cached_anchors();
-                    if (fingerprint.version == 0)
-                        return unavailable("The depth files could not be fingerprinted for the new anchor seed.");
+            const auto saved_seed = seed;
+            const auto source = getParams();
+            auto loaded = loadInitialPointCloud(source, scene_->getTrainingDataOrigin());
+            if (loaded && *loaded && (*loaded)->means.is_valid() && (*loaded)->means.numel() > 0) {
+                means = (*loaded)->means.to(lfs::core::DataType::Float32).contiguous();
+                seed = computeAnchorSeedFingerprint(means);
+                const auto& opt = source.optimization;
+                const bool legacy_geometry_unverified =
+                    !saved_seed &&
+                    (opt.random || !source.add_splat_paths.empty() || !opt.noise_infill_mesh.empty() ||
+                     (opt.max_cap > 0 && (*loaded)->size() > opt.max_cap));
+                if ((saved_seed && seed != saved_seed) || legacy_geometry_unverified) {
+                    geometry = "source point cloud";
+                    LOG_WARN("Depth anchors: the original anchor geometry could not be verified; "
+                             "using the source point cloud. A new fit can change depth supervision targets.");
                 }
+            } else {
+                geometry = "restored model";
+                means = strategy_->get_model().means();
+                if (!means.is_valid() || means.numel() == 0) {
+                    LOG_WARN("Depth anchors: no source point cloud or restored geometry available; "
+                             "depth supervision is disabled without anchors");
+                    return;
+                }
+                LOG_WARN("Depth anchors: initial point cloud unavailable ({}); using the restored model. "
+                         "A new fit can change depth supervision targets.",
+                         loaded ? "no points found" : lfs::format_for_developer(loaded.error()));
+                seed = computeAnchorSeedFingerprint(means);
             }
+            // An earlier resume may have written this sidecar before saving its checkpoint.
+            if (seed != saved_seed)
+                cached = try_cached_anchors();
         }
 
         RawDepthAnchorMap raw;
@@ -2934,7 +2901,7 @@ namespace lfs::training {
             raw = std::move(*cached);
             LOG_INFO("Depth anchors: loaded {} cached anchors from {}", raw.size(), lfs::core::path_to_utf8(sidecar));
         } else {
-            LOG_INFO("Depth anchors: no matching readable sidecar; fitting against the initial geometry");
+            LOG_INFO("Depth anchors: no matching readable sidecar; fitting against the {}", geometry);
             const auto compute_start = std::chrono::steady_clock::now();
             {
                 nvtxRangePush("depth_anchors/compute");
@@ -3048,16 +3015,15 @@ namespace lfs::training {
                                 std::chrono::steady_clock::now() - fit_start)
                                 .count();
         if (reliable_anchors > 0) {
-            LOG_INFO("Depth anchors: {}/{} cameras aligned to the initial point cloud "
+            LOG_INFO("Depth anchors: {}/{} cameras aligned "
                      "(mean |corr| {:.3f}, {} ms)",
                      reliable_anchors, processed,
                      reliable_corr_sum / static_cast<double>(reliable_anchors), fit_ms);
         } else {
-            LOG_WARN("Depth anchors: no camera could be aligned to the initial point cloud "
+            LOG_WARN("Depth anchors: no camera could be aligned "
                      "({} cameras with depth); depth loss will be skipped for this anchored dataset",
                      cameras_with_depth);
         }
-        return {};
     }
 
     bool Trainer::fillCameraLossColors(
@@ -9659,7 +9625,6 @@ namespace lfs::training {
         }
         auto& cache_loader = lfs::io::CacheLoader::getInstance();
         std::optional<lfs::Error> terminal_error;
-        bool depth_anchor_setup_failed = false;
         const auto append_terminal_error = [&terminal_error](lfs::Error error) {
             if (terminal_error) {
                 terminal_error = std::move(*terminal_error).with_suppressed(std::move(error));
@@ -9768,11 +9733,7 @@ namespace lfs::training {
                 } else {
                     LOG_INFO("Depth maps available for {}/{} training cameras",
                              cameras_with_depth, train_dataset_->get_cameras().size());
-                    // Keep the restored project intact if anchor setup fails before the first step.
-                    depth_anchor_setup_failed = true;
-                    if (auto result = fitDepthAnchors(cameras_with_depth); !result)
-                        throw lfs::Exception(std::move(result).error());
-                    depth_anchor_setup_failed = false;
+                    fitDepthAnchors(cameras_with_depth);
                 }
             }
             if (aux_pipeline_config.load_normals) {
@@ -10343,10 +10304,9 @@ namespace lfs::training {
         if (training_failed)
             pending_snapshot_finish_reason_ = lfs::io::project::TrainingFinishReason::Error;
         const bool authorize_terminal_save =
-            !depth_anchor_setup_failed &&
-            ((user_stopped || terminal_error)
-                 ? terminal_save_policy.on_stop_or_error
-                 : terminal_save_policy.on_completion);
+            (user_stopped || terminal_error)
+                ? terminal_save_policy.on_stop_or_error
+                : terminal_save_policy.on_completion;
         if (authorize_terminal_save &&
             terminal_project_path) {
             saving_model_.store(true, std::memory_order_release);
@@ -10432,9 +10392,7 @@ namespace lfs::training {
             saving_model_.store(false, std::memory_order_release);
         } else {
             const char* skip_reason =
-                depth_anchor_setup_failed
-                    ? "depth anchor setup failed before training"
-                : authorize_terminal_save
+                authorize_terminal_save
                     ? "no project path is bound"
                 : user_stopped
                     ? "saves on user stop are not authorized"
@@ -10485,10 +10443,10 @@ namespace lfs::training {
             if (progress_) {
                 progress_->complete(user_stopped, terminal_iteration);
             }
-            if (evaluator_ && !depth_anchor_setup_failed) {
+            if (evaluator_) {
                 evaluator_->save_report();
             }
-            if (pose_refinement_ && !depth_anchor_setup_failed) {
+            if (pose_refinement_) {
                 {
                     std::unique_lock render_lock(render_mutex_);
                     pose_refinement_->commit();

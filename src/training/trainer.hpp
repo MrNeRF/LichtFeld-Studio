@@ -1216,7 +1216,7 @@ namespace lfs::training {
         void destroySyncPrimitives();
         void recordParamsReady();
         void waitForModelReaders();
-        lfs::Result<void> fitDepthAnchors(size_t cameras_with_depth);
+        void fitDepthAnchors(size_t cameras_with_depth);
 
         // Async loss readback: the periodic loss sample is copied D2H into a
         // small pinned ring and polled on later iterations instead of stalling
