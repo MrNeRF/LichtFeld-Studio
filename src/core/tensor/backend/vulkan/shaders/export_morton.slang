@@ -36,16 +36,23 @@ uint64_t spread(uint x) {
 
 groupshared float red[256 * 6];
 
+// A point's position at its 64-bit row address, not as an index from the buffer's pointer: NVIDIA's Vulkan computes an
+// access chain's byte offset in 32 bits without VK_EXT_shader_64bit_indexing, and the 3-float rows pass 4 GiB at
+// 357.9M points. (The 32-bit element index i * 3 also wrapped past 1.43G.)
+float3 position(Parameters p, uint i) {
+    const Ptr<float, Access.Read> row = (Ptr<float, Access.Read>)(p.positions + uint64_t(i) * 12u);
+    return float3(row[0], row[1], row[2]);
+}
+
 [numthreads(256, 1, 1)]
 void LFS_KERNEL_ENTRY(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uniform Parameters p LFS_PHASE_ARGUMENT) {
     const uint3 groups = dispatchGroups();
-    Ptr<float, Access.Read> pos = (Ptr<float, Access.Read>)p.positions;
     if (kPhase == 0) {
         const float inf = asfloat(0x7f800000u);
         float3 lo = float3(inf, inf, inf);
         float3 hi = float3(-inf, -inf, -inf);
         for (uint i = gid.x * 256u + tid.x; i < p.n; i += groups.x * 256u) {
-            const float3 v = float3(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
+            const float3 v = position(p, i);
             lo = min(lo, v);
             hi = max(hi, v);
         }
@@ -96,10 +103,11 @@ void LFS_KERNEL_ENTRY(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, unif
         const float axisMax = float((1u << 21) - 1u);
         for (uint i = gid.x * 256u + tid.x; i < p.n; i += groups.x * 256u) {
             uint64_t code = 0;
+            const float3 v = position(p, i);
             [ForceUnroll] for (uint a = 0; a < 3; ++a) {
                 const float low = a == 0 ? p.minX : a == 1 ? p.minY : p.minZ;
                 const float mul = a == 0 ? p.mulX : a == 1 ? p.mulY : p.mulZ;
-                const float nrm = (pos[i * 3 + a] - low) * mul;
+                const float nrm = (v[a] - low) * mul;
                 const uint q = nrm <= 0 ? 0u : nrm >= axisMax ? uint(axisMax) : uint(nrm);
                 code |= spread(q) << a;
             }
