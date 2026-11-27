@@ -88,11 +88,13 @@ uint64_t shAtU16(uint primitive_idx, uint cell, uint n_cells) {
     return block * (n * SH_REORDER_SIZE) + uint64_t(cell) * SH_REORDER_SIZE + lane;
 }
 
-// Load one u16 from a uint-packed PhysicalStorageBuffer64 (two cells per word).
+// Load one u16 from a uint-packed PhysicalStorageBuffer64 (two cells per word). The word is read at its 64-bit
+// byte address, not as an index from the store's start: NVIDIA's Vulkan computes an access chain's byte offset in
+// 32 bits without VK_EXT_shader_64bit_indexing, and a Q16 store passes 4 GiB at 47.7M splats at SH degree 3
+// (89.5M at degree 2, 238.6M at degree 1).
 [ForceInline]
 uint load_shn_q16_u16(uint64_t shN_address, uint64_t u16_index) {
-    uint* p = (uint*)shN_address;
-    const uint word = p[u16_index >> 1];
+    const uint word = *((uint*)(shN_address + (u16_index >> 1) * 4u));
     return (u16_index & 1u) != 0u ? (word >> 16) : (word & 0xFFFFu);
 }
 
@@ -177,14 +179,18 @@ SpherHarmCoeffs read_spherical_harmonics_coeffs_split_f16(
     if (shN_slots_per_primitive == 0)
         return g_sh_coeffs;
 
-    uint2* shN = (uint2*)shN_address;
+    // The splat's first slot at its 64-bit byte address, its slots as small indices from there: NVIDIA's Vulkan
+    // computes an access chain's byte offset in 32 bits without VK_EXT_shader_64bit_indexing, and an f16 store
+    // passes 4 GiB at 44.7M splats at SH degree 3 (89.5M at degree 2, 179.0M at degree 1).
   #if SH_REORDER_SIZE <= 1
     uint64_t base = uint64_t(shN_slots_per_primitive) * uint64_t(g_idx);
-    #define _SHN_F16_COEFF(idx) unpack_shn_slot_f16(shN[base+uint64_t(idx)])
+    uint2* shN = (uint2*)(shN_address + base * 8u);
+    #define _SHN_F16_COEFF(idx) unpack_shn_slot_f16(shN[idx])
   #else
     uint64_t base = uint64_t(g_idx/SH_REORDER_SIZE) * (uint64_t(shN_slots_per_primitive)*SH_REORDER_SIZE);
     uint32_t offset = g_idx%SH_REORDER_SIZE;
-    #define _SHN_F16_COEFF(idx) unpack_shn_slot_f16(shN[base+uint64_t(SH_REORDER_SIZE)*uint64_t(idx)+offset])
+    uint2* shN = (uint2*)(shN_address + (base + offset) * 8u);
+    #define _SHN_F16_COEFF(idx) unpack_shn_slot_f16(shN[SH_REORDER_SIZE*(idx)])
   #endif
 
     float4 temp0, temp1;
