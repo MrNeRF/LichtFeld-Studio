@@ -8156,7 +8156,8 @@ namespace lfs::vis::gui {
         auto* align_tool = ctx.viewer->getAlignTool();
         const auto* renderer = ctx.viewer->getRenderingManager();
         const bool model_alignment = renderer && op::modelAlignmentSession();
-        if (align_tool && (align_tool->isEnabled() || model_alignment) && !ui_hidden_) {
+        // Model alignment remains editable with the UI hidden, so keep its viewport feedback.
+        if (align_tool && (model_alignment || (align_tool->isEnabled() && !ui_hidden_))) {
             align_tool->renderUI(ctx, nullptr);
         }
         auto* scale_distance_tool = ctx.viewer->getScaleDistanceTool();
