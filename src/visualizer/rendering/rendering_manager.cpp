@@ -147,6 +147,10 @@ namespace lfs::vis {
         panel_grid_planes_.fill(clampGridPlane(plane));
     }
 
+    SplitViewPanelId RenderingManager::focusedGridPanelLocked() const {
+        return isSplitWipeActive() ? SplitViewPanelId::Left : split_view_service_.focusedPanel();
+    }
+
     // RenderingManager Implementation
     RenderingManager::RenderingManager() {
         (void)applyRenderingDefaults(settings_, UserPreferences::instance().renderingDefaults());
@@ -805,8 +809,7 @@ namespace lfs::vis {
                 split_view_service_.isGTComparisonActive(sanitized_settings)) {
                 sanitized_settings.show_camera_frustums = false;
             }
-            const int focused_panel_index =
-                static_cast<int>(splitViewPanelIndex(split_view_service_.focusedPanel()));
+            const auto focused_panel_index = splitViewPanelIndex(focusedGridPanelLocked());
             const bool grid_plane_changed = settings_.grid_plane != sanitized_settings.grid_plane;
             lod_enabled_turned_on = !settings_.lod_enabled && sanitized_settings.lod_enabled;
             lod_request_changed =
@@ -1028,7 +1031,17 @@ namespace lfs::vis {
 
     bool RenderingManager::isIndependentSplitViewActive() const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        return split_view_service_.isIndependentDualActive(settings_);
+        return split_view_service_.isIndependentDualActive(settings_) && !isSplitWipeActive();
+    }
+
+    void RenderingManager::setIndependentPanelOverrides(std::optional<IndependentSplitOverrides> overrides) {
+        {
+            std::lock_guard<std::mutex> lock(settings_mutex_);
+            independent_panel_overrides_ = std::move(overrides);
+            if (split_view_service_.isIndependentDualActive(settings_))
+                settings_.grid_plane = panel_grid_planes_[splitViewPanelIndex(focusedGridPanelLocked())];
+        }
+        markDirty(DirtyFlag::ALL, FrameReason::SceneChange);
     }
 
     float RenderingManager::getSplitPosition() const {
@@ -1040,7 +1053,7 @@ namespace lfs::vis {
         std::lock_guard<std::mutex> lock(settings_mutex_);
         split_view_service_.setFocusedPanel(panel);
         if (split_view_service_.isIndependentDualActive(settings_)) {
-            settings_.grid_plane = panel_grid_planes_[splitViewPanelIndex(panel)];
+            settings_.grid_plane = panel_grid_planes_[splitViewPanelIndex(focusedGridPanelLocked())];
         }
     }
 
@@ -1053,12 +1066,13 @@ namespace lfs::vis {
         std::lock_guard<std::mutex> lock(settings_mutex_);
         const int clamped_plane = clampGridPlane(plane);
         const bool independent_split_active = split_view_service_.isIndependentDualActive(settings_);
+        const auto grid_panel = isSplitWipeActive() ? SplitViewPanelId::Left : panel;
         if (independent_split_active) {
-            panel_grid_planes_[splitViewPanelIndex(panel)] = clamped_plane;
+            panel_grid_planes_[splitViewPanelIndex(grid_panel)] = clamped_plane;
         } else {
             syncGridPlanesLocked(clamped_plane);
         }
-        if (!independent_split_active || split_view_service_.focusedPanel() == panel) {
+        if (!independent_split_active || focusedGridPanelLocked() == grid_panel) {
             settings_.grid_plane = clamped_plane;
         }
         markDirty(DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
@@ -1312,7 +1326,7 @@ namespace lfs::vis {
 
     Viewport& RenderingManager::resolvePanelViewport(Viewport& primary_viewport, const SplitViewPanelId panel) {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        if (split_view_service_.isIndependentDualActive(settings_) &&
+        if (split_view_service_.isIndependentDualActive(settings_) && !isSplitWipeActive() &&
             panel == SplitViewPanelId::Right) {
             return split_view_service_.secondaryViewport();
         }
@@ -1323,7 +1337,7 @@ namespace lfs::vis {
         const Viewport& primary_viewport,
         const SplitViewPanelId panel) const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        if (split_view_service_.isIndependentDualActive(settings_) &&
+        if (split_view_service_.isIndependentDualActive(settings_) && !isSplitWipeActive() &&
             panel == SplitViewPanelId::Right) {
             return split_view_service_.secondaryViewport();
         }

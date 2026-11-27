@@ -4677,7 +4677,8 @@ namespace lfs::python {
         nb::enum_<vis::op::ModelAlignmentDisplayMode>(m, "ModelAlignmentDisplayMode")
             .value("SEPARATE", vis::op::ModelAlignmentDisplayMode::Separate)
             .value("OVERLAY_LEFT", vis::op::ModelAlignmentDisplayMode::OverlayLeft)
-            .value("OVERLAY_RIGHT", vis::op::ModelAlignmentDisplayMode::OverlayRight);
+            .value("OVERLAY_RIGHT", vis::op::ModelAlignmentDisplayMode::OverlayRight)
+            .value("WIPE", vis::op::ModelAlignmentDisplayMode::Wipe);
         nb::class_<vis::op::ModelAlignmentState>(m, "ModelAlignmentState")
             .def_ro("active", &vis::op::ModelAlignmentState::active)
             .def_ro("preview", &vis::op::ModelAlignmentState::preview)
@@ -4701,9 +4702,9 @@ namespace lfs::python {
                                                  }); }, "Swap reference and moving model before picking points");
         m.def("set_model_alignment_display", [](vis::op::ModelAlignmentDisplayMode mode) { invoke_on_viewer([mode] {
                                                                                                if (auto* alignment = vis::op::ModelAlignmentOperator::active()) {
-                                                                                                   alignment->setComposite(mode == vis::op::ModelAlignmentDisplayMode::Separate ? std::nullopt : std::optional{mode == vis::op::ModelAlignmentDisplayMode::OverlayLeft ? vis::SplitViewPanelId::Left : vis::SplitViewPanelId::Right});
+                                                                                                   alignment->setDisplayMode(mode);
                                                                                                }
-                                                                                           }); }, nb::arg("mode"), "Choose separate models or an overlay in the left or right panel");
+                                                                                           }); }, nb::arg("mode"), "Choose separate views, an overlay in either panel, or a shared-camera wipe");
         m.def("set_model_alignment_camera_link", [](bool linked) { invoke_on_viewer([linked] {
                                                                        if (auto* alignment = vis::op::ModelAlignmentOperator::active(); alignment && alignment->state().linked != linked)
                                                                            alignment->toggleCameraLink();

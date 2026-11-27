@@ -3239,6 +3239,8 @@
     "models": "Align models",
     "link_cameras": "Link cameras",
     "separate": "One model per view, without overlay.",
+    "wipe": "Drag the divider to compare both models from one camera.",
+    "wipe_camera": "Wipe uses one shared camera.",
     "composite_left": "Show both aligned models in the left view.",
     "composite_right": "Show both aligned models in the right view.",
     "reference_name": "Reference: {}",

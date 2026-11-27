@@ -2411,6 +2411,8 @@ class ModelAlignmentDisplayMode(enum.Enum):
 
     OVERLAY_RIGHT = 2
 
+    WIPE = 3
+
 class ModelAlignmentState:
     @property
     def active(self) -> bool: ...
@@ -2443,7 +2445,9 @@ def swap_model_alignment_roles() -> None:
     """Swap reference and moving model before picking points"""
 
 def set_model_alignment_display(mode: ModelAlignmentDisplayMode) -> None:
-    """Choose separate models or an overlay in the left or right panel"""
+    """
+    Choose separate views, an overlay in either panel, or a shared-camera wipe
+    """
 
 def set_model_alignment_camera_link(linked: bool) -> None:
     """Link or unlink navigation in the alignment preview"""

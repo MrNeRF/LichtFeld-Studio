@@ -12,7 +12,8 @@
 namespace lfs::vis::op {
     enum class ModelAlignmentDisplayMode { Separate,
                                            OverlayLeft,
-                                           OverlayRight };
+                                           OverlayRight,
+                                           Wipe };
     struct ModelAlignmentState {
         bool active = false;
         bool preview = false;
@@ -45,7 +46,14 @@ namespace lfs::vis::op {
             Viewport previous_primary;
             Viewport previous_secondary;
             std::optional<glm::mat4> preview;
-            std::optional<SplitViewPanelId> composite;
+            ModelAlignmentDisplayMode display_mode = ModelAlignmentDisplayMode::Separate;
+            [[nodiscard]] std::optional<SplitViewPanelId> compositePanel() const {
+                if (display_mode == ModelAlignmentDisplayMode::OverlayLeft)
+                    return SplitViewPanelId::Left;
+                if (display_mode == ModelAlignmentDisplayMode::OverlayRight)
+                    return SplitViewPanelId::Right;
+                return std::nullopt;
+            }
             std::optional<std::array<Viewport, 2>> free_views;
             bool linked = false;
         };
@@ -76,7 +84,7 @@ namespace lfs::vis::op {
         bool canSwapRoles(const core::Scene&) const;
         ModelAlignmentState state() const;
         void swapRoles(const core::Scene&);
-        void setComposite(std::optional<SplitViewPanelId>);
+        void setDisplayMode(ModelAlignmentDisplayMode mode);
         void toggleCameraLink();
         void syncCamera(const Viewport&);
 

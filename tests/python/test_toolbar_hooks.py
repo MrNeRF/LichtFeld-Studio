@@ -25,7 +25,8 @@ def _install_stub_modules(monkeypatch):
     lf_stub.set_render_mode_controls_open = lambda _open: None
     lf_stub.ui = SimpleNamespace(
         get_model_alignment_state=lambda: SimpleNamespace(active=False),
-        ModelAlignmentDisplayMode=SimpleNamespace(SEPARATE="separate", OVERLAY_LEFT="overlay_left", OVERLAY_RIGHT="overlay_right"),
+        ModelAlignmentDisplayMode=SimpleNamespace(SEPARATE="separate", OVERLAY_LEFT="overlay_left",
+                                                  OVERLAY_RIGHT="overlay_right", WIPE="wipe"),
         PanelSpace=SimpleNamespace(FLOATING="FLOATING", BOTTOM_DOCK="BOTTOM_DOCK"),
         add_hook=lambda panel, section, callback, position="append": hook_calls.append(
             (panel, section, callback, position)
@@ -2830,6 +2831,7 @@ def test_model_alignment_replaces_active_tool_controls_and_refreshes_on_preview(
     assert not picking["model-alignment-swap"]["selected"]
     assert "model-alignment-link" not in picking
     assert "model-alignment-separate" not in picking
+    assert "model-alignment-wipe" not in picking
     assert "align-apply" not in picking
     assert not picking["model-alignment-delete"]["enabled"]
     assert [record["button_id"] for record in snapshot["align_action_buttons"]
@@ -2865,9 +2867,15 @@ def test_model_alignment_replaces_active_tool_controls_and_refreshes_on_preview(
     separate = controller._gizmo.snapshot()["align_action_buttons"]
     assert [record["value"] for record in separate
             if record["action"] == "model_alignment_control" and record["selected"]] == ["separate"]
-    for action in ("right", "separate", "cancel"):
+    lf.ui.get_model_alignment_state = lambda: state(mode="wipe", swap=False)
+    wipe = {record["value"]: record for record in controller._gizmo.snapshot()["align_action_buttons"]}
+    assert wipe["wipe"]["selected"] and wipe["wipe"]["icon_src"]
+    assert not wipe["separate"]["selected"]
+    assert not wipe["link"]["enabled"]
+    assert wipe["link"]["tooltip_key"] == "align.wipe_camera"
+    for action in ("right", "wipe", "separate", "cancel"):
         controller._on_toolbar_action(None, None, ["model_alignment_control", action])
-    assert calls == ["overlay_right", "separate", "cancel"]
+    assert calls == ["overlay_right", "wipe", "separate", "cancel"]
     for action in ("model_alignment_preview", "model_alignment_apply", "model_alignment_clear"):
         controller._on_toolbar_action(None, None, [action, ""])
     assert calls[-3:] == ["preview", "apply", "clear"]

@@ -7086,10 +7086,10 @@ namespace lfs::vis::gui {
                         const auto& scene = viewer_->getSceneManager()->getScene();
                         const auto* reference = scene.getNodeByUuid(alignment->nodes[0]);
                         const auto* mobile = scene.getNodeByUuid(alignment->nodes[1]);
-                        info.left_name = alignment->composite == SplitViewPanelId::Left ? LOC("align.composite_name")
-                                                                                        : LOCF("align.reference_name", reference ? reference->name : "");
-                        info.right_name = alignment->composite == SplitViewPanelId::Right ? LOC("align.composite_name")
-                                                                                          : LOCF("align.mobile_name", mobile ? mobile->name : "");
+                        info.left_name = alignment->compositePanel() == SplitViewPanelId::Left ? LOC("align.composite_name")
+                                                                                               : LOCF("align.reference_name", reference ? reference->name : "");
+                        info.right_name = alignment->compositePanel() == SplitViewPanelId::Right ? LOC("align.composite_name")
+                                                                                                 : LOCF("align.mobile_name", mobile ? mobile->name : "");
                     }
                     if (alignment ||
                         splitViewUsesPLYComparison(rendering->getSettings().split_view_mode)) {

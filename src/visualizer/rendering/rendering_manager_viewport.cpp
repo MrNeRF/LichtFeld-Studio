@@ -307,15 +307,20 @@ namespace lfs::vis {
             return info.valid() ? std::optional<MutableViewerPanelInfo>(info) : std::nullopt;
         }
 
-        const auto render_layouts = split_view_service_.panelLayouts(settings_, full_render_width);
-        if (!render_layouts) {
-            return info.valid() ? std::optional<MutableViewerPanelInfo>(info) : std::nullopt;
-        }
-
         SplitViewPanelId panel = panel_override.value_or(split_view_service_.focusedPanel());
         if (screen_point && !panel_override) {
             const float divider_x = viewport_pos.x + (*screen_layouts)[0].width;
             panel = screen_point->x >= divider_x ? SplitViewPanelId::Right : SplitViewPanelId::Left;
+        }
+
+        if (isSplitWipeActive()) {
+            info.panel = panel;
+            return info.valid() ? std::optional{info} : std::nullopt;
+        }
+
+        const auto render_layouts = split_view_service_.panelLayouts(settings_, full_render_width);
+        if (!render_layouts) {
+            return info.valid() ? std::optional<MutableViewerPanelInfo>(info) : std::nullopt;
         }
 
         const size_t index = splitViewPanelIndex(panel);
@@ -362,15 +367,20 @@ namespace lfs::vis {
             return info.valid() ? std::optional<ViewerPanelInfo>(info) : std::nullopt;
         }
 
-        const auto render_layouts = split_view_service_.panelLayouts(settings_, full_render_width);
-        if (!render_layouts) {
-            return info.valid() ? std::optional<ViewerPanelInfo>(info) : std::nullopt;
-        }
-
         SplitViewPanelId panel = panel_override.value_or(split_view_service_.focusedPanel());
         if (screen_point && !panel_override) {
             const float divider_x = viewport_pos.x + (*screen_layouts)[0].width;
             panel = screen_point->x >= divider_x ? SplitViewPanelId::Right : SplitViewPanelId::Left;
+        }
+
+        if (isSplitWipeActive()) {
+            info.panel = panel;
+            return info.valid() ? std::optional{info} : std::nullopt;
+        }
+
+        const auto render_layouts = split_view_service_.panelLayouts(settings_, full_render_width);
+        if (!render_layouts) {
+            return info.valid() ? std::optional<ViewerPanelInfo>(info) : std::nullopt;
         }
 
         const size_t index = splitViewPanelIndex(panel);
@@ -1929,16 +1939,13 @@ namespace lfs::vis {
     float RenderingManager::sampleDepthAtPixel(const int x, const int y,
                                                const std::optional<SplitViewPanelId> panel, const bool nonblocking,
                                                const bool require_exact_depth, glm::ivec2 source_size) const {
-        const float cached_depth = viewport_artifact_service_.sampleLinearDepthAt(
-            x,
-            y,
-            frame_lifecycle_service_.lastViewportSize(),
-            panel, nonblocking);
+        const bool wipe = isSplitWipeActive();
+        const float cached_depth = wipe ? -1.0f : viewport_artifact_service_.sampleLinearDepthAt(x, y, frame_lifecycle_service_.lastViewportSize(), panel, nonblocking);
         // Captured Gaussian tensors do not carry the published exact-depth coverage.
         // Dedicated samplers (point clouds / GT) retain their own depth contract.
         const bool full_frame_depth = !require_exact_depth || splitViewUsesGTComparison(settings_.split_view_mode) ||
                                       splitViewUsesPLYComparison(settings_.split_view_mode);
-        if (viewport_artifact_service_.hasDepthSampler() || (full_frame_depth && cached_depth > 0.0f)) {
+        if (!wipe && (viewport_artifact_service_.hasDepthSampler() || (full_frame_depth && cached_depth > 0.0f))) {
             return cached_depth;
         }
 
@@ -1947,7 +1954,7 @@ namespace lfs::vis {
         }
 
         VksplatViewportRenderer::OutputSlot output_slot = VksplatViewportRenderer::OutputSlot::Main;
-        if (panel && isIndependentSplitViewActive()) {
+        if (panel && (wipe || isIndependentSplitViewActive())) {
             output_slot = *panel == SplitViewPanelId::Right
                               ? VksplatViewportRenderer::OutputSlot::SplitRight
                               : VksplatViewportRenderer::OutputSlot::SplitLeft;

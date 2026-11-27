@@ -3227,6 +3227,8 @@
     "models": "Dopasuj modele",
     "link_cameras": "Połącz kamery",
     "separate": "Jeden model na widok, bez nakładania.",
+    "wipe": "Przeciągnij separator, aby porównać oba modele z tej samej kamery.",
+    "wipe_camera": "Porównanie suwakiem używa jednej wspólnej kamery.",
     "composite_left": "Pokaż oba wyrównane modele w lewym widoku.",
     "composite_right": "Pokaż oba wyrównane modele w prawym widoku.",
     "reference_name": "Odniesienie: {}",

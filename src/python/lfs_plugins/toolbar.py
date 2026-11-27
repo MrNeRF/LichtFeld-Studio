@@ -836,7 +836,9 @@ class _GizmoToolbarController:
                                tooltip_key="align.apply_preview", tooltip_text="Apply alignment and exit.",
                                enabled=True),
             ]
-            link_tooltip = "align.unlink_cameras" if linked else "align.link_cameras_help"
+            wipe = alignment.display_mode == lf.ui.ModelAlignmentDisplayMode.WIPE
+            link_tooltip = ("align.wipe_camera" if wipe else
+                            "align.unlink_cameras" if linked else "align.link_cameras_help")
             controls = (
                 ("separate", "align.separate", "Separate", "layout-columns", "",
                  alignment.display_mode == lf.ui.ModelAlignmentDisplayMode.SEPARATE, True),
@@ -844,8 +846,10 @@ class _GizmoToolbarController:
                  alignment.display_mode == lf.ui.ModelAlignmentDisplayMode.OVERLAY_LEFT, True),
                 ("right", "align.composite_right", "Overlay right", "alignment-overlay-right", "",
                  alignment.display_mode == lf.ui.ModelAlignmentDisplayMode.OVERLAY_RIGHT, True),
+                ("wipe", "align.wipe", "Drag the divider to compare both models from one camera.", "mirror-x", "",
+                 wipe, True),
                 ("link", link_tooltip, "Link cameras", "link", "",
-                 linked, True),
+                 linked, not wipe),
                 cancel,
             )
         else:
@@ -1292,7 +1296,7 @@ class _GizmoToolbarController:
             else:
                 mode = lf.ui.ModelAlignmentDisplayMode
                 lf.ui.set_model_alignment_display({"separate": mode.SEPARATE, "left": mode.OVERLAY_LEFT,
-                                                   "right": mode.OVERLAY_RIGHT}[value])
+                                                   "right": mode.OVERLAY_RIGHT, "wipe": mode.WIPE}[value])
             return
 
         if action == "align_toggle_preview":

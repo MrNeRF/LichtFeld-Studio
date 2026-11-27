@@ -207,7 +207,7 @@ namespace lfs::vis::op {
     }
     std::optional<OperatorResult> ModelAlignmentOperator::prepareModal(OperatorContext& ctx) {
         auto* renderer = services().renderingOrNull();
-        if (!session_ || !renderer || !renderer->isIndependentSplitViewActive())
+        if (!session_ || !renderer || renderer->getSplitViewMode() != SplitViewMode::IndependentDual)
             return OperatorResult::CANCELLED;
         const auto& scene = ctx.scene().getScene();
         const auto* reference = scene.getNodeByUuid(session_->nodes[0]);
@@ -383,10 +383,11 @@ namespace lfs::vis::op {
             return;
         RenderingManager::IndependentSplitOverrides overrides{
             .exact_surface_picking = !session_->preview,
+            .wipe = session_->display_mode == ModelAlignmentDisplayMode::Wipe,
         };
         for (size_t i = 0; i < overrides.panels.size(); ++i) {
             auto& panel = overrides.panels[i];
-            if (session_->composite && splitViewPanelIndex(*session_->composite) == i)
+            if (const auto composite = session_->compositePanel(); composite && splitViewPanelIndex(*composite) == i)
                 panel.visible_nodes = {session_->nodes[0], session_->nodes[1]};
             else
                 panel.visible_nodes = {session_->nodes[i]};
@@ -413,14 +414,14 @@ namespace lfs::vis::op {
             right.camera.R = rotation * right.camera.R;
             if (right.ortho_scale_override)
                 *right.ortho_scale_override /= scale;
-            view.composite = SplitViewPanelId::Right;
+            view.display_mode = ModelAlignmentDisplayMode::OverlayRight;
         } else if (!transform && view.preview) {
             if (view.free_views) {
                 restoreAlignmentCamera(primary, (*view.free_views)[0]);
                 restoreAlignmentCamera(right, (*view.free_views)[1]);
             }
             view.free_views.reset();
-            view.composite.reset();
+            view.display_mode = ModelAlignmentDisplayMode::Separate;
             view.linked = false;
         }
         view.preview = std::move(transform);
@@ -446,9 +447,8 @@ namespace lfs::vis::op {
         result.active = true;
         result.preview = session_->preview.has_value();
         result.can_apply = hasEnoughAlignmentPairs(picked_points_.size());
-        result.linked = session_->linked;
-        result.display_mode = !session_->composite ? ModelAlignmentDisplayMode::Separate : *session_->composite == SplitViewPanelId::Left ? ModelAlignmentDisplayMode::OverlayLeft
-                                                                                                                                          : ModelAlignmentDisplayMode::OverlayRight;
+        result.linked = session_->linked && session_->display_mode != ModelAlignmentDisplayMode::Wipe;
+        result.display_mode = session_->display_mode;
         const auto* manager = services().sceneOrNull();
         result.can_swap_roles = manager && canSwapRoles(manager->getScene());
         result.can_delete_pair = !session_->preview && point_state_.getSelectedPoint().has_value();
@@ -471,10 +471,13 @@ namespace lfs::vis::op {
         publishView();
     }
 
-    void ModelAlignmentOperator::setComposite(std::optional<SplitViewPanelId> panel) {
-        if (!session_ || !session_->preview || session_->composite == panel)
+    void ModelAlignmentOperator::setDisplayMode(const ModelAlignmentDisplayMode mode) {
+        if (!session_ || !session_->preview || session_->display_mode == mode)
             return;
-        session_->composite = panel;
+        const bool leaving_wipe = session_->display_mode == ModelAlignmentDisplayMode::Wipe;
+        session_->display_mode = mode;
+        if (leaving_wipe && session_->linked)
+            syncCamera(*session_->primary_viewport);
         publishView();
     }
 
@@ -484,7 +487,7 @@ namespace lfs::vis::op {
             return;
         auto& primary = *session_->primary_viewport;
 
-        if (!session_ || !session_->preview)
+        if (!session_->preview || session_->display_mode == ModelAlignmentDisplayMode::Wipe)
             return;
         auto& view = *session_;
         auto& right = renderer->projectSecondaryViewport();
@@ -500,7 +503,7 @@ namespace lfs::vis::op {
             return;
         auto& primary = *session_->primary_viewport;
 
-        if (!session_ || !session_->linked)
+        if (!session_->linked || session_->display_mode == ModelAlignmentDisplayMode::Wipe)
             return;
         auto& right = renderer->projectSecondaryViewport();
         auto& target = &source == &right ? primary : right;

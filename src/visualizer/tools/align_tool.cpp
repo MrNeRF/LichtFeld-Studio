@@ -336,9 +336,19 @@ namespace lfs::vis::tools {
                                      ? LOCF("align.pair_recover_help", pointPickShortcut(input::Action::UNDO))
                                      : std::string{});
             } else {
-                const auto projection = pointPickOverlayFrame(
-                                            *tool_context_, alignment->composite.value_or(SplitViewPanelId::Right))
-                                            .panel;
+                auto projection = pointPickOverlayFrame(
+                                      *tool_context_, alignment->compositePanel().value_or(SplitViewPanelId::Right))
+                                      .panel;
+                if (alignment->display_mode == op::ModelAlignmentDisplayMode::Wipe) {
+                    auto& info = projection.info;
+                    if (const auto divider = renderer->getSplitDividerScreenX({info.x, info.y}, {info.width, info.height})) {
+                        const float left_width = *divider - info.x;
+                        const float right_width = info.width - left_width;
+                        if (right_width > left_width)
+                            info.x = *divider;
+                        info.width = std::max(left_width, right_width);
+                    }
+                }
                 drawPointPickHud(*overlay, projection, LOC("align.pair_preview"),
                                  LOCF("align.pair_progress", picked_points.size() / 2),
                                  &op::ModelAlignmentOperator::active()->feedback().summary);
