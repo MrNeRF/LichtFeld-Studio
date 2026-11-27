@@ -3,11 +3,11 @@
 
 // Metal PhotometricOps; see ops/photometric_cuda.cpp for the reference behaviour.
 
+#include "blur_ssim_portable.hpp"
 #include "metal_families.hpp"
 #include "metal_kernels.hpp"
 
 #include "core/assert.hpp"
-#include "lfs/training/blur_tolerant_ssim.hpp"
 
 #include <algorithm>
 #include <array>
@@ -216,6 +216,7 @@ namespace lfs::training {
             Arena arena;
             // The blur-tolerant SSIM's own arena: photo sets that straddle the 1,200-pixel rule switch neither.
             Arena blur;
+            BlurSsimPrograms blur_programs;
             Tensor cs_map; // outside the arena, as the CUDA workspaces keep it
             // Outside the arena too: the CUDA arena leaves the raw-render gradient to add_raw_gradient.
             Tensor grad_raw;
@@ -504,58 +505,9 @@ namespace lfs::training {
             squeeze_like(grad, corrected);
         }
 
-        // ---- Blur-tolerant SSIM (ssim.cu blur_tolerant_loss) ------------------------------------------------------
-        constexpr int kBlurMaxRadius = 5;
-
-        // Centre-first normalised taps of a blur sigma in (0, 1.5]: radius ceil(3 sigma) <= 5.
-        struct BlurTaps {
-            std::array<float, kBlurMaxRadius + 1> weight{};
-            int radius = 0;
-        };
-
-        BlurTaps blur_taps(const float sigma) {
-            LFS_ASSERT_MSG(std::isfinite(sigma) && sigma > 0.0f && sigma <= kernels::BLUR_TOLERANT_SSIM_MAX_SIGMA,
-                           std::format("Blur-tolerant SSIM sigma must be within (0, 1.5] (sigma={})", sigma));
-            BlurTaps taps{.radius = static_cast<int>(std::ceil(3.0 * sigma))};
-            double raw[kBlurMaxRadius + 1] = {}, sum = 0.0;
-            for (int d = 0; d <= taps.radius; ++d) {
-                raw[d] = std::exp(-0.5 * d * d / (static_cast<double>(sigma) * sigma));
-                sum += d == 0 ? raw[d] : 2.0 * raw[d];
-            }
-            for (int d = 0; d <= taps.radius; ++d)
-                taps.weight[d] = static_cast<float>(raw[d] / sum);
-            return taps;
-        }
-
-        struct BlurForwardParams {
-            uint64_t corrected, raw, target, mask, ssim_map, cs_map, sharp, blurred, partials;
-            int32_t height, width, channels, batch;
-            uint32_t tiles_x, tiles_y;
-            float ssim_weight;
-            std::array<float, kBlurMaxRadius + 1> taps;
-        };
-
-        struct BlurBackwardParams {
-            uint64_t corrected, raw, target, mask, mask_sum, partials, vu, grad, grad_raw;
-            int32_t height, width, channels;
-            uint32_t tiles_y;
-            float ssim_weight, chain;
-            uint32_t decoupled;
-            std::array<float, kBlurMaxRadius + 1> taps;
-        };
-
-        using ConstantValues = std::array<std::pair<uint32_t, uint32_t>, 6>;
-
-        ConstantValues blur_constants(const Images& images, const bool masked, const int radius, const bool gradient) {
-            const Constants plain(images, masked ? kLossMasked : kLossFused, false);
-            return {plain.values[0], plain.values[1], plain.values[2], plain.values[3],
-                    std::pair<uint32_t, uint32_t>{44, static_cast<uint32_t>(radius)},
-                    std::pair<uint32_t, uint32_t>{45, gradient ? 1u : 0u}};
-        }
-
-        // Three passes (forward with the loss summed per group, the blurred branch's backward, both gradients) and
-        // the final reduction; see photometric.metal. Gradients are views of the workspace, valid until the next
-        // evaluate, like the other paths' corrected-image gradient.
+        // ---- Blur-tolerant SSIM (ssim.cu blur_tolerant_loss): the portable program in ops/blur_ssim.slang -------------
+        // Its passes write the blur arena's views. Gradients are views of the workspace, valid until the next evaluate,
+        // like the other paths' corrected-image gradient.
         void evaluate_blur(PhotoSaved& saved, MetalPhotoState& state, const Tensor& corrected, const Tensor& raw,
                            const Tensor& target, const Tensor& mask, const lfs::gpu_ops::PhotoParams& params,
                            Tensor& loss, Tensor& grad_corrected, Tensor& grad_raw) {
@@ -566,74 +518,25 @@ namespace lfs::training {
             LFS_ASSERT_MSG(std::isfinite(params.denominator) && params.denominator >= 0.0f,
                            std::format("Loss denominator must be finite and non-negative (denominator={})",
                                        params.denominator));
-            const BlurTaps taps = blur_taps(params.blur_sigma);
             const Images images = prepare(corrected, decoupled ? raw : Tensor{}, target, masked ? mask : Tensor{});
-            const Tensor& raw_image = decoupled ? images.raw : images.prediction;
             Views& ws = state.blur.ensure(masked ? Kind::BlurMasked : Kind::Blur, dims(images.prediction));
             ensure_like(state.cs_map, ws.ssim_map);
-
-            const BlurForwardParams forward{
-                .corrected = mk::address(images.prediction),
-                .raw = mk::address(raw_image),
-                .target = mk::address(images.target),
-                .mask = mk::address(images.mask),
-                .ssim_map = mk::address(ws.ssim_map),
-                .cs_map = mk::address(state.cs_map),
-                .sharp = mk::address(ws.sharp),
-                .blurred = mk::address(ws.blurred),
-                .partials = mk::address(ws.temp),
-                .height = images.h,
-                .width = images.w,
-                .channels = images.c,
-                .batch = images.n,
-                .tiles_x = tiles_x(images),
-                .tiles_y = tiles_y(images),
-                .ssim_weight = params.ssim_weight,
-                .taps = taps.weight,
-            };
-            const uint32_t groups = forward_groups(images);
-            launch_with("photo_blur_forward", forward,
-                        {&images.prediction, &raw_image, &images.target, &images.mask, &ws.ssim_map, &state.cs_map,
-                         &ws.sharp, &ws.blurred, &ws.temp},
-                        {groups, 1, 1}, {kTile, kTile, 1}, blur_constants(images, masked, taps.radius, false));
-            if (masked)
-                reduce_masked(ws.temp, groups, ws.result, ws.mask_sum, images.n * images.c, params.denominator);
-            else // always over the valid crop, as CUDA and Vulkan
-                reduce_final(ws.temp, groups, ws.result, 1.f, static_cast<float>(valid_count(images, true)), 0.f);
-
-            BlurBackwardParams backward{
-                .corrected = mk::address(images.prediction),
-                .raw = mk::address(raw_image),
-                .target = mk::address(images.target),
-                .mask = mk::address(images.mask),
-                .mask_sum = masked ? mk::address(ws.mask_sum) : 0,
-                .partials = mk::address(ws.blurred),
-                .vu = mk::address(ws.vu),
-                .grad = 0,
-                .grad_raw = 0,
-                .height = images.h,
-                .width = images.w,
-                .channels = images.c,
-                .tiles_y = tiles_y(images),
-                .ssim_weight = params.ssim_weight,
-                .chain = masked ? 0.f : grad_per_pixel(images, true),
-                .decoupled = decoupled ? 1u : 0u,
-                .taps = taps.weight,
-            };
-            const std::array<uint32_t, 3> grid{tiles_x(images), tiles_y(images) * static_cast<uint32_t>(images.n), 1};
-            const Tensor mask_sum = masked ? ws.mask_sum : Tensor{};
-            launch_with("photo_blur_backward", backward,
-                        {&images.prediction, &raw_image, &images.target, &images.mask, &mask_sum, &ws.blurred, &ws.vu},
-                        grid, {kTile, kTile, 1}, blur_constants(images, masked, taps.radius, false));
-            // The gradients overwrite the blurred partials the branch pass has just read.
-            backward.partials = mk::address(ws.sharp);
-            backward.grad = mk::address(ws.grad);
-            backward.grad_raw = decoupled ? mk::address(ws.grad_raw) : 0;
-            const Tensor raw_out = decoupled ? ws.grad_raw : Tensor{};
-            launch_with("photo_blur_backward", backward,
-                        {&images.prediction, &raw_image, &images.target, &images.mask, &mask_sum, &ws.sharp, &ws.vu,
-                         &ws.grad, &raw_out},
-                        grid, {kTile, kTile, 1}, blur_constants(images, masked, taps.radius, true));
+            blur_tolerant_ssim(state.blur_programs,
+                               {.corrected = images.prediction,
+                                .raw = decoupled ? images.raw : images.prediction,
+                                .photo = images.target,
+                                .mask = masked ? images.mask : Tensor{}},
+                               {.ssim_map = ws.ssim_map,
+                                .cs_map = state.cs_map,
+                                .sharp = ws.sharp,
+                                .blurred = ws.blurred,
+                                .vu = ws.vu,
+                                .partials = ws.temp,
+                                .loss = ws.result,
+                                .mask_sum = masked ? ws.mask_sum : Tensor{},
+                                .grad = ws.grad,
+                                .grad_raw = decoupled ? ws.grad_raw : Tensor{}},
+                               params.blur_sigma, params.ssim_weight, params.denominator);
 
             // A calibration fit scales its masked equations by the loss's denominator, as on Vulkan. A denominator the
             // caller passes is the one the reduction used, so it needs no read that waits for the GPU.
