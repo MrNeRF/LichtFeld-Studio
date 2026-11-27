@@ -1035,8 +1035,16 @@ namespace lfs::vis::op {
         operation_.toggleCameraLink();
         EXPECT_EQ(primary.camera.t, focused_position);
 
+        renderer.setGridPlaneForPanel(SplitViewPanelId::Left, 0);
+        renderer.setGridPlaneForPanel(SplitViewPanelId::Right, 1);
         operation_.setDisplayMode(ModelAlignmentDisplayMode::Wipe);
         EXPECT_FALSE(renderer.isIndependentSplitViewActive());
+        EXPECT_EQ(renderer.getSettings().grid_plane, 0);
+        auto wipe_settings = renderer.getSettings();
+        wipe_settings.grid_plane = 2;
+        renderer.updateSettings(wipe_settings);
+        EXPECT_EQ(renderer.getGridPlaneForPanel(SplitViewPanelId::Left), 2);
+        EXPECT_EQ(renderer.getGridPlaneForPanel(SplitViewPanelId::Right), 1);
         EXPECT_EQ(&renderer.resolvePanelViewport(primary, SplitViewPanelId::Right), &primary);
         const auto wipe_right = renderer.resolveViewerPanel(primary, {0, 0}, {800, 400}, glm::vec2(700, 200));
         ASSERT_TRUE(wipe_right);
@@ -1057,6 +1065,7 @@ namespace lfs::vis::op {
         EXPECT_TRUE(renderer.isIndependentSplitViewActive());
         EXPECT_TRUE(operation_.state().linked);
         EXPECT_EQ(renderer.getFocusedSplitPanel(), SplitViewPanelId::Right);
+        EXPECT_EQ(renderer.getSettings().grid_plane, 1);
         const auto linked_position = primary.camera.t;
         EXPECT_EQ(renderer.projectSecondaryViewport().camera.t, linked_position);
         operation_.toggleCameraLink();

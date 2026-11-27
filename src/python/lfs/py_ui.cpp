@@ -4704,7 +4704,7 @@ namespace lfs::python {
                                                                                                if (auto* alignment = vis::op::ModelAlignmentOperator::active()) {
                                                                                                    alignment->setDisplayMode(mode);
                                                                                                }
-                                                                                           }); }, nb::arg("mode"), "Choose separate models or an overlay in the left or right panel");
+                                                                                           }); }, nb::arg("mode"), "Choose separate views, an overlay in either panel, or a shared-camera wipe");
         m.def("set_model_alignment_camera_link", [](bool linked) { invoke_on_viewer([linked] {
                                                                        if (auto* alignment = vis::op::ModelAlignmentOperator::active(); alignment && alignment->state().linked != linked)
                                                                            alignment->toggleCameraLink();

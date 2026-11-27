@@ -846,7 +846,7 @@ class _GizmoToolbarController:
                  alignment.display_mode == lf.ui.ModelAlignmentDisplayMode.OVERLAY_LEFT, True),
                 ("right", "align.composite_right", "Overlay right", "alignment-overlay-right", "",
                  alignment.display_mode == lf.ui.ModelAlignmentDisplayMode.OVERLAY_RIGHT, True),
-                ("wipe", "align.wipe", "Drag the divider to compare from one camera.", "mirror-x", "",
+                ("wipe", "align.wipe", "Drag the divider to compare both models from one camera.", "mirror-x", "",
                  wipe, True),
                 ("link", link_tooltip, "Link cameras", "link", "",
                  linked, not wipe),

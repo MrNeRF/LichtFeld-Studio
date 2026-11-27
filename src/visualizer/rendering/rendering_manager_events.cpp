@@ -270,7 +270,7 @@ namespace lfs::vis {
         settings_.grid_plane = clampGridPlane(event.plane);
         settings_.grid_opacity = event.opacity;
         if (split_view_service_.isIndependentDualActive(settings_)) {
-            panel_grid_planes_[splitViewPanelIndex(split_view_service_.focusedPanel())] = settings_.grid_plane;
+            panel_grid_planes_[splitViewPanelIndex(focusedGridPanelLocked())] = settings_.grid_plane;
         } else {
             syncGridPlanesLocked(settings_.grid_plane);
         }

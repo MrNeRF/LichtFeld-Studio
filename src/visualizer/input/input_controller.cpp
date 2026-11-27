@@ -3957,7 +3957,7 @@ namespace lfs::vis {
     }
 
     void InputController::focusSplitPanel(const SplitViewPanelId panel) {
-        if (auto* const rendering = services().renderingOrNull()) {
+        if (auto* const rendering = services().renderingOrNull(); rendering && !rendering->isSplitWipeActive()) {
             const bool changed =
                 rendering->getFocusedSplitPanel() != panel;
             if (changed) {

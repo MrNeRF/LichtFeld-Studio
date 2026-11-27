@@ -413,6 +413,7 @@ namespace lfs::vis {
         [[nodiscard]] bool isGTComparisonActive() const;
         [[nodiscard]] bool hasGTComparisonAvailable() const;
         [[nodiscard]] bool isPLYComparisonActive() const;
+        // True when the split panels have separate camera viewports.
         [[nodiscard]] bool isIndependentSplitViewActive() const;
         [[nodiscard]] GTComparisonMode getGTComparisonMode() const;
         [[nodiscard]] SplitViewMode getSplitViewMode() const;
@@ -432,10 +433,7 @@ namespace lfs::vis {
             bool wipe = false;
         };
         // Viewer-thread rendering inputs, borrowed from the active workflow's state.
-        void setIndependentPanelOverrides(std::optional<IndependentSplitOverrides> overrides) {
-            independent_panel_overrides_ = std::move(overrides);
-            markDirty(DirtyFlag::ALL, FrameReason::SceneChange);
-        }
+        void setIndependentPanelOverrides(std::optional<IndependentSplitOverrides> overrides);
         const auto& independentPanelOverrides() const { return independent_panel_overrides_; }
         [[nodiscard]] bool isSplitWipeActive() const {
             return independent_panel_overrides_ && independent_panel_overrides_->wipe;
@@ -1028,6 +1026,7 @@ namespace lfs::vis {
         void handlePointCloudModeChanged(const lfs::core::events::ui::PointCloudModeChanged& event);
         [[nodiscard]] static int clampGridPlane(int plane);
         void syncGridPlanesLocked(int plane);
+        [[nodiscard]] SplitViewPanelId focusedGridPanelLocked() const;
 
         // Core components
         std::unique_ptr<lfs::rendering::RenderingEngine> engine_;
