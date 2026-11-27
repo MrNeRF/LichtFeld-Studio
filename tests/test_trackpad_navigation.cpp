@@ -3,11 +3,13 @@
 
 // Trackpad navigation reads two-finger swipes as orbit/pan/zoom while mouse
 // mode keeps wheel zoom; automatic mode swipes only while two fingers rest on
-// the trackpad, and pinch zooms in every mode. Drives the controller without a
-// window, so the pointer sits at the viewport origin.
+// the trackpad, and pinch zooms in every mode. A pan the OS already recognized
+// as a trackpad gesture swipes without counting fingers. Drives the controller
+// without a window, so the pointer sits at the viewport origin.
 
 #include "input/input_controller.hpp"
 #include "input/key_codes.hpp"
+#include "input/navigation_gestures.hpp"
 #include "internal/viewport.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
@@ -18,6 +20,7 @@
 #include <cmath>
 #include <glm/glm.hpp>
 #include <gtest/gtest.h>
+#include <limits>
 
 namespace lfs::vis {
 
@@ -274,6 +277,106 @@ namespace lfs::vis {
         controller.handleScroll(2.0, 0.0);
         EXPECT_GT(rotationChange(), 1e-3f);
         EXPECT_FLOAT_EQ(glm::distance(viewport.camera.t, glm::vec3(0.0f, 0.0f, kStartDistance)), 0.0f);
+    }
+
+    TEST_F(TrackpadNavigationTest, RecognizedTrackpadPanSwipesInAutomaticModeWithoutFingers) {
+        controller.setTrackpadPreferences({.device = NavigationDevice::Automatic});
+        EXPECT_TRUE(controller.wantsTrackpadGesture());
+
+        // No touches were reported: the OS recognized the trackpad gesture itself.
+        controller.handleTrackpadPan({-48.0f, 0.0f});
+        EXPECT_GT(rotationChange(), 1e-3f);
+        EXPECT_NEAR(pivotDistance(), kStartDistance, 1e-4f);
+    }
+
+    TEST_F(TrackpadNavigationTest, RecognizedTrackpadPanMatchesTheEquivalentWheelSwipe) {
+        // 24 logical pixels make one wheel step, and wheel x is the reverse of
+        // the content's movement, so this pan is the wheel swipe (1.5, -0.5).
+        controller.setTrackpadPreferences({.device = NavigationDevice::Trackpad});
+        controller.handleScroll(1.5, -0.5);
+        const glm::mat3 wheel_rotation = viewport.camera.R;
+        const glm::vec3 wheel_position = viewport.camera.t;
+
+        SetUp();
+        controller.setTrackpadPreferences({.device = NavigationDevice::Trackpad});
+        controller.handleTrackpadPan({-36.0f, -12.0f});
+        for (int col = 0; col < 3; ++col)
+            EXPECT_NEAR(glm::distance(viewport.camera.R[col], wheel_rotation[col]), 0.0f, 1e-5f);
+        EXPECT_NEAR(glm::distance(viewport.camera.t, wheel_position), 0.0f, 1e-5f);
+
+        // A diagonal pan turns both axes at once.
+        const glm::vec3 forward = lfs::rendering::cameraForward(viewport.camera.R);
+        EXPECT_GT(std::abs(forward.x), 1e-3f);
+        EXPECT_GT(std::abs(forward.y), 1e-3f);
+    }
+
+    TEST_F(TrackpadNavigationTest, MouseModeLeavesTrackpadGesturesToTheWheel) {
+        controller.setTrackpadPreferences({.device = NavigationDevice::Mouse});
+        EXPECT_FALSE(controller.wantsTrackpadGesture());
+        controller.setTrackpadPreferences({.device = NavigationDevice::Trackpad});
+        EXPECT_TRUE(controller.wantsTrackpadGesture());
+    }
+
+    TEST(TrackpadGestureTracker, PanIsTheTranslationSinceTheLastTake) {
+        input::TrackpadGestureTracker gesture;
+        gesture.update(1.0f, {10.0f, -4.0f});
+        gesture.update(1.0f, {25.0f, -6.0f});
+        auto motion = gesture.take();
+        EXPECT_EQ(motion.pan, glm::vec2(25.0f, -6.0f));
+        EXPECT_FLOAT_EQ(motion.pinch, 1.0f);
+
+        gesture.update(1.0f, {30.0f, 2.0f});
+        motion = gesture.take();
+        EXPECT_EQ(motion.pan, glm::vec2(5.0f, 8.0f));
+        EXPECT_EQ(gesture.take().pan, glm::vec2(0.0f));
+    }
+
+    TEST(TrackpadGestureTracker, PinchIgnoresTranslationOnceRecognized) {
+        input::TrackpadGestureTracker gesture;
+        // Fingers drift a little before the OS recognizes the pinch.
+        gesture.update(1.0f, {2.0f, 1.0f});
+        gesture.update(1.1f, {40.0f, 30.0f});
+        gesture.update(1.21f, {80.0f, 60.0f});
+        auto motion = gesture.take();
+        EXPECT_EQ(motion.pan, glm::vec2(2.0f, 1.0f));
+        EXPECT_NEAR(motion.pinch, 1.21f, 1e-5f);
+
+        // Pinching back to the starting size is still a pinch, not a pan.
+        gesture.update(1.0f, {90.0f, 70.0f});
+        motion = gesture.take();
+        EXPECT_EQ(motion.pan, glm::vec2(0.0f));
+        EXPECT_NEAR(motion.pinch, 1.0f / 1.21f, 1e-5f);
+    }
+
+    TEST(TrackpadGestureTracker, EachGestureStartsFromTheIdentity) {
+        input::TrackpadGestureTracker gesture;
+        gesture.update(1.5f, {100.0f, 0.0f});
+        gesture.endGesture();
+        EXPECT_NEAR(gesture.take().pinch, 1.5f, 1e-5f);
+
+        gesture.update(1.0f, {12.0f, 3.0f});
+        const auto motion = gesture.take();
+        EXPECT_EQ(motion.pan, glm::vec2(12.0f, 3.0f));
+        EXPECT_FLOAT_EQ(motion.pinch, 1.0f);
+    }
+
+    TEST(TrackpadGestureTracker, IgnoresInvalidTransforms) {
+        constexpr float kNaN = std::numeric_limits<float>::quiet_NaN();
+        constexpr float kInf = std::numeric_limits<float>::infinity();
+        input::TrackpadGestureTracker gesture;
+        gesture.update(0.0f, {5.0f, 5.0f});
+        gesture.update(-1.0f, {5.0f, 5.0f});
+        gesture.update(kNaN, {5.0f, 5.0f});
+        gesture.update(kInf, {5.0f, 5.0f});
+        gesture.update(1.0f, {kInf, 0.0f});
+        gesture.update(1.0f, {0.0f, kNaN});
+        auto motion = gesture.take();
+        EXPECT_EQ(motion.pan, glm::vec2(0.0f));
+        EXPECT_FLOAT_EQ(motion.pinch, 1.0f);
+
+        gesture.update(1.0f, {3.0f, 4.0f});
+        motion = gesture.take();
+        EXPECT_EQ(motion.pan, glm::vec2(3.0f, 4.0f));
     }
 
 } // namespace lfs::vis

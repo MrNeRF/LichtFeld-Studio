@@ -25,6 +25,7 @@ namespace lfs::vis {
 
     class InputController;
     class GraphicsContext;
+    class Win32Trackpad;
     struct VulkanDeviceHooks;
     namespace gui {
         class NativeDragContext;
@@ -116,6 +117,7 @@ namespace lfs::vis {
         void dispatchQueuedEvent(const ::SDL_Event& event);
         void dispatchPolledEvent(const ::SDL_Event& event);
         void flushGamepadEvents();
+        void pumpTrackpad();
         std::vector<SDL_Event> gamepad_events_;
         bool drainQueuedEvents();
         static bool watchEvent(void* userdata, ::SDL_Event* event);
@@ -141,6 +143,7 @@ namespace lfs::vis {
         std::string device_hooks_error_;
         std::unique_ptr<gui::NativeDragContext> native_file_drag_;
         std::unique_ptr<gui::NativeDragScheduler> native_drag_scheduler_;
+        std::unique_ptr<Win32Trackpad> trackpad_;
         std::function<bool()> native_transfer_frame_;
         std::string title_;
         glm::ivec2 window_size_;
