@@ -2818,4 +2818,32 @@ namespace {
         }
     }
 
+    // MRNF's ray-depth state is [N, 6]: past 357,913,941 rows its elements pass INT32_MAX, while its rows do not.
+    // Row assignment there must reach the last rows. Opt-in, 8.6 GB.
+    TEST_F(TensorMetal, IndexPutRowsPastInt32ElementsReachTheLastRows) {
+        if (std::getenv("LFS_TEST_LARGE_SH") == nullptr)
+            GTEST_SKIP() << "Set LFS_TEST_LARGE_SH=1 for this 8.6 GB test";
+        GpuBackendScope scope(GpuBackend::Metal);
+        constexpr size_t n = 357'913'942 + 1024, width = 6;
+        auto state = Tensor::zeros({n, width}, Device::GPU);
+        const std::vector<int> rows{0, 357'913'940, 357'913'941, 357'913'942, static_cast<int>(n - 1)};
+        std::vector<float> values(rows.size() * width);
+        for (size_t i = 0; i < values.size(); ++i)
+            values[i] = static_cast<float>(i + 1);
+        state.index_put_(Tensor::from_vector(rows, {rows.size()}, Device::CPU).to(Device::GPU),
+                         Tensor::from_vector(values, {rows.size(), width}, Device::CPU).to(Device::GPU));
+        for (size_t r = 0; r < rows.size(); ++r) {
+            const size_t row = static_cast<size_t>(rows[r]);
+            const auto written = state.slice(0, row, row + 1).cpu().to_vector();
+            for (size_t c = 0; c < width; ++c)
+                EXPECT_EQ(written[c], values[r * width + c]) << "row " << row << " column " << c;
+        }
+        // Rows next to the written ones stay zero.
+        for (const size_t row : {size_t{1}, size_t{357'913'939}, size_t{357'913'943}, n - 2}) {
+            const auto untouched = state.slice(0, row, row + 1).cpu().to_vector();
+            for (size_t c = 0; c < width; ++c)
+                EXPECT_EQ(untouched[c], 0.0f) << "row " << row << " column " << c;
+        }
+    }
+
 } // namespace
