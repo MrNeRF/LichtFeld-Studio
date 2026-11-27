@@ -213,11 +213,39 @@ namespace lfs::training::mrnf_strategy {
         float* coverage_views = nullptr,
         void* stream = nullptr);
 
+    // Sparse fused equivalent of fold_step_error + zero_frozen + blend_peak_update over
+    // visible_indices[0..n_visible), with peak stored pre-divided by host blend_peak_scale
+    // (inv_peak_scale = 1 / blend_peak_scale). Clears touched per-step rows back to zero.
+    void launch_fold_step_stats_sparse(
+        const uint32_t* visible_indices,
+        size_t n_visible,
+        float* refine_weight,
+        float* densification_info,
+        float* coverage_views,
+        const bool* frozen_mask,
+        size_t frozen_n,
+        float* step_peak,
+        float* peak,
+        float* renders,
+        float inv_peak_scale,
+        size_t N,
+        void* stream = nullptr);
+
     // refine_weight = refine_weight / max(view count, 1), with the count in row 3.
     void launch_refine_error_view_mean(
         float* refine_weight,
         const float* densification_info,
         size_t N,
+        void* stream = nullptr);
+
+    size_t sort_int64_temp_bytes(size_t count);
+
+    void launch_sort_int64(
+        const int64_t* in,
+        int64_t* out,
+        size_t count,
+        void* temp_storage,
+        size_t temp_bytes,
         void* stream = nullptr);
 
     // Need-guided growth: turns the refine window's error into NEED in place,

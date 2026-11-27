@@ -1135,6 +1135,8 @@ namespace lfs::training {
         }
         // The deleted mask and strategy buffers may be dropped or rebuilt
         // by a refine; one that did not exist before goes away again.
+        record(optimizer.lazy_last_step_mutable(), true);
+        record(optimizer.geom_last_step_mutable(), true);
         record(splat.deleted(), true);
         if (strategy_rows) {
             strategy_rows([&](lfs::core::Tensor& rows) { record(rows, true); });

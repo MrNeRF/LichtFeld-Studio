@@ -145,6 +145,20 @@ namespace lfs::training::kernels {
         size_t n,
         cudaStream_t stream = nullptr);
 
+    /**
+     * Sparse equivalent of normalize_by_positive_median + zero_frozen + score_sum.add_(view_scores)
+     * + view_scores.zero_() when only indices in visible_indices[0..n_visible) can be non-zero.
+     * Leaves view_scores completely zeroed after completion.
+     */
+    void launch_normalize_and_accumulate_edge_scores_sparse(
+        float* view_scores,
+        float* score_sum,
+        const bool* frozen_mask,
+        size_t frozen_n,
+        const uint32_t* visible_indices,
+        size_t n_visible,
+        cudaStream_t stream = nullptr);
+
     /// Exact (n/2)-th smallest of all n values in cub::DeviceRadixSort float
     /// order. Synchronizes the stream to return the value.
     [[nodiscard]] float launch_select_median(const float* values, size_t n, cudaStream_t stream);

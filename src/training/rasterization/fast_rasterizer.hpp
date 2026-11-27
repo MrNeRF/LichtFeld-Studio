@@ -162,6 +162,22 @@ namespace lfs::training {
         // dL/d(camera position) float32 [3], the two taken as independent inputs.
         float* grad_w2c = nullptr;
         float* grad_cam_position = nullptr;
+        fast_lfs::rasterization::PostBackwardVisibleHook post_backward_hook{};
+        // Optional MRNF step-stat fold and mean noise fused into the sparse backward.
+        fast_lfs::rasterization::MrnfFoldArgs mrnf_fold{};
+        fast_lfs::rasterization::MrnfNoiseArgs mrnf_noise{};
+    };
+
+    // MRNF per-step work the strategy hands to the sparse FastGS backward. Prepared
+    // before the backward without touching strategy state; committed only when the
+    // backward took the sparse path that consumed it.
+    struct FastGSFusedMrnfHooks {
+        fast_lfs::rasterization::MrnfFoldArgs fold{};
+        fast_lfs::rasterization::MrnfNoiseArgs noise{};
+        core::Tensor frozen_mask_keepalive;
+        double next_blend_peak_scale = 1.0;
+        bool fold_prepared = false;
+        bool noise_prepared = false;
     };
 
     // SteadySplats color variance against each pixel's expected splat color, which the
@@ -216,6 +232,16 @@ namespace lfs::training {
         const lfs::core::Tensor& grad_normal = {},
         bool defer_optimizer_step = false,
         const FastGSColorVarianceLoss& color_variance = {});
+
+    // Flush deferred closed-form lazy Adam updates for all pending rows up to `iteration`.
+    // No-op when the sparse lazy step buffer has not been initialized.
+    void fast_rasterize_flush_lazy_adam(
+        lfs::core::SplatData& gaussian_model,
+        AdamOptimizer& optimizer,
+        int iteration,
+        float dc_reg_weight = 0.0f,
+        float sh_rest_reg_weight = 0.0f,
+        cudaStream_t stream = nullptr);
 
     // The camera gradient (as in FastGSFusedExtraGradients) of a forward against a frozen model: nothing in
     // gaussian_model or its optimizer changes.

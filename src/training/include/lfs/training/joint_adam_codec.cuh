@@ -24,19 +24,26 @@ namespace lfs::training::joint_adam {
         static constexpr float kInvQMax = 1.0f / kQMax;
         static constexpr int kBytesPerCell = (BITS == 16) ? 4 : 2;
 
-        // guarded fast transcode. __logf/__expf for the bulk of the
-        // range; log1pf/expm1f near zero so 0↔0 fixed point stays exact.
-        // Thresholds: x>0.125 → __logf(1+x); log_s>0.118 → __expf-1.
-        __device__ static inline float forward_sqrt_g2(const float sqrt_g2) {
+        // Guarded fast transcode: __logf/__expf for the bulk of the range;
+        // 5-term Horner polynomials near zero (< 1e-6 error, 0<->0 bit-exact)
+        // to avoid log1pf/expm1f register pressure inside fused backward kernels.
+        __device__ static __forceinline__ float forward_sqrt_g2(const float sqrt_g2) {
             const float x = fmaxf(sqrt_g2, 0.0f) * (1.0f / kEpsDevice);
-            return (x > 0.125f) ? __logf(1.0f + x) : log1pf(x);
+            if (x > 0.125f)
+                return __logf(1.0f + x);
+            return x * (1.0f - x * (0.5f - x * (0.333333343f - x * (0.25f - 0.2f * x))));
         }
-        __device__ static inline float inverse_sqrt_g2(const float log_s) {
-            const float e1 = (log_s > 0.118f) ? (__expf(log_s) - 1.0f) : expm1f(log_s);
+        __device__ static __forceinline__ float inverse_sqrt_g2(const float log_s) {
+            float e1;
+            if (log_s > 0.118f) {
+                e1 = __expf(log_s) - 1.0f;
+            } else {
+                e1 = log_s * (1.0f + log_s * (0.5f + log_s * (0.166666672f + log_s * (0.041666668f + 0.008333334f * log_s))));
+            }
             return kEpsDevice * e1;
         }
 
-        __device__ static inline float2 g1g2_to_us(const float g1, const float g2) {
+        __device__ static __forceinline__ float2 g1g2_to_us(const float g1, const float g2) {
             const float sqrt_g2 = sqrtf(fmaxf(g2, 0.0f));
             return make_float2(g1 / (sqrt_g2 + kEpsDevice), forward_sqrt_g2(sqrt_g2));
         }

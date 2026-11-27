@@ -519,6 +519,32 @@ TEST(CalibrationCorrectionTest, DecoupledLossGivesTheFitThePlainLossGradient) {
     decoupled.update();
     const auto actual = decoupled.field().to_vector();
 
+    // Precomputing raw gradient into scratch must match the unprecomputed path bit-for-bit.
+    CalibrationCorrection decoupled_pre(1);
+    warp(decoupled_pre, 0, photo, render, 1000, 1000);
+    auto raw_pre = raw;
+    auto pre_buf = Tensor::full(gradients.grad_corrected.squeeze(0).shape(), 1234.0f, Device::CUDA);
+    kernels::compute_decoupled_raw_gradient(raw_pre, pre_buf);
+    raw_pre.precomputed = pre_buf;
+    decoupled_pre.accumulate(render, gradients.grad_corrected.squeeze(0), {}, values, 5, &raw_pre);
+    decoupled_pre.update();
+    const auto actual_pre = decoupled_pre.field().to_vector();
+    ASSERT_EQ(actual_pre.size(), actual.size());
+    for (size_t i = 0; i < actual.size(); ++i) {
+        EXPECT_NEAR(actual_pre[i], actual[i], 1e-6f) << "idx=" << i;
+    }
+
+    auto sum_ref = gradients.grad_corrected.squeeze(0).clone();
+    auto sum_pre = gradients.grad_corrected.squeeze(0).clone();
+    kernels::accumulate_decoupled_raw_gradient(raw, sum_ref);
+    kernels::accumulate_decoupled_raw_gradient(raw_pre, sum_pre);
+    const auto ref_v = sum_ref.cpu().to_vector();
+    const auto pre_v = sum_pre.cpu().to_vector();
+    ASSERT_EQ(ref_v.size(), pre_v.size());
+    for (size_t i = 0; i < ref_v.size(); ++i) {
+        EXPECT_NEAR(pre_v[i], ref_v[i], 1e-6f) << "grad idx=" << i;
+    }
+
     float largest = 0, difference = 0;
     for (size_t i = 0; i < expected.size(); ++i) {
         largest = std::max(largest, std::abs(expected[i]));

@@ -2006,7 +2006,57 @@ namespace lfs::core {
         bool success = true;
         {
             std::lock_guard<std::mutex> arena_lock(arena_mutex_);
+            // A shrink boundary that decommits nothing on any device only advances
+            // the hysteresis count and resets the logical peak, exactly as
+            // decommit_unused_memory() would; the device sync it needs before
+            // unmapping is skipped then.
+            const auto would_decommit = [](const Arena& arena) {
+                // Mirrors decommit_unused_memory()'s non-release decision after the
+                // boundary count advances. An external backing always takes the
+                // synchronized path: its peer high-water can change between checks.
+                if (arena.external_backing)
+                    return true;
+                const size_t current_offset = arena.offset.load(std::memory_order_acquire);
+                if (arena.d_ptr == 0)
+                    return current_offset == 0 && arena.fallback_buffer != nullptr && arena.owns_fallback_buffer;
+                const std::uint32_t boundaries = std::min<std::uint32_t>(
+                    arena.boundaries_since_growth + 1, std::numeric_limits<std::uint32_t>::max());
+                if (boundaries < 2)
+                    return false;
+                const size_t recent_peak = arena.peak_usage.load(std::memory_order_acquire);
+                const size_t granularity = std::max<size_t>(arena.granularity, 1);
+                const size_t retained_floor =
+                    align_up(recent_peak > std::numeric_limits<size_t>::max() - granularity
+                                 ? std::numeric_limits<size_t>::max()
+                                 : recent_peak + granularity,
+                             granularity);
+                return retained_floor < arena.committed_size &&
+                       arena.committed_size - retained_floor > granularity;
+            };
+            const bool any_decommit =
+                release_all || std::any_of(device_arenas_.begin(), device_arenas_.end(), [&](const auto& entry) {
+                    return entry.second && would_decommit(*entry.second);
+                });
+            if (!any_decommit) {
+                for (auto& [device, arena_ptr] : device_arenas_) {
+                    if (!arena_ptr)
+                        continue;
+                    Arena& arena = *arena_ptr;
+                    arena.boundaries_since_growth = std::min<std::uint32_t>(
+                        arena.boundaries_since_growth + 1, std::numeric_limits<std::uint32_t>::max());
+                    const size_t current_offset = arena.offset.load(std::memory_order_acquire);
+                    size_t lifetime_peak = arena.lifetime_peak_usage.load(std::memory_order_relaxed);
+                    while (current_offset > lifetime_peak) {
+                        if (arena.lifetime_peak_usage.compare_exchange_weak(lifetime_peak, current_offset))
+                            break;
+                    }
+                    arena.peak_usage.store(current_offset, std::memory_order_release);
+                    arena.peak_usage_period.store(0, std::memory_order_release);
+                }
+            }
             for (auto& [device, arena_ptr] : device_arenas_) {
+                if (!any_decommit)
+                    break;
                 if (!arena_ptr) {
                     continue;
                 }

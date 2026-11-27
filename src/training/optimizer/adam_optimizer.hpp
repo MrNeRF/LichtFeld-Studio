@@ -107,6 +107,12 @@ namespace lfs::training {
 
     struct FastGSFusedAdamState {
         bool enabled = false;
+        std::uint32_t step_seed = 0u;
+        std::uint16_t* lazy_last_step = nullptr;
+        int lazy_last_step_n = 0;
+        std::uint16_t* geom_last_step = nullptr;
+        int geom_last_step_n = 0;
+        std::uint32_t last_geom_committed_step = 0u;
         float beta1 = 0.9f;
         float beta2 = 0.999f;
         float eps = 1e-15f;
@@ -235,6 +241,8 @@ namespace lfs::training {
 
         // Control notifications for external mutations
         void reset_state(ParamType type);
+        [[nodiscard]] lfs::core::Tensor& lazy_last_step_mutable() noexcept { return lazy_last_step_; }
+        [[nodiscard]] lfs::core::Tensor& geom_last_step_mutable() noexcept { return geom_last_step_; }
 
         /// Telemetry: times the capacity=0 / no-headroom slow grow path has fired
         /// (process-wide). Loud LOG_WARN is emitted at each site; tests assert this counter.
@@ -272,6 +280,22 @@ namespace lfs::training {
         bool collect_projected_screen_share_ = false;
         int64_t fused_step_iteration_ = -1;
         bool last_step_zeroed_gradients_ = false;
+        // Per-primitive [N, 2] uint8 storage holding uint16_t last-update step
+        // for exact closed-form lazy Adam catch-up on sparse updates.
+        lfs::core::Tensor lazy_last_step_;
+        lfs::core::Tensor geom_last_step_;
+        size_t lazy_reserved_capacity_ = 0;
+        std::uint32_t last_shn_committed_step_ = 0u;
+        std::uint32_t last_geom_committed_step_ = 0u;
+
+        static constexpr std::uint16_t encode_lazy_step_host(const std::uint32_t step) noexcept {
+            return step == 0u ? 0u : static_cast<std::uint16_t>(1u + ((step - 1u) % 65535u));
+        }
+
+        std::uint16_t* ensure_lazy_step_buffer(
+            lfs::core::Tensor& buf, size_t n_live, std::uint32_t init_committed_step, cudaStream_t stream);
+        std::uint16_t* ensure_lazy_last_step(size_t n_live, cudaStream_t stream);
+        std::uint16_t* ensure_geom_last_step(size_t n_live, cudaStream_t stream);
 
         lfs::core::Tensor& get_param(ParamType type);
         std::string param_name(ParamType type) const;

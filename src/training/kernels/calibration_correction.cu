@@ -211,7 +211,7 @@ namespace lfs::training {
 
         // Each block owns four corners of a single cell. Only the update gathers across cells.
         __global__ void accumulate_tile(Tile t, const float2* row, const float* image, const float* rendered,
-                                        const float* grad, const void* weight, bool float_weight, float values,
+                                        const float* grad, const float* raw_grad, const void* weight, bool float_weight, float values,
                                         int margin, float* partials, int chunks, bool first) {
             const int cells = t.side - 1;
             const int cell = blockIdx.y, col = cell % cells, r = cell / cells;
@@ -252,7 +252,7 @@ namespace lfs::training {
                     const float dy = .5f * t.sy * (image[i + t.w] - image[i - t.w]);
                     const float residual = image[i] - rendered[i];
                     ss += residual * residual;
-                    const float g = grad ? -epsilon * values * grad[i] : residual;
+                    const float g = grad ? -epsilon * values * (grad[i] + (raw_grad ? raw_grad[i] : 0.0f)) : residual;
                     q[0] += dx * g;
                     q[1] += dy * g;
                     q[2] += dx * dx;
@@ -458,31 +458,40 @@ namespace lfs::training {
         const int side = tile_.side, cells = side - 1, points = side * side;
         const int chunks = chunks_for(tile_);
         const Tensor* full = &gradient;
+        const float* raw_grad_ptr = nullptr;
         Tensor scratch_sum;
         if (raw && gradient.is_valid()) {
-            // The target enters both parts of the decoupled loss, so its gradient is their sum.
-            Tensor* sum = &gradient_;
-            if (scratch) {
-                const size_t bytes = gradient.numel() * sizeof(float);
-                char* const memory = scratch(bytes);
-                if (!memory)
-                    throw MemoryAllocationError(AllocationFailure{
-                        .requested_bytes = bytes,
-                        .label = "training.loss_step_scratch",
-                        .operation = "calibration.gradient"});
-                scratch_sum = Tensor::from_blob(memory, gradient.shape(), Device::CUDA, DataType::Float32, stream);
-                sum = &scratch_sum;
+            if (raw->precomputed.is_valid()) {
+                LFS_ASSERT(raw->precomputed.is_contiguous() &&
+                           raw->precomputed.dtype() == DataType::Float32 &&
+                           raw->precomputed.numel() == gradient.numel());
+                raw_grad_ptr = raw->precomputed.ptr<float>();
             } else {
-                reserve(gradient_, gradient.shape());
+                // The target enters both parts of the decoupled loss, so its gradient is their sum.
+                Tensor* sum = &gradient_;
+                if (scratch) {
+                    const size_t bytes = gradient.numel() * sizeof(float);
+                    char* const memory = scratch(bytes);
+                    if (!memory)
+                        throw MemoryAllocationError(AllocationFailure{
+                            .requested_bytes = bytes,
+                            .label = "training.loss_step_scratch",
+                            .operation = "calibration.gradient"});
+                    scratch_sum = Tensor::from_blob(memory, gradient.shape(), Device::CUDA, DataType::Float32, stream);
+                    sum = &scratch_sum;
+                } else {
+                    reserve(gradient_, gradient.shape());
+                }
+                sum->copy_from(gradient);
+                kernels::accumulate_decoupled_raw_gradient(*raw, *sum);
+                full = sum;
             }
-            sum->copy_from(gradient);
-            kernels::accumulate_decoupled_raw_gradient(*raw, *sum);
-            full = sum;
         }
         reserve(partials_, {size_t(cells * cells), size_t(chunks), partial_size});
         const float2* row = reinterpret_cast<const float2*>(field_.ptr<float>()) + slot_ * points;
         accumulate_tile<<<dim3(chunks, cells * cells), threads, 0, stream>>>(tile_, row, image_.ptr<float>(), render.ptr<float>(),
-                                                                             full->is_valid() ? full->ptr<float>() : nullptr, weight.is_valid() ? weight.data_ptr() : nullptr, weight.is_valid() && weight.dtype() == DataType::Float32,
+                                                                             full->is_valid() ? full->ptr<float>() : nullptr, raw_grad_ptr,
+                                                                             weight.is_valid() ? weight.data_ptr() : nullptr, weight.is_valid() && weight.dtype() == DataType::Float32,
                                                                              values, margin, partials_.ptr<float>(), chunks, first_tile_);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.calibration.accumulate");
     }

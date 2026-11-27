@@ -20,6 +20,8 @@ namespace lfs::io {
 
 namespace lfs::training {
 
+    struct FastGSFusedMrnfHooks;
+
     class CameraDataset;
 
     /**
@@ -88,6 +90,28 @@ namespace lfs::training {
         // view before adding it to its refine window.
         virtual lfs::core::Tensor edge_score_scratch(int /*iter*/) { return {}; }
         virtual void on_edge_score_accumulated(int /*iter*/) {}
+        // Optional FastGS sparse variant: only rows in visible_indices[0..n_visible) can be non-zero.
+        virtual void on_edge_score_accumulated_sparse(
+            int iter, const uint32_t* /*visible_indices*/, size_t /*n_visible*/, void* /*stream*/) {
+            on_edge_score_accumulated(iter);
+        }
+
+        // Optional FastGS single-tile fast path: folds per-step densification error and blend peak
+        // directly over visible_indices while the forward context is live. Returns true when handled.
+        virtual bool fold_step_stats_sparse(
+            int /*backward_iter*/, const uint32_t* /*visible_indices*/, size_t /*n_visible*/, void* /*stream*/) {
+            return false;
+        }
+
+        // Optional FastGS fused variant of fold_step_stats_sparse (+ the next post_backward's mean
+        // noise when allow_noise): fills `out` for the sparse backward without changing strategy
+        // state. Returns true when the fold was prepared.
+        virtual bool prepare_fastgs_fused_mrnf_hooks(
+            int /*backward_iter*/, bool /*allow_noise*/, void* /*stream*/, FastGSFusedMrnfHooks& /*out*/) {
+            return false;
+        }
+        // Records that the sparse backward consumed the prepared fold (and noise).
+        virtual void commit_fastgs_fused_mrnf_hooks(const FastGSFusedMrnfHooks& /*prepared*/, void* /*stream*/) {}
 
         // Optional FastGS [N] row the backward raises to each splat's largest blend weight (alpha x T)
         // over the pixels of the view. Empty when not in use.

@@ -3460,9 +3460,9 @@ TEST(FastGSTouchedGating, OccludedRowsKeepStatisticsRegularizersAndOptimizerHist
                                 Tensor::full_like(forward->first.depth, 0.03f), Tensor::full_like(forward->first.normal, 0.04f));
         if (gated) {
             // The backward walk marks the rows it reaches; occluded rows stay clear.
-            std::vector<unsigned> touched(visible);
-            EXPECT_EQ(cudaMemcpy(touched.data(), touched_rows, touched.size() * sizeof(unsigned), cudaMemcpyDeviceToHost), cudaSuccess);
-            const auto touched_count = std::count(touched.begin(), touched.end(), 1u);
+            std::vector<std::uint8_t> touched(visible);
+            EXPECT_EQ(cudaMemcpy(touched.data(), touched_rows, touched.size(), cudaMemcpyDeviceToHost), cudaSuccess);
+            const auto touched_count = std::count(touched.begin(), touched.end(), std::uint8_t{1});
             EXPECT_GT(touched_count, 0);
             EXPECT_LT(touched_count, visible / 2);
         }

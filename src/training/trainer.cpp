@@ -1253,6 +1253,8 @@ namespace lfs::training {
         current_iteration_ = 0;
         current_loss_ = 0.0f;
         train_dataset_size_ = 0;
+        last_morton_size_ = 0;
+        last_morton_iter_ = 0;
         setCameraLossHeatmap(nullptr);
 
         LOG_DEBUG("Trainer cleanup complete");
@@ -1944,10 +1946,22 @@ namespace lfs::training {
             }
 
             std::optional<RawGradientResidual> raw_residual;
-            const auto raw_gradient = lfs::training::kernels::decoupled_raw_gradient(ctx);
-            if (fit)
+            auto raw_gradient = lfs::training::kernels::decoupled_raw_gradient(ctx);
+            if (fit) {
+                if (!raw_gradient.precomputed.is_valid() && loss_step_scratch_ && grads.grad_corrected.is_valid()) {
+                    const size_t bytes = grads.grad_corrected.numel() * sizeof(float);
+                    if (char* const memory = loss_step_scratch_(bytes)) {
+                        auto precomputed = lfs::core::Tensor::from_blob(
+                            memory, grads.grad_corrected.shape(), lfs::core::Device::CUDA,
+                            lfs::core::DataType::Float32, lfs::core::getCurrentCUDAStream());
+                        lfs::training::kernels::compute_decoupled_raw_gradient(
+                            raw_gradient, precomputed);
+                        raw_gradient.precomputed = std::move(precomputed);
+                    }
+                }
                 fit->accumulate(corrected, grads.grad_corrected, {}, photometric_value_count(),
                                 photometric_valid_padding, &raw_gradient, loss_step_scratch_);
+            }
             add_gradient_residual(corrected, gt_image, raw_rendered, {}, opt_params, iteration,
                                   loss_tensor, grads.grad_corrected, raw_residual);
             return PhotometricLossResult{
@@ -2150,9 +2164,22 @@ namespace lfs::training {
                 }
             }
 
-            if (fit)
+            if (fit) {
+                if (raw_gradient && !raw_gradient->precomputed.is_valid() && loss_step_scratch_ &&
+                    grad_corrected.is_valid()) {
+                    const size_t bytes = grad_corrected.numel() * sizeof(float);
+                    if (char* const memory = loss_step_scratch_(bytes)) {
+                        auto precomputed = lfs::core::Tensor::from_blob(
+                            memory, grad_corrected.shape(), lfs::core::Device::CUDA,
+                            lfs::core::DataType::Float32, lfs::core::getCurrentCUDAStream());
+                        lfs::training::kernels::compute_decoupled_raw_gradient(
+                            *raw_gradient, precomputed);
+                        raw_gradient->precomputed = std::move(precomputed);
+                    }
+                }
                 fit->accumulate(corrected, grad_corrected, photometric_weight, mask_normalization, 0,
                                 raw_gradient ? &*raw_gradient : nullptr, loss_step_scratch_);
+            }
 
             // The loss already reads this normalization; epsilon alone means no contributing pixels.
             if (has_user_mask && mode == param::MaskMode::Ignore && !empty_ignore_mask_warned_ &&
@@ -2254,13 +2281,50 @@ namespace lfs::training {
     }
 
     void Trainer::maybe_morton_reorder(const int iter) {
-        if (!morton_reorder_due(iter) || !strategy_) {
+        if (!strategy_ || params_.optimization.morton_reorder_interval == 0) {
             return;
         }
         auto& model = strategy_->get_model();
-        static_cast<void>(morton::apply_morton_reorder(
+        const size_t n = static_cast<size_t>(model.size());
+        const bool scheduled = morton_reorder_due(iter);
+        bool growth_due = false;
+        bool refine_cadence_due = false;
+        if (!scheduled && strategy_->is_refining(iter) && iter > 0 &&
+            static_cast<size_t>(iter) <= params_.optimization.stop_refine && n >= 500000) {
+            if (last_morton_size_ == 0) {
+                growth_due = (n >= 1000000);
+            } else {
+                const size_t step_threshold =
+                    last_morton_size_ + std::max<size_t>(500000, last_morton_size_ / 5);
+                const size_t max_cap =
+                    params_.optimization.max_cap > 0
+                        ? static_cast<size_t>(params_.optimization.max_cap)
+                        : 0;
+                const bool hit_cap_with_tail =
+                    max_cap > 0 && n >= max_cap && n >= last_morton_size_ + 250000;
+                growth_due = (n >= step_threshold) || hit_cap_with_tail;
+            }
+            constexpr int kActiveRefineMortonCadence = 1500;
+            refine_cadence_due = (iter - last_morton_iter_) >= kActiveRefineMortonCadence;
+            // A scheduled reorder within kScheduledMortonLead steps stands in for the cadence one.
+            constexpr std::size_t kScheduledMortonLead = 500;
+            const std::size_t interval = params_.optimization.morton_reorder_interval;
+            const std::size_t next_scheduled = (static_cast<std::size_t>(iter) / interval + 1) * interval;
+            if (next_scheduled - static_cast<std::size_t>(iter) < kScheduledMortonLead &&
+                next_scheduled <= params_.optimization.stop_refine) {
+                refine_cadence_due = false;
+            }
+        }
+        if (!scheduled && !growth_due && !refine_cadence_due) {
+            return;
+        }
+        const auto res = morton::apply_morton_reorder(
             model, &strategy_->get_optimizer(), nullptr,
-            [this](const morton::RowVisitor& visit) { strategy_->for_each_gaussian_row(visit); }));
+            [this](const morton::RowVisitor& visit) { strategy_->for_each_gaussian_row(visit); });
+        if (res.applied) {
+            last_morton_size_ = n;
+            last_morton_iter_ = iter;
+        }
     }
 
     void Trainer::setCropBoxSnapshot(std::optional<TrainingCropBoxGeometry> geometry) {
@@ -6950,6 +7014,11 @@ namespace lfs::training {
                     const size_t model_size_before = static_cast<size_t>(model.size());
                     ++mutation_epoch_;
                     persistent_commit = true;
+                    if (need_exclusive && iter > 1) {
+                        fast_rasterize_flush_lazy_adam(
+                            model, strategy_->get_optimizer(), iter - 1,
+                            step_params.dc_reg, step_params.sh_rest_reg);
+                    }
                     post_backward_or_undo(iter, r_output, refine_undone);
                     maybe_morton_reorder(iter);
                     fastgs_strategy_hooks_at_start = true;
@@ -7092,7 +7161,12 @@ namespace lfs::training {
                         }
                         // Fused backward owns regularization accumulation, avoiding
                         // separate full-N kernels and their temporary allocations.
-                        if (scale_weight > 0.0f) {
+                        // On rendered-only strategies, the scalars are only consumed
+                        // on readback iterations, so skip zeroing and reductions on
+                        // other steps.
+                        const bool need_reg_loss_scalars =
+                            !fused_extra_gradients.reg_rendered_only || is_loss_readback_iteration(iter);
+                        if (need_reg_loss_scalars && scale_weight > 0.0f) {
                             if (!fused_scale_reg_loss_.is_valid()) {
                                 fused_scale_reg_loss_ = lfs::core::Tensor::zeros(
                                     {1}, lfs::core::Device::CUDA);
@@ -7102,28 +7176,28 @@ namespace lfs::training {
                                 fused_scale_reg_loss_.ptr<float>();
                             fused_scale_reg_loss_gpu = fused_scale_reg_loss_;
                         }
-                        if (step_params.erank_reg > 0.0f) {
+                        if (need_reg_loss_scalars && step_params.erank_reg > 0.0f) {
                             if (!fused_erank_reg_loss_.is_valid())
                                 fused_erank_reg_loss_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
                             fused_erank_reg_loss_.zero_();
                             fused_erank_reg_loss_gpu = fused_erank_reg_loss_;
                             fused_extra_gradients.erank_reg_loss_out = fused_erank_reg_loss_gpu.ptr<float>();
                         }
-                        if (step_params.dc_reg > 0.0f) {
+                        if (need_reg_loss_scalars && step_params.dc_reg > 0.0f) {
                             if (!fused_dc_reg_loss_.is_valid())
                                 fused_dc_reg_loss_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
                             fused_dc_reg_loss_.zero_();
                             fused_dc_reg_loss_gpu = fused_dc_reg_loss_;
                             fused_extra_gradients.dc_reg_loss_out = fused_dc_reg_loss_gpu.ptr<float>();
                         }
-                        if (step_params.sh_rest_reg > 0.0f && model.get_active_sh_degree() > 0) {
+                        if (need_reg_loss_scalars && step_params.sh_rest_reg > 0.0f && model.get_active_sh_degree() > 0) {
                             if (!fused_sh_rest_reg_loss_.is_valid())
                                 fused_sh_rest_reg_loss_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
                             fused_sh_rest_reg_loss_.zero_();
                             fused_sh_rest_reg_loss_gpu = fused_sh_rest_reg_loss_;
                             fused_extra_gradients.sh_rest_reg_loss_out = fused_sh_rest_reg_loss_gpu.ptr<float>();
                         }
-                        if (step_params.opacity_reg > 0.0f) {
+                        if (need_reg_loss_scalars && step_params.opacity_reg > 0.0f) {
                             if (!fused_opacity_reg_loss_.is_valid()) {
                                 fused_opacity_reg_loss_ = lfs::core::Tensor::zeros(
                                     {1}, lfs::core::Device::CUDA);
@@ -8649,6 +8723,62 @@ namespace lfs::training {
                                     if (strategy_->is_refining(iter))
                                         model_write_lock.lock();
                                     const cudaStream_t backward_stream = fast_ctx->forward_ctx.stream;
+                                    struct PostBackwardSparseHookCtx {
+                                        IStrategy* strategy = nullptr;
+                                        int iter = 0;
+                                        bool do_edge = false;
+                                        bool do_fold = false;
+                                        bool edge_handled = false;
+                                        FastGSFusedMrnfHooks mrnf_hooks{};
+                                    } hook_ctx{
+                                        .strategy = strategy_.get(),
+                                        .iter = iter,
+                                        .do_edge = fused_extra_gradients.edge_score_out != nullptr,
+                                        .do_fold = fastgs_strategy_hooks_at_start && !in_popspa && !in_sparsification,
+                                    };
+                                    if (hook_ctx.strategy != nullptr && (hook_ctx.do_edge || hook_ctx.do_fold)) {
+                                        fused_extra_gradients.post_backward_hook = {
+                                            .fn = [](void* user,
+                                                     const unsigned int* visible_indices,
+                                                     size_t n_visible,
+                                                     bool used_sparse_backward,
+                                                     cudaStream_t stream) {
+                                                auto* ctx = static_cast<PostBackwardSparseHookCtx*>(user);
+                                                if (ctx->do_edge) {
+                                                    ctx->strategy->on_edge_score_accumulated_sparse(
+                                                        ctx->iter, visible_indices, n_visible, stream);
+                                                    ctx->edge_handled = true;
+                                                }
+                                                if (ctx->do_fold) {
+                                                    if (used_sparse_backward && ctx->mrnf_hooks.fold_prepared) {
+                                                        ctx->strategy->commit_fastgs_fused_mrnf_hooks(ctx->mrnf_hooks, stream);
+                                                    } else {
+                                                        static_cast<void>(ctx->strategy->fold_step_stats_sparse(
+                                                            ctx->iter, visible_indices, n_visible, stream));
+                                                    }
+                                                }
+                                            },
+                                            .user = &hook_ctx,
+                                        };
+                                    }
+                                    if (hook_ctx.strategy != nullptr && hook_ctx.do_fold) {
+                                        // The next step's post_backward noise is fused only when nothing
+                                        // reads the model between this backward and that post_backward.
+                                        const int total_iterations = get_total_iterations();
+                                        const bool allow_noise =
+                                            !pose_refinement_ && iter < total_iterations &&
+                                            !(evaluator_->is_enabled() && evaluator_->should_evaluate(iter, total_iterations)) &&
+                                            std::find(step_params.save_steps.begin(), step_params.save_steps.end(),
+                                                      static_cast<size_t>(iter)) == step_params.save_steps.end() &&
+                                            (params_.dataset.timelapse_images.empty() ||
+                                             iter % params_.dataset.timelapse_every != 0) &&
+                                            !(get_active_sparsify_steps() > 0 && iter == get_sparsity_boundary_iteration());
+                                        if (hook_ctx.strategy->prepare_fastgs_fused_mrnf_hooks(
+                                                iter, allow_noise, backward_stream, hook_ctx.mrnf_hooks)) {
+                                            fused_extra_gradients.mrnf_fold = hook_ctx.mrnf_hooks.fold;
+                                            fused_extra_gradients.mrnf_noise = hook_ctx.mrnf_hooks.noise;
+                                        }
+                                    }
                                     fast_rasterize_backward(*fast_ctx, raster_grad, strategy_->get_model(),
                                                             gaussian_optimizer, tile_grad_alpha,
                                                             use_pixel_error_densification ? tile_error_map : lfs::core::Tensor{},
@@ -8657,9 +8787,12 @@ namespace lfs::training {
                                                             fused_extra_gradients,
                                                             tile_grad_depth,
                                                             tile_grad_normal, in_popspa, color_variance);
+                                    fused_extra_gradients.post_backward_hook = {};
+                                    fused_extra_gradients.mrnf_fold = {};
+                                    fused_extra_gradients.mrnf_noise = {};
                                     if (pose_refinement_)
                                         pose_refinement_->step(*cam, iter, backward_stream);
-                                    if (fused_extra_gradients.edge_score_out != nullptr) {
+                                    if (fused_extra_gradients.edge_score_out != nullptr && !hook_ctx.edge_handled) {
                                         strategy_->on_edge_score_accumulated(iter);
                                     }
                                     if (model_write_lock.owns_lock()) {
@@ -8727,7 +8860,8 @@ namespace lfs::training {
                         LFS_VRAM_SCOPE("train.regularizers.scale_loss");
                         LOG_VRAM_DIFF("train.regularizers.scale_loss");
                         if (fastgs_path) {
-                            loss_tensor_gpu = loss_tensor_gpu + fused_scale_reg_loss_gpu;
+                            if (fused_scale_reg_loss_gpu.is_valid())
+                                loss_tensor_gpu = loss_tensor_gpu + fused_scale_reg_loss_gpu;
                         } else {
                             auto scale_loss_result = compute_scale_reg_loss(strategy_->get_model(), gaussian_optimizer, step_params);
                             if (!scale_loss_result) {
@@ -8757,7 +8891,8 @@ namespace lfs::training {
                         LFS_VRAM_SCOPE("train.regularizers.opacity_loss");
                         LOG_VRAM_DIFF("train.regularizers.opacity_loss");
                         if (fastgs_path) {
-                            loss_tensor_gpu = loss_tensor_gpu + fused_opacity_reg_loss_gpu;
+                            if (fused_opacity_reg_loss_gpu.is_valid())
+                                loss_tensor_gpu = loss_tensor_gpu + fused_opacity_reg_loss_gpu;
                         } else {
                             auto opacity_loss_result = compute_opacity_reg_loss(
                                 strategy_->get_model(), gaussian_optimizer, step_params);
@@ -9005,6 +9140,11 @@ namespace lfs::training {
                             // This boundary capture has priority over a writer
                             // still in flight: otherwise the request would be
                             // coalesced until after pruning.
+                            if (strategy_ && iter > 0) {
+                                fast_rasterize_flush_lazy_adam(
+                                    strategy_->get_model(), strategy_->get_optimizer(), iter,
+                                    params_.optimization.dc_reg, params_.optimization.sh_rest_reg);
+                            }
                             finish_project_writer();
                             static_cast<void>(
                                 request_project_save(
@@ -9400,6 +9540,11 @@ namespace lfs::training {
                 refit->restore();
             }
         });
+        if (strategy_ && iteration > 0) {
+            fast_rasterize_flush_lazy_adam(
+                strategy_->get_model(), strategy_->get_optimizer(), iteration,
+                params_.optimization.dc_reg, params_.optimization.sh_rest_reg);
+        }
         return evaluator_->evaluate(iteration, strategy_->get_model(), val_dataset_, background_, image_loader,
                                     std::move(on_view_boundary));
     }
@@ -10178,6 +10323,11 @@ namespace lfs::training {
                 drain_requested_project_snapshot = requested_project_path_.has_value();
             }
             if (drain_requested_project_snapshot) {
+                if (strategy_ && terminal_iteration > 0) {
+                    fast_rasterize_flush_lazy_adam(
+                        strategy_->get_model(), strategy_->get_optimizer(), terminal_iteration,
+                        params_.optimization.dc_reg, params_.optimization.sh_rest_reg);
+                }
                 consume_requested_project_snapshot(terminal_iteration);
                 finish_project_writer();
             }
@@ -10565,6 +10715,11 @@ namespace lfs::training {
                 "Project destination must end in .licht");
         }
 
+        if (strategy_ && iteration > 0) {
+            fast_rasterize_flush_lazy_adam(
+                strategy_->get_model(), strategy_->get_optimizer(), iteration,
+                params_.optimization.dc_reg, params_.optimization.sh_rest_reg);
+        }
         finish_project_writer();
         auto chapters =
             reserve_project_snapshot_chapters();

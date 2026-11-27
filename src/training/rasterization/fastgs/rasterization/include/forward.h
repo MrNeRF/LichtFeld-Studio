@@ -15,20 +15,26 @@ namespace fast_lfs::rasterization {
     struct ForwardResult {
         int n_instances = 0;
         int n_visible = 0;
+        int visible_capacity = 0;
         char* per_primitive_buffers = nullptr;
         size_t per_primitive_buffers_size = 0;
         uint* primitive_work_indices = nullptr;
+        uint* visible_indices = nullptr;
+        std::uint8_t* active_block_flag = nullptr;
+        uint* active_block_ids = nullptr;
+        int n_active_blocks = 0;
         float3* primitive_normals = nullptr;
         uint* sorted_primitive_indices = nullptr;
         size_t sorted_primitive_indices_size = 0;
         unsigned char* contributor_masks = nullptr;
         uint* contributor_positions = nullptr;
-        uint* primitive_touched = nullptr;
+        std::uint8_t* primitive_touched = nullptr;
         size_t contributor_storage_size = 0;
         size_t per_instance_sort_scratch_size = 0;
         size_t per_instance_sort_total_size = 0;
         size_t visible_sort_scratch_size = 0;
         unsigned tile_sort_key_bytes = 0;
+        bool visible_capacity_overflow = false;
     };
 
     /// Sorted indices live in the owning rasterizer arena frame. The frame
@@ -107,6 +113,7 @@ namespace fast_lfs::rasterization {
         bool mip_filter,
         cudaStream_t stream,
         float* max_screen_share = nullptr,
-        float dilation_scale = 1.0f);
+        float dilation_scale = 1.0f,
+        int visible_capacity_hint = 0);
 
 } // namespace fast_lfs::rasterization

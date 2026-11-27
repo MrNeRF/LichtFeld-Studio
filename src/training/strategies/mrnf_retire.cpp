@@ -7,6 +7,7 @@
 // never reach a photo or show the least of their opacity, and large splats hidden behind others are
 // spared the decay they cannot undo.
 
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "kernels/mrnf_kernels.hpp"
 #include "mrnf.hpp"
 #include "strategy_utils.hpp"
@@ -41,13 +42,36 @@ namespace lfs::training {
         return _params && !_params->gut && !_topology_frozen;
     }
 
+    void MRNF::flush_blend_peak_scale() {
+        if (_blend_peak_scale == 1.0) {
+            return;
+        }
+        if (_blend_peak.is_valid() && _blend_peak.numel() > 0) {
+            const cudaStream_t cur_stream = lfs::core::getCurrentCUDAStream();
+            _blend_peak.sync_to_stream(cur_stream);
+            _blend_peak.mul_(static_cast<float>(_blend_peak_scale));
+            _blend_peak.set_stream(cur_stream);
+        }
+        _blend_peak_scale = 1.0;
+    }
+
     void MRNF::ensure_peak_rows() {
         using namespace lfs::core;
         const size_t n = _splat_data ? static_cast<size_t>(_splat_data->size()) : 0;
-        for (auto* row : {&_blend_peak, &_step_blend_peak, &_renders}) {
-            if (!peak_rows_on()) {
+        if (!peak_rows_on()) {
+            _blend_peak_scale = 1.0;
+            for (auto* row : {&_blend_peak, &_step_blend_peak, &_renders})
                 *row = Tensor();
-            } else if (!row->is_valid() || row->ndim() != 1 || row->numel() > n) {
+            return;
+        }
+        if (_blend_peak.is_valid() && _blend_peak.ndim() == 1 && _blend_peak.numel() == n &&
+            _step_blend_peak.is_valid() && _step_blend_peak.ndim() == 1 && _step_blend_peak.numel() == n &&
+            _renders.is_valid() && _renders.ndim() == 1 && _renders.numel() == n) {
+            return;
+        }
+        flush_blend_peak_scale();
+        for (auto* row : {&_blend_peak, &_step_blend_peak, &_renders}) {
+            if (!row->is_valid() || row->ndim() != 1 || row->numel() > n) {
                 *row = zero_splat_vector(n, _splat_data->means().device());
             } else if (const size_t rows = row->numel(); rows < n) {
                 *row = Tensor::cat(std::vector<Tensor>{*row, zero_splat_vector(n - rows, row->device())}, 0);
@@ -66,6 +90,7 @@ namespace lfs::training {
     // After the backward: folds the step's peak into the running peak, which halves every
     // MRNF_PEAK_HALF_LIFE_STEPS, and counts the step as a render where the splat was seen.
     void MRNF::fold_blend_peak() {
+        flush_blend_peak_scale();
         const size_t n = static_cast<size_t>(_splat_data->size());
         if (n == 0 || _blend_peak.numel() != n || _step_blend_peak.numel() != n || _renders.numel() != n) {
             return;
@@ -80,6 +105,7 @@ namespace lfs::training {
     // opacity stays; one that never reaches a photo, or only a small share of its opacity, goes. Their
     // slots go to growth where the error is. Adds them to prune_mask.
     void MRNF::retire_lowest_reach(const int iter, lfs::core::Tensor& prune_mask) {
+        flush_blend_peak_scale();
         _last_retired = 0;
         if (!peak_rows_on()) {
             return;
@@ -173,9 +199,11 @@ namespace lfs::training {
         if (!peak_rows_on() || n == 0 || _blend_peak.numel() != n || _renders.numel() != n) {
             return {};
         }
+        const Tensor peak =
+            _blend_peak_scale == 1.0 ? _blend_peak : _blend_peak.mul(static_cast<float>(_blend_peak_scale));
         Tensor factor = Tensor::empty({n}, Device::CUDA, DataType::Float32);
         mrnf_strategy::launch_mrnf_covered_factor(
-            _blend_peak.ptr<float>(), _renders.ptr<float>(), _splat_data->opacity_raw().ptr<float>(),
+            peak.ptr<float>(), _renders.ptr<float>(), _splat_data->opacity_raw().ptr<float>(),
             _splat_data->scaling_raw().ptr<float>(), MRNF_RETIRE_GRACE, MRNF_COVERED_REACH,
             _covered_log_size_floor, n, factor.ptr<float>());
         return factor;

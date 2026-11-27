@@ -520,6 +520,8 @@ namespace lfs::training::kernels {
     [[nodiscard]] DecoupledRawGradient decoupled_raw_gradient(const MaskedDecoupledFusedL1SSIMContext& ctx);
     // grad_image += the raw-render gradient; grad_image has the raw render's element count.
     void accumulate_decoupled_raw_gradient(const DecoupledRawGradient& raw, lfs::core::Tensor& grad_image);
+    // grad_out = the raw-render gradient (overwrites grad_out without reading it).
+    void compute_decoupled_raw_gradient(const DecoupledRawGradient& raw, lfs::core::Tensor& grad_out);
 
     // ============================================================================
     // Blur-tolerant SSIM (MRNF)

@@ -42,7 +42,7 @@ namespace fast_lfs::rasterization {
         size_t sorted_primitive_indices_size = 0;
         unsigned char* contributor_masks = nullptr;
         uint* contributor_positions = nullptr;
-        uint* primitive_touched = nullptr;
+        std::uint8_t* primitive_touched = nullptr;
         size_t contributor_storage_size = 0;
         size_t per_instance_sort_scratch_size = 0;
         size_t per_instance_sort_total_size = 0;
@@ -50,6 +50,7 @@ namespace fast_lfs::rasterization {
         unsigned tile_sort_key_bytes = 0;
         int n_instances = 0;
         int n_visible = 0;
+        int visible_capacity = 0;
         int sh_layout_bases = 1;
         // The forward's dilation factor; the backward differentiates the same kernel.
         float dilation_scale = 1.0f;
@@ -59,6 +60,10 @@ namespace fast_lfs::rasterization {
         cudaStream_t stream = nullptr;
         void* primitive_normals = nullptr;
         const uint* primitive_work_indices = nullptr;
+        const uint* visible_indices = nullptr;
+        const std::uint8_t* active_block_flag = nullptr;
+        const uint* active_block_ids = nullptr;
+        int n_active_blocks = 0;
         // Backward-phase allocator for the gradient helpers, which backward_raw
         // takes from the room the forward reserved for them.
         std::function<char*(size_t)> phase_allocator;
@@ -126,6 +131,16 @@ namespace fast_lfs::rasterization {
     struct BackwardOutputs {
         bool success;
         const char* error_message;
+        bool used_sparse_backward = false;
+    };
+
+    // Optional callback fired on the backward stream right after backward kernels
+    // complete and before release_forward_context() returns the arena frame,
+    // giving callers zero-copy access to visible_indices[0..n_visible).
+    struct PostBackwardVisibleHook {
+        void (*fn)(void* user, const uint* visible_indices, size_t n_visible,
+                   bool used_sparse_backward, cudaStream_t stream) = nullptr;
+        void* user = nullptr;
     };
 
     BackwardOutputs backward_raw(
@@ -171,10 +186,18 @@ namespace fast_lfs::rasterization {
         unsigned shN_value_bits = 0u,
         const float* edge_weight_map = nullptr,
         float* edge_score_out = nullptr,
-        const ColorVarianceLoss& color_variance = {});
+        const ColorVarianceLoss& color_variance = {},
+        PostBackwardVisibleHook post_backward_hook = {});
 
     // Pre-compile all CUDA kernels to avoid JIT delays during rendering
     void warmup_kernels();
+
+    void flush_lazy_adam_raw(
+        const FusedAdamSettings& fused_adam,
+        int n_primitives,
+        int active_sh_bases,
+        int sh_layout_bases,
+        cudaStream_t stream);
 
     /// cudaPointerGetAttributes preflight call count (0 in Release/NDEBUG).
     [[nodiscard]] std::uint64_t preflight_pointer_attr_call_count() noexcept;

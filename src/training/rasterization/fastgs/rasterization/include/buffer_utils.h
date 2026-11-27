@@ -396,40 +396,6 @@ namespace fast_lfs::rasterization {
         bool poison_ = false;
     };
 
-    // The visibility mask and its block scan are forward-only.  The original
-    // order map remains persistent because backward consumes it.  Keeping the
-    // map avoids a rank/popcount walk in the full-N backward preprocess.  The
-    // compact IDs are sized to the visible count once the scan knows it.
-    struct VisibilityBuffers {
-        uint* visibility_mask;
-        uint* block_counts;
-        uint* block_offsets;
-        uint* primitive_work_indices;
-        uint* visible_indices = nullptr;
-        char* cub_workspace;
-        size_t cub_workspace_size;
-
-        static VisibilityBuffers from_blob(char*& blob, int n_primitives) {
-            VisibilityBuffers buffers{};
-            const size_t mask_words = (static_cast<size_t>(n_primitives) + 31u) / 32u;
-            const size_t n_blocks = (static_cast<size_t>(n_primitives) +
-                                     config::visibility_block_size - 1) /
-                                    config::visibility_block_size;
-            obtain(blob, buffers.visibility_mask, mask_words, 128);
-            obtain(blob, buffers.block_counts, n_blocks, 128);
-            obtain(blob, buffers.block_offsets, n_blocks, 128);
-            obtain(blob, buffers.primitive_work_indices, n_primitives, 128);
-            LFS_CUDA_CHECK_MSG(
-                cub::DeviceScan::InclusiveSum(
-                    nullptr, buffers.cub_workspace_size,
-                    buffers.block_counts, buffers.block_offsets,
-                    static_cast<int>(n_blocks)),
-                "FastGS visibility workspace query (n_primitives={})", n_primitives);
-            obtain(blob, buffers.cub_workspace, buffers.cub_workspace_size, 128);
-            return buffers;
-        }
-    };
-
     /// 128-bit packed screen position + pixel-space AABB for warp sub-tile culling.
     /// Layout: float2 mean2d (8B) + ushort4 pixel_bbox (8B) = 16B, one 128-bit load.
     /// pixel_bbox = (x_min, x_max_excl, y_min, y_max_excl) in absolute pixel coords.
@@ -450,75 +416,75 @@ namespace fast_lfs::rasterization {
     static_assert(sizeof(ProjectedRecord) == 48);
     static_assert(alignof(ProjectedRecord) == 16);
 
+    // Single-pass decoupled-lookback header and packed 64-bit per-block visibility scan state.
+    // Packed tile word: bits [63:62] = status (0=invalid, 1=aggregate, 2=inclusive), bits [31:0] = vis count.
+    struct alignas(16) ScanHeader {
+        std::uint32_t next_block;
+        std::uint32_t n_visible;
+        std::uint32_t n_active_blocks;
+        std::uint32_t pad;
+        std::uint64_t n_instances;
+        std::uint64_t pad_tail;
+    };
+    static_assert(sizeof(ScanHeader) == 32);
+
     struct PerPrimitiveBuffers {
-        size_t cub_workspace_size;
-        char* cub_workspace;
+        ScanHeader* scan_header;
+        std::uint64_t* scan_tiles;
         uint* depth_keys;
         float* depths;
-        std::uint64_t* n_touched_tiles;
-        std::uint64_t* offset;
+        // Per-visible tile counts and their inclusive scan. The instance total is
+        // checked against INT_MAX before the scan, so 32 bits cannot overflow.
+        uint* n_touched_tiles;
+        uint* offset;
         ushort4* screen_bounds;
         ProjectedRecord* projected;
         FastGSForwardStatus* forward_status;
 
-        static PerPrimitiveBuffers from_persistent_blob(char*& blob, int n_visible) {
+        static PerPrimitiveBuffers from_persistent_blob(char*& blob, int visible_cap) {
             PerPrimitiveBuffers buffers{};
-            obtain(blob, buffers.depths, n_visible, 128);
-            obtain(blob, buffers.projected, n_visible, 128);
+            obtain(blob, buffers.depths, visible_cap, 128);
+            obtain(blob, buffers.projected, visible_cap, 128);
             obtain(blob, buffers.forward_status, 1, 128);
             return buffers;
         }
 
-        static PerPrimitiveBuffers from_phase_allocator(
-            const std::function<char*(size_t)>& allocator, int n_visible) {
+        static PerPrimitiveBuffers from_phase_allocator_single_pass(
+            const std::function<char*(size_t)>& allocator, int n_primitives, int visible_cap) {
             PerPrimitiveBuffers buffers{};
-            buffers.depth_keys = reinterpret_cast<uint*>(allocator(static_cast<size_t>(n_visible) * sizeof(uint)));
-            buffers.n_touched_tiles = reinterpret_cast<std::uint64_t*>(
-                allocator(static_cast<size_t>(n_visible) * sizeof(std::uint64_t)));
-            buffers.offset = reinterpret_cast<std::uint64_t*>(
-                allocator(static_cast<size_t>(n_visible) * sizeof(std::uint64_t)));
+            const size_t n_blocks =
+                (static_cast<size_t>(n_primitives) + static_cast<size_t>(config::block_size_preprocess) - 1u) /
+                static_cast<size_t>(config::block_size_preprocess);
+            const size_t scan_bytes = sizeof(ScanHeader) + n_blocks * sizeof(std::uint64_t);
+            char* scan_mem = allocator(scan_bytes);
+            buffers.scan_header = reinterpret_cast<ScanHeader*>(scan_mem);
+            buffers.scan_tiles = reinterpret_cast<std::uint64_t*>(scan_mem + sizeof(ScanHeader));
+            buffers.depth_keys = reinterpret_cast<uint*>(allocator(static_cast<size_t>(visible_cap) * sizeof(uint)));
+            buffers.n_touched_tiles = reinterpret_cast<uint*>(
+                allocator(static_cast<size_t>(visible_cap) * sizeof(uint)));
+            buffers.offset = reinterpret_cast<uint*>(
+                allocator(static_cast<size_t>(visible_cap) * sizeof(uint)));
             buffers.screen_bounds = reinterpret_cast<ushort4*>(
-                allocator(static_cast<size_t>(n_visible) * sizeof(ushort4)));
-            if (n_visible > 0) {
-                LFS_CUDA_CHECK_MSG(
-                    cub::DeviceScan::InclusiveSum(
-                        nullptr, buffers.cub_workspace_size,
-                        buffers.n_touched_tiles, buffers.offset,
-                        n_visible),
-                    "FastGS workspace query (n_visible={})", n_visible);
-                LFS_ASSERT_MSG(
-                    buffers.cub_workspace_size > 0,
-                    "FastGS CUB scan returned an empty workspace for nonempty primitive input");
-                buffers.cub_workspace = allocator(buffers.cub_workspace_size);
-            }
+                allocator(static_cast<size_t>(visible_cap) * sizeof(ushort4)));
             return buffers;
         }
 
-        static size_t required_persistent(int n_visible) {
+        static size_t required_persistent(int visible_cap) {
             char* size = nullptr;
-            from_persistent_blob(size, n_visible);
+            from_persistent_blob(size, visible_cap);
             return reinterpret_cast<size_t>(size) + 128;
         }
 
-        static size_t required_phase(int n_visible) {
-            char* size = nullptr;
-            PerPrimitiveBuffers buffers{};
-            obtain(size, buffers.depth_keys, n_visible, 128);
-            obtain(size, buffers.n_touched_tiles,
-                   static_cast<size_t>(n_visible) * sizeof(std::uint64_t) / sizeof(std::uint64_t), 128);
-            obtain(size, buffers.offset,
-                   static_cast<size_t>(n_visible) * sizeof(std::uint64_t) / sizeof(std::uint64_t), 128);
-            obtain(size, buffers.screen_bounds, n_visible, 128);
-            if (n_visible > 0) {
-                LFS_CUDA_CHECK_MSG(
-                    cub::DeviceScan::InclusiveSum(
-                        nullptr, buffers.cub_workspace_size,
-                        buffers.n_touched_tiles, buffers.offset,
-                        n_visible),
-                    "FastGS workspace query (n_visible={})", n_visible);
-                obtain(size, buffers.cub_workspace, buffers.cub_workspace_size, 128);
-            }
-            return reinterpret_cast<size_t>(size) + 128;
+        static size_t required_phase_single_pass(int n_primitives, int visible_cap) {
+            const auto align256 = [](size_t b) { return (b + 255u) & ~size_t{255u}; };
+            const size_t n_blocks =
+                (static_cast<size_t>(n_primitives) + static_cast<size_t>(config::block_size_preprocess) - 1u) /
+                static_cast<size_t>(config::block_size_preprocess);
+            return align256(sizeof(ScanHeader) + n_blocks * sizeof(std::uint64_t)) +
+                   align256(static_cast<size_t>(visible_cap) * sizeof(uint)) +
+                   align256(static_cast<size_t>(visible_cap) * sizeof(uint)) +
+                   align256(static_cast<size_t>(visible_cap) * sizeof(uint)) +
+                   align256(static_cast<size_t>(visible_cap) * sizeof(ushort4));
         }
     };
 
@@ -526,6 +492,12 @@ namespace fast_lfs::rasterization {
         uint2* instance_ranges;
         uint* n_contributions;
         float* final_transmittance;
+        uint* tile_order;
+        uint* tile_counts_in;
+        uint* tile_counts_out;
+        uint* tile_ids_in;
+        char* tile_sort_cub;
+        size_t tile_sort_cub_bytes;
 
         static PerTileBuffers from_blob(char*& blob, int n_tiles) {
             PerTileBuffers buffers{};
@@ -534,6 +506,20 @@ namespace fast_lfs::rasterization {
                    static_cast<std::size_t>(n_tiles) * static_cast<std::size_t>(config::block_size_blend), 128);
             obtain(blob, buffers.final_transmittance,
                    static_cast<std::size_t>(n_tiles) * static_cast<std::size_t>(config::block_size_blend), 128);
+            obtain(blob, buffers.tile_order, n_tiles, 128);
+            obtain(blob, buffers.tile_counts_in, n_tiles, 128);
+            obtain(blob, buffers.tile_counts_out, n_tiles, 128);
+            obtain(blob, buffers.tile_ids_in, n_tiles, 128);
+            if (n_tiles > 1) {
+                LFS_CUDA_CHECK_MSG(
+                    cub::DeviceRadixSort::SortPairsDescending(
+                        nullptr, buffers.tile_sort_cub_bytes,
+                        buffers.tile_counts_in, buffers.tile_counts_out,
+                        buffers.tile_ids_in, buffers.tile_order,
+                        n_tiles, 0, 32),
+                    "FastGS tile LPT workspace query (n_tiles={})", n_tiles);
+                obtain(blob, buffers.tile_sort_cub, buffers.tile_sort_cub_bytes, 128);
+            }
             return buffers;
         }
     };

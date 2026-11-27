@@ -9,7 +9,10 @@
 #include "lfs/training/screen_share.cuh"
 #include <algorithm>
 #include <cub/cub.cuh>
+#include <exception>
 #include <limits>
+#include <memory>
+#include <vector>
 
 #include "kernel_stream.hpp"
 
@@ -59,15 +62,6 @@ namespace lfs::training::kernels {
         R[6] = 2.0f * (x * z - w * y);        // r20
         R[7] = 2.0f * (y * z + w * x);        // r21
         R[8] = 1.0f - 2.0f * (x * x + y * y); // r22
-    }
-
-    /**
-     * @brief Matrix-vector multiply: out = R * v (where R is 3x3, v is 3x1)
-     */
-    __device__ inline void matvec_3x3(const float* R, const float* v, float* out) {
-        out[0] = R[0] * v[0] + R[1] * v[1] + R[2] * v[2];
-        out[1] = R[3] * v[0] + R[4] * v[1] + R[5] * v[2];
-        out[2] = R[6] * v[0] + R[7] * v[1] + R[8] * v[2];
     }
 
     // ============================================================================
@@ -248,6 +242,63 @@ namespace lfs::training::kernels {
         LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.long_axis_split_inplace");
     }
 
+    // Adam scale rows a launch zeroes, passed by value: no device table, no H2D copy.
+    // Longer lists are zeroed in further launches of this many rows each.
+    constexpr int kAdamScaleTableSize = 16;
+    struct AdamScalePtrTable {
+        float* ptrs[kAdamScaleTableSize];
+    };
+
+    namespace {
+        // Rows [first, first + count) of the host list, count <= kAdamScaleTableSize.
+        AdamScalePtrTable adam_scale_table(float* const* ptrs, const int first, const int count) {
+            AdamScalePtrTable table{};
+            for (int a = 0; a < count; ++a) {
+                table.ptrs[a] = ptrs[first + a];
+            }
+            return table;
+        }
+    } // namespace
+
+    __global__ void zero_adam_scales_kernel(
+        const int64_t* __restrict__ indices,
+        size_t n_indices,
+        const AdamScalePtrTable adam_scales,
+        int n_adam_scales,
+        size_t N) {
+
+        const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (i >= n_indices)
+            return;
+        const int64_t t = indices[i];
+        if (t < 0 || static_cast<size_t>(t) >= N)
+            return;
+        const size_t dst = static_cast<size_t>(t);
+        // Fixed trip count: constant indices read the table from the parameter bank.
+#pragma unroll
+        for (int a = 0; a < kAdamScaleTableSize; ++a) {
+            float* scales = adam_scales.ptrs[a];
+            if (a < n_adam_scales && scales != nullptr) {
+                scales[dst] = 0.0f;
+            }
+        }
+    }
+
+    namespace {
+        // Zeroes Adam scale rows [first, n_adam_scales) at the indices, one launch per table.
+        void zero_adam_scales_from(const int64_t* indices, const size_t n_indices, float* const* adam_scale_ptrs,
+                                   const int first, const int n_adam_scales, const size_t N, cudaStream_t stream) {
+            const int block = 256;
+            const int grid = static_cast<int>((n_indices + block - 1) / block);
+            for (int begin = first; begin < n_adam_scales; begin += kAdamScaleTableSize) {
+                const int count = std::min(kAdamScaleTableSize, n_adam_scales - begin);
+                zero_adam_scales_kernel<<<grid, block, 0, stream>>>(
+                    indices, n_indices, adam_scale_table(adam_scale_ptrs, begin, count), count, N);
+                LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.zero_adam_scales");
+            }
+        }
+    } // namespace
+
     __global__ void fill_free_slots_fused_kernel(
         const int64_t* __restrict__ target_indices,
         size_t n_fill,
@@ -262,7 +313,7 @@ namespace lfs::training::kernels {
         float* __restrict__ dst_sh0,
         float* __restrict__ dst_opacities,
         int opacity_dim,
-        float* const* __restrict__ adam_scale_ptrs,
+        const AdamScalePtrTable adam_scales,
         int n_adam_scales,
         bool* __restrict__ free_mask,
         size_t N) {
@@ -300,9 +351,11 @@ namespace lfs::training::kernels {
             dst_opacities[dst] = src_opacities[i];
         }
 
-        for (int a = 0; a < n_adam_scales; ++a) {
-            float* scales = adam_scale_ptrs[a];
-            if (scales != nullptr) {
+        // Fixed trip count: constant indices read the table from the parameter bank.
+#pragma unroll
+        for (int a = 0; a < kAdamScaleTableSize; ++a) {
+            float* scales = adam_scales.ptrs[a];
+            if (a < n_adam_scales && scales != nullptr) {
                 scales[dst] = 0.0f;
             }
         }
@@ -336,54 +389,17 @@ namespace lfs::training::kernels {
         if (n_fill == 0)
             return;
 
-        // Copy pointer table to device (tiny; stack H2D once per launch).
-        float** d_adam = nullptr;
-        if (n_adam_scales > 0 && adam_scale_ptrs != nullptr) {
-            LFS_CUDA_CHECK_MSG(
-                cudaMallocAsync(reinterpret_cast<void**>(&d_adam),
-                                sizeof(float*) * static_cast<size_t>(n_adam_scales), stream),
-                "fill_free_slots adam ptr table");
-            LFS_CUDA_CHECK_MSG(
-                cudaMemcpyAsync(d_adam, adam_scale_ptrs,
-                                sizeof(float*) * static_cast<size_t>(n_adam_scales),
-                                cudaMemcpyHostToDevice, stream),
-                "fill_free_slots adam ptr H2D");
-        }
-
+        const int n_scales = adam_scale_ptrs != nullptr ? std::max(n_adam_scales, 0) : 0;
+        const int n_table = std::min(n_scales, kAdamScaleTableSize);
         const int block = 256;
         const int grid = static_cast<int>((n_fill + block - 1) / block);
         fill_free_slots_fused_kernel<<<grid, block, 0, stream>>>(
             target_indices, n_fill,
             src_means, src_rotations, src_scales, src_sh0, src_opacities,
             dst_means, dst_rotations, dst_scales, dst_sh0, dst_opacities,
-            opacity_dim, d_adam, n_adam_scales, free_mask, N);
+            opacity_dim, adam_scale_table(adam_scale_ptrs, 0, n_table), n_table, free_mask, N);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.fill_free_slots_fused");
-
-        if (d_adam != nullptr) {
-            LFS_CUDA_CHECK_MSG(cudaFreeAsync(d_adam, stream), "fill_free_slots free adam ptrs");
-        }
-    }
-
-    __global__ void zero_adam_scales_kernel(
-        const int64_t* __restrict__ indices,
-        size_t n_indices,
-        float* const* __restrict__ adam_scale_ptrs,
-        int n_adam_scales,
-        size_t N) {
-
-        const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-        if (i >= n_indices)
-            return;
-        const int64_t t = indices[i];
-        if (t < 0 || static_cast<size_t>(t) >= N)
-            return;
-        const size_t dst = static_cast<size_t>(t);
-        for (int a = 0; a < n_adam_scales; ++a) {
-            float* scales = adam_scale_ptrs[a];
-            if (scales != nullptr) {
-                scales[dst] = 0.0f;
-            }
-        }
+        zero_adam_scales_from(target_indices, n_fill, adam_scale_ptrs, n_table, n_scales, N, stream);
     }
 
     void launch_zero_adam_scales_at_indices(
@@ -397,24 +413,7 @@ namespace lfs::training::kernels {
         stream = resolve_stream(stream);
         if (n_indices == 0 || n_adam_scales <= 0)
             return;
-
-        float** d_adam = nullptr;
-        LFS_CUDA_CHECK_MSG(
-            cudaMallocAsync(reinterpret_cast<void**>(&d_adam),
-                            sizeof(float*) * static_cast<size_t>(n_adam_scales), stream),
-            "zero_adam adam ptr table");
-        LFS_CUDA_CHECK_MSG(
-            cudaMemcpyAsync(d_adam, adam_scale_ptrs,
-                            sizeof(float*) * static_cast<size_t>(n_adam_scales),
-                            cudaMemcpyHostToDevice, stream),
-            "zero_adam adam ptr H2D");
-
-        const int block = 256;
-        const int grid = static_cast<int>((n_indices + block - 1) / block);
-        zero_adam_scales_kernel<<<grid, block, 0, stream>>>(
-            indices, n_indices, d_adam, n_adam_scales, N);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.zero_adam_scales");
-        LFS_CUDA_CHECK_MSG(cudaFreeAsync(d_adam, stream), "zero_adam free ptrs");
+        zero_adam_scales_from(indices, n_indices, adam_scale_ptrs, 0, n_adam_scales, N, stream);
     }
 
     __global__ void packed_refine_counts_kernel(
@@ -428,43 +427,48 @@ namespace lfs::training::kernels {
         size_t n_float1,
         int64_t* __restrict__ out_counts4) {
 
-        // One block does all four reductions via shared atomics / CUB block reduce.
+        // Grid-stride count of the four arrays; each block adds its partial sums
+        // into the zeroed outputs (integer sums, so the order does not matter).
         typedef cub::BlockReduce<int64_t, 256> BlockReduce;
         __shared__ typename BlockReduce::TempStorage temp;
 
-        const int tid = threadIdx.x;
+        const size_t start = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+        const size_t stride = static_cast<size_t>(gridDim.x) * blockDim.x;
         int64_t local0 = 0, local1 = 0, local2 = 0, local3 = 0;
 
         if (bool0 != nullptr) {
-            for (size_t i = tid; i < n_bool0; i += blockDim.x)
+            for (size_t i = start; i < n_bool0; i += stride)
                 local0 += bool0[i] ? 1 : 0;
         }
         if (bool1 != nullptr) {
-            for (size_t i = tid; i < n_bool1; i += blockDim.x)
+            for (size_t i = start; i < n_bool1; i += stride)
                 local1 += bool1[i] ? 1 : 0;
         }
         if (float0 != nullptr) {
-            for (size_t i = tid; i < n_float0; i += blockDim.x)
+            for (size_t i = start; i < n_float0; i += stride)
                 local2 += (float0[i] > 0.0f) ? 1 : 0;
         }
         if (float1 != nullptr) {
-            for (size_t i = tid; i < n_float1; i += blockDim.x)
+            for (size_t i = start; i < n_float1; i += stride)
                 local3 += (float1[i] > 0.0f) ? 1 : 0;
         }
 
-        const int64_t sum0 = BlockReduce(temp).Sum(local0);
+        int64_t sums[4];
+        sums[0] = BlockReduce(temp).Sum(local0);
         __syncthreads();
-        const int64_t sum1 = BlockReduce(temp).Sum(local1);
+        sums[1] = BlockReduce(temp).Sum(local1);
         __syncthreads();
-        const int64_t sum2 = BlockReduce(temp).Sum(local2);
+        sums[2] = BlockReduce(temp).Sum(local2);
         __syncthreads();
-        const int64_t sum3 = BlockReduce(temp).Sum(local3);
+        sums[3] = BlockReduce(temp).Sum(local3);
 
-        if (tid == 0) {
-            out_counts4[0] = (bool0 != nullptr) ? sum0 : 0;
-            out_counts4[1] = (bool1 != nullptr) ? sum1 : 0;
-            out_counts4[2] = (float0 != nullptr) ? sum2 : 0;
-            out_counts4[3] = (float1 != nullptr) ? sum3 : 0;
+        if (threadIdx.x == 0) {
+#pragma unroll
+            for (int k = 0; k < 4; ++k) {
+                if (sums[k] != 0)
+                    atomicAdd(reinterpret_cast<unsigned long long*>(out_counts4 + k),
+                              static_cast<unsigned long long>(sums[k]));
+            }
         }
     }
 
@@ -481,7 +485,22 @@ namespace lfs::training::kernels {
         cudaStream_t stream) {
 
         stream = resolve_stream(stream);
-        packed_refine_counts_kernel<<<1, 256, 0, stream>>>(
+        LFS_CUDA_CHECK_MSG(cudaMemsetAsync(out_counts4, 0, 4 * sizeof(int64_t), stream),
+                           "packed refine counts reset");
+        size_t max_n = 0;
+        if (bool0 != nullptr)
+            max_n = std::max(max_n, n_bool0);
+        if (bool1 != nullptr)
+            max_n = std::max(max_n, n_bool1);
+        if (float0 != nullptr)
+            max_n = std::max(max_n, n_float0);
+        if (float1 != nullptr)
+            max_n = std::max(max_n, n_float1);
+        constexpr size_t kBlock = 256;
+        constexpr size_t kItemsPerThread = 16;
+        const size_t wanted = (max_n + kBlock * kItemsPerThread - 1) / (kBlock * kItemsPerThread);
+        const int blocks = static_cast<int>(std::clamp<size_t>(wanted, 1, 256));
+        packed_refine_counts_kernel<<<blocks, kBlock, 0, stream>>>(
             bool0, n_bool0, bool1, n_bool1,
             float0, n_float0, float1, n_float1,
             out_counts4);
@@ -521,8 +540,9 @@ namespace lfs::training::kernels {
             return __uint_as_float((key & 0x80000000u) ? (key & 0x7fffffffu) : ~key);
         }
 
-        template <bool kPositiveOnly, int kPass>
+        template <bool kPositiveOnly, int kPass, bool kIndexed = false>
         __global__ void histogram_kernel(const float* __restrict__ values,
+                                         const uint32_t* __restrict__ indices,
                                          const size_t n,
                                          State* __restrict__ state,
                                          unsigned int* __restrict__ hist) {
@@ -539,7 +559,7 @@ namespace lfs::training::kernels {
             unsigned int counted = 0u;
             const size_t stride = static_cast<size_t>(gridDim.x) * blockDim.x;
             for (size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x; i < n; i += stride) {
-                const float v = values[i];
+                const float v = kIndexed ? values[indices[i]] : values[i];
                 if (kPositiveOnly && !(v > 0.0f)) {
                     continue;
                 }
@@ -626,38 +646,143 @@ namespace lfs::training::kernels {
             }
         }
 
-        template <bool kPositiveOnly>
-        void run(const float* values, const size_t n, State* state, unsigned int* hist, cudaStream_t stream) {
+        template <bool kPositiveOnly, bool kIndexed = false>
+        void run(const float* values, const size_t n, State* state, unsigned int* hist, cudaStream_t stream,
+                 const uint32_t* indices = nullptr) {
             const int blocks = static_cast<int>(std::clamp<size_t>(
                 (n + static_cast<size_t>(kThreads) * 16 - 1) / (static_cast<size_t>(kThreads) * 16), 1, 512));
-            histogram_kernel<kPositiveOnly, 0><<<blocks, kThreads, 0, stream>>>(values, n, state, hist);
+            histogram_kernel<kPositiveOnly, 0, kIndexed><<<blocks, kThreads, 0, stream>>>(values, indices, n, state, hist);
             LFS_CUDA_LAUNCH_CHECK(stream, "training.radix_select.histogram0");
             pick_kernel<0><<<1, kThreads, 0, stream>>>(kPositiveOnly, n, state, hist);
             LFS_CUDA_LAUNCH_CHECK(stream, "training.radix_select.pick0");
-            histogram_kernel<kPositiveOnly, 1><<<blocks, kThreads, 0, stream>>>(values, n, state, hist);
+            histogram_kernel<kPositiveOnly, 1, kIndexed><<<blocks, kThreads, 0, stream>>>(values, indices, n, state, hist);
             LFS_CUDA_LAUNCH_CHECK(stream, "training.radix_select.histogram1");
             pick_kernel<1><<<1, kThreads, 0, stream>>>(kPositiveOnly, n, state, hist);
             LFS_CUDA_LAUNCH_CHECK(stream, "training.radix_select.pick1");
-            histogram_kernel<kPositiveOnly, 2><<<blocks, kThreads, 0, stream>>>(values, n, state, hist);
+            histogram_kernel<kPositiveOnly, 2, kIndexed><<<blocks, kThreads, 0, stream>>>(values, indices, n, state, hist);
             LFS_CUDA_LAUNCH_CHECK(stream, "training.radix_select.histogram2");
             pick_kernel<2><<<1, kThreads, 0, stream>>>(kPositiveOnly, n, state, hist);
             LFS_CUDA_LAUNCH_CHECK(stream, "training.radix_select.pick2");
         }
 
-        struct Workspace {
-            cuda_scratch::DeviceBuffer buffer;
+        constexpr std::size_t kWorkspaceBytes = sizeof(State) + sizeof(unsigned int) * kBins;
+
+        // The state and histogram of one thread on one device, kept for the thread's
+        // lifetime. Every pick pass clears the bins it read, so after a whole run the
+        // histogram is zero again and the next run only clears the state.
+        struct ThreadWorkspace {
+            State* state = nullptr;
+            unsigned int* hist = nullptr;
+            cudaEvent_t done = nullptr;    // recorded after the last run's last reader
+            cudaStream_t stream = nullptr; // stream of the last run
+            bool used = false;
+
+            ThreadWorkspace() = default;
+            ThreadWorkspace(const ThreadWorkspace&) = delete;
+            ThreadWorkspace& operator=(const ThreadWorkspace&) = delete;
+            ~ThreadWorkspace() {
+                // Thread exit or process teardown: the runtime may already be gone,
+                // so failures are dropped and cleared instead of raised.
+                if (state != nullptr) {
+                    (void)cudaFree(state);
+                }
+                if (done != nullptr) {
+                    (void)cudaEventDestroy(done);
+                }
+                (void)cudaGetLastError();
+            }
+        };
+
+        ThreadWorkspace& thread_workspace(cudaStream_t stream) {
+            thread_local std::vector<std::unique_ptr<ThreadWorkspace>> per_device;
+            int device = 0;
+            LFS_CUDA_CHECK_MSG(cudaGetDevice(&device), "radix select workspace device");
+            if (per_device.size() <= static_cast<std::size_t>(device)) {
+                per_device.resize(static_cast<std::size_t>(device) + 1);
+            }
+            auto& slot = per_device[static_cast<std::size_t>(device)];
+            if (!slot) {
+                auto created = std::make_unique<ThreadWorkspace>();
+                LFS_CUDA_CHECK_MSG(cudaEventCreateWithFlags(&created->done, cudaEventDisableTiming),
+                                   "radix select workspace event");
+                void* memory = nullptr;
+                LFS_CUDA_CHECK_MSG(cudaMalloc(&memory, kWorkspaceBytes), "radix select workspace");
+                created->state = static_cast<State*>(memory);
+                created->hist = reinterpret_cast<unsigned int*>(static_cast<char*>(memory) + sizeof(State));
+                LFS_CUDA_CHECK_MSG(cudaMemsetAsync(memory, 0, kWorkspaceBytes, stream),
+                                   "radix select workspace clear");
+                slot = std::move(created);
+            }
+            return *slot;
+        }
+
+        // One run's use of the thread's workspace. A run on another stream than the
+        // last waits for the last one's readers. The scope must cover every launch
+        // that reads the state; an exception inside it leaves the histogram cleared.
+        // A run captured into a graph owns a stream-ordered workspace instead: its
+        // replays must not share the thread's, and its events stay in the graph.
+        class Workspace {
+        public:
             State* state = nullptr;
             unsigned int* hist = nullptr;
 
             explicit Workspace(cudaStream_t stream)
-                : buffer(sizeof(State) + sizeof(unsigned int) * kBins, stream,
-                         "training.radix_select.workspace") {
-                state = buffer.as<State>();
-                hist = reinterpret_cast<unsigned int*>(buffer.as<char>() + sizeof(State));
-                LFS_CUDA_CHECK_MSG(
-                    cudaMemsetAsync(buffer.get(), 0, sizeof(State) + sizeof(unsigned int) * kBins, stream),
-                    "radix select workspace clear");
+                : stream_(stream),
+                  exceptions_(std::uncaught_exceptions()) {
+                if (capturing(stream)) {
+                    captured_ = cuda_scratch::DeviceBuffer(kWorkspaceBytes, stream, "training.radix_select.workspace");
+                    LFS_CUDA_CHECK_MSG(cudaMemsetAsync(captured_.get(), 0, kWorkspaceBytes, stream),
+                                       "radix select workspace clear");
+                    state = captured_.as<State>();
+                    hist = reinterpret_cast<unsigned int*>(captured_.as<char>() + sizeof(State));
+                    return;
+                }
+                slot_ = &thread_workspace(stream);
+                if (slot_->used && slot_->stream != stream) {
+                    LFS_CUDA_CHECK_MSG(cudaStreamWaitEvent(stream, slot_->done, 0), "radix select workspace handoff");
+                }
+                LFS_CUDA_CHECK_MSG(cudaMemsetAsync(slot_->state, 0, sizeof(State), stream),
+                                   "radix select state clear");
+                state = slot_->state;
+                hist = slot_->hist;
             }
+            Workspace(const Workspace&) = delete;
+            Workspace& operator=(const Workspace&) = delete;
+            ~Workspace() {
+                if (slot_ == nullptr) {
+                    return;
+                }
+                // A run cut short may leave counted bins behind.
+                if (std::uncaught_exceptions() > exceptions_) {
+                    (void)cudaMemsetAsync(slot_->hist, 0, sizeof(unsigned int) * kBins, stream_);
+                }
+                if (cudaEventRecord(slot_->done, stream_) == cudaSuccess) {
+                    slot_->stream = stream_;
+                    slot_->used = true;
+                    return;
+                }
+                // Without the event the next run cannot order itself after this one.
+                (void)cudaGetLastError();
+                (void)cudaStreamSynchronize(stream_);
+                (void)cudaGetLastError();
+                slot_->used = false;
+            }
+
+        private:
+            // A failed query takes the stream-ordered path, which is always safe.
+            [[nodiscard]] static bool capturing(cudaStream_t stream) {
+                cudaStreamCaptureStatus status = cudaStreamCaptureStatusNone;
+                if (cudaStreamIsCapturing(stream, &status) != cudaSuccess) {
+                    (void)cudaGetLastError();
+                    return true;
+                }
+                return status != cudaStreamCaptureStatusNone;
+            }
+
+            ThreadWorkspace* slot_ = nullptr;
+            cuda_scratch::DeviceBuffer captured_;
+            cudaStream_t stream_;
+            int exceptions_;
         };
     } // namespace radix_select
 
@@ -723,6 +848,53 @@ namespace lfs::training::kernels {
         radix_select::run<true>(data, n, workspace.state, workspace.hist, stream);
         div_by_positive_median_or_zero_kernel<<<grid, block, 0, stream>>>(data, n, workspace.state);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.div_by_median");
+    }
+
+    __global__ void accumulate_edge_scores_sparse_kernel(
+        float* __restrict__ view_scores,
+        float* __restrict__ score_sum,
+        const bool* __restrict__ frozen_mask,
+        const size_t frozen_n,
+        const uint32_t* __restrict__ visible_indices,
+        const size_t n_visible,
+        const radix_select::State* __restrict__ median) {
+        const size_t k = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (k >= n_visible)
+            return;
+        const uint32_t prim = visible_indices[k];
+        const float val = view_scores[prim];
+        if (val == 0.0f)
+            return;
+        view_scores[prim] = 0.0f;
+        if (median->total == 0u || isnan(val))
+            return;
+        if (frozen_mask != nullptr && prim < frozen_n && frozen_mask[prim])
+            return;
+        score_sum[prim] += val / fmaxf(median->value, 1e-9f);
+    }
+
+    void launch_normalize_and_accumulate_edge_scores_sparse(
+        float* view_scores,
+        float* score_sum,
+        const bool* frozen_mask,
+        const size_t frozen_n,
+        const uint32_t* visible_indices,
+        const size_t n_visible,
+        cudaStream_t stream) {
+        stream = resolve_stream(stream);
+        if (n_visible == 0 || view_scores == nullptr || score_sum == nullptr || visible_indices == nullptr)
+            return;
+        LFS_ASSERT_MSG(n_visible <= static_cast<size_t>(std::numeric_limits<unsigned int>::max()),
+                       "positive-median input exceeds the 32-bit count limit");
+
+        radix_select::Workspace workspace(stream);
+        radix_select::run<true, true>(view_scores, n_visible, workspace.state, workspace.hist, stream,
+                                      visible_indices);
+        constexpr int kBlock = 256;
+        const int grid = static_cast<int>((n_visible + kBlock - 1) / kBlock);
+        accumulate_edge_scores_sparse_kernel<<<grid, kBlock, 0, stream>>>(
+            view_scores, score_sum, frozen_mask, frozen_n, visible_indices, n_visible, workspace.state);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.accumulate_edge_scores_sparse");
     }
 
     namespace {

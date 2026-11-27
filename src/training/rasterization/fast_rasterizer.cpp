@@ -61,8 +61,15 @@ namespace lfs::training {
             return dst;
         };
         fused_adam.enabled = optimizer_fused.enabled;
+        fused_adam.step_seed = optimizer_fused.step_seed;
+        fused_adam.lazy_last_step = optimizer_fused.lazy_last_step;
+        fused_adam.lazy_last_step_n = optimizer_fused.lazy_last_step_n;
+        fused_adam.geom_last_step = optimizer_fused.geom_last_step;
+        fused_adam.geom_last_step_n = optimizer_fused.geom_last_step_n;
         fused_adam.rendered_count = fused_extra_gradients.rendered_count;
         fused_adam.blend_peak = fused_extra_gradients.blend_peak;
+        fused_adam.mrnf_fold = fused_extra_gradients.mrnf_fold;
+        fused_adam.mrnf_noise = fused_extra_gradients.mrnf_noise;
         fused_adam.reg_rendered_only = fused_extra_gradients.reg_rendered_only;
         fused_adam.beta1 = optimizer_fused.beta1;
         fused_adam.beta2 = optimizer_fused.beta2;
@@ -884,6 +891,14 @@ namespace lfs::training {
         std::array<core::Tensor*, 6> captured_gradients{};
         size_t captured_count = 0;
         const cudaStream_t backward_stream = ctx.forward_ctx.stream;
+        if (defer_optimizer_step && optimizer.geom_last_step_mutable().is_valid()) {
+            // The deferred dense step updates every row; settle lazy rotation/sh0
+            // coast first and restart tracking from the next fused step.
+            fast_rasterize_flush_lazy_adam(gaussian_model, optimizer, iteration - 1,
+                                           fused_extra_gradients.dc_reg_weight,
+                                           fused_extra_gradients.sh_rest_reg_weight, stream);
+            optimizer.geom_last_step_mutable() = {};
+        }
         const auto optimizer_fused = defer_optimizer_step ? FastGSFusedAdamState{} : optimizer.prepare_fastgs_fused_adam(iteration, stream);
         auto fused_adam = make_fastgs_fused_adam_settings(optimizer_fused, fused_extra_gradients);
         if (defer_optimizer_step) {
@@ -958,7 +973,8 @@ namespace lfs::training {
             shN.bits,
             fused_extra_gradients.edge_weight_map,
             fused_extra_gradients.edge_score_out,
-            variance);
+            variance,
+            fused_extra_gradients.post_backward_hook);
 
         ctx.mark_forward_context_released();
         for (size_t i = 0; i < captured_count; ++i)
@@ -1028,6 +1044,49 @@ namespace lfs::training {
         if (!backward_result.success) {
             throw std::runtime_error(std::string("Camera backward failed: ") + backward_result.error_message);
         }
+    }
+
+    void fast_rasterize_flush_lazy_adam(
+        lfs::core::SplatData& gaussian_model,
+        AdamOptimizer& optimizer,
+        const int iteration,
+        const float dc_reg_weight,
+        const float sh_rest_reg_weight,
+        cudaStream_t stream) {
+        if (iteration <= 0 || gaussian_model.size() <= 0)
+            return;
+        auto& lazy_step = optimizer.lazy_last_step_mutable();
+        auto& geom_step = optimizer.geom_last_step_mutable();
+        const bool has_shn = lazy_step.is_valid() && lazy_step.numel() > 0;
+        const bool has_geom = geom_step.is_valid() && geom_step.numel() > 0;
+        if (!has_shn && !has_geom)
+            return;
+
+        const cudaStream_t s = stream ? stream : lfs::core::getCurrentCUDAStream();
+        const auto optimizer_fused = optimizer.prepare_fastgs_fused_adam(iteration, s);
+        if (!optimizer_fused.enabled)
+            return;
+
+        FastGSFusedExtraGradients extra;
+        extra.dc_reg_weight = dc_reg_weight;
+        extra.sh_rest_reg_weight = sh_rest_reg_weight;
+        const auto fused_adam = make_fastgs_fused_adam_settings(optimizer_fused, extra);
+
+        const int active_deg = gaussian_model.get_active_sh_degree();
+        const int max_deg = gaussian_model.get_max_sh_degree();
+        const int active_sh_bases = (active_deg + 1) * (active_deg + 1);
+        const int sh_layout_bases = (max_deg + 1) * (max_deg + 1);
+
+        fast_lfs::rasterization::flush_lazy_adam_raw(
+            fused_adam,
+            static_cast<int>(gaussian_model.size()),
+            active_sh_bases,
+            sh_layout_bases,
+            s);
+        if (lazy_step.is_valid())
+            lazy_step.set_stream(s);
+        if (geom_step.is_valid())
+            geom_step.set_stream(s);
     }
 
     bool release_fast_rasterizer_thread_local_caches() noexcept {

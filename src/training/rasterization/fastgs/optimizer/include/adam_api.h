@@ -165,6 +165,21 @@ namespace fast_lfs::optimizer {
         const int n_prims,
         cudaStream_t stream = nullptr);
 
+    void fill_u16_at_indices(
+        std::uint16_t* data,
+        const int64_t* indices_device,
+        int n_indices,
+        int n_prims,
+        std::uint16_t value,
+        cudaStream_t stream = nullptr);
+
+    void fill_u16_range(
+        std::uint16_t* data,
+        int start,
+        int count,
+        std::uint16_t value,
+        cudaStream_t stream = nullptr);
+
     // re-encode gathered joint rows under destination block bounds.
     void joint_transcode_gathered_rows_at_indices(
         std::uint8_t* packed,

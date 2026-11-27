@@ -2756,7 +2756,79 @@ namespace lfs::training::kernels {
             if (idx < n)
                 dst[idx] += src[idx];
         }
+
+        template <bool Accumulate>
+        void dispatch_decoupled_raw_gradient(const DecoupledRawGradient& raw, lfs::core::Tensor& grad_image) {
+            validate_loss_context_images(raw.raw_img, raw.gt_img, raw.H, raw.W);
+
+            constexpr float C1 = 0.01f * 0.01f;
+            constexpr float C2 = 0.03f * 0.03f;
+
+            const size_t N = raw.raw_img.shape()[0];
+            const size_t C = raw.raw_img.shape()[1];
+            const dim3 grid((raw.W + BLOCK_X - 1) / BLOCK_X, (raw.H + BLOCK_Y - 1) / BLOCK_Y, N);
+            const dim3 block(BLOCK_X, BLOCK_Y);
+
+            if (raw.mask.is_valid()) {
+                LFS_ASSERT_MSG(std::isfinite(raw.mask_sum_value) && raw.mask_sum_value > 0.0f,
+                               "Masked loss normalization must be positive and finite");
+                const auto mask = prepare_loss_mask(raw.mask, raw.raw_img);
+                const float inv_mask_sum = 1.0f / raw.mask_sum_value;
+                dispatch_target_ptr(raw.gt_img, [&](auto* gt_ptr) {
+                    using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(gt_ptr)>>;
+                    dispatch_mask_ptr(mask, [&](auto* mask_ptr) {
+                        using MaskT = std::remove_cv_t<std::remove_pointer_t<decltype(mask_ptr)>>;
+                        maskedFusedL1SSIMBackwardCUDA<TargetT, MaskT, /*HasSigmaPartials=*/true, Accumulate, /*ScaledMeanPartial=*/true>
+                            <<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
+                                1.0f, inv_mask_sum, raw.H, raw.W, static_cast<int>(C), C1, C2,
+                                raw.raw_img.ptr<float>(), gt_ptr, mask_ptr,
+                                grad_image.ptr<float>(),
+                                raw.raw_dm_dmu1.ptr<__half>(),
+                                raw.raw_dm_dsigma1_sq.ptr<__half>(),
+                                raw.raw_dm_dsigma12.ptr<__half>());
+                        LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.masked_decoupled_raw_backward");
+                    });
+                });
+                return;
+            }
+
+            int grad_h = raw.H;
+            int grad_w = raw.W;
+            if (raw.apply_valid_padding) {
+                grad_h = grad_h > 10 ? grad_h - 10 : grad_h;
+                grad_w = grad_w > 10 ? grad_w - 10 : grad_w;
+            }
+            const size_t numel = N * C * grad_h * grad_w;
+            const float grad_per_pixel = 1.0f / static_cast<float>(numel);
+
+            dispatch_target_ptr(raw.gt_img, [&](auto* gt_ptr) {
+                using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(gt_ptr)>>;
+                fusedL1SSIMBackwardCUDA<TargetT, /*HasSigmaPartials=*/true, Accumulate>
+                    <<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
+                        1.0f, raw.H, raw.W, static_cast<int>(C), C1, C2,
+                        grad_per_pixel, raw.apply_valid_padding,
+                        raw.raw_img.ptr<float>(), gt_ptr,
+                        grad_image.ptr<float>(),
+                        raw.raw_dm_dmu1.ptr<__half>(),
+                        raw.raw_dm_dsigma1_sq.ptr<__half>(),
+                        raw.raw_dm_dsigma12.ptr<__half>());
+                LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.decoupled_raw_backward");
+            });
+        }
     } // namespace
+
+    void compute_decoupled_raw_gradient(const DecoupledRawGradient& raw, lfs::core::Tensor& grad_out) {
+        LFS_ASSERT(grad_out.is_contiguous() && grad_out.dtype() == lfs::core::DataType::Float32 &&
+                   grad_out.numel() == raw.raw_img.numel());
+        if (raw.precomputed.is_valid()) {
+            LFS_ASSERT(raw.precomputed.is_contiguous() && raw.precomputed.dtype() == lfs::core::DataType::Float32 &&
+                       raw.precomputed.numel() == grad_out.numel() &&
+                       raw.precomputed.data_ptr() != grad_out.data_ptr());
+            grad_out.copy_from(raw.precomputed);
+            return;
+        }
+        dispatch_decoupled_raw_gradient</*Accumulate=*/false>(raw, grad_out);
+    }
 
     void accumulate_decoupled_raw_gradient(const DecoupledRawGradient& raw, lfs::core::Tensor& grad_image) {
         LFS_ASSERT(grad_image.is_contiguous() && grad_image.dtype() == lfs::core::DataType::Float32 &&
@@ -2771,61 +2843,7 @@ namespace lfs::training::kernels {
             LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.decoupled_raw_precomputed");
             return;
         }
-        validate_loss_context_images(raw.raw_img, raw.gt_img, raw.H, raw.W);
-
-        constexpr float C1 = 0.01f * 0.01f;
-        constexpr float C2 = 0.03f * 0.03f;
-
-        const size_t N = raw.raw_img.shape()[0];
-        const size_t C = raw.raw_img.shape()[1];
-        const dim3 grid((raw.W + BLOCK_X - 1) / BLOCK_X, (raw.H + BLOCK_Y - 1) / BLOCK_Y, N);
-        const dim3 block(BLOCK_X, BLOCK_Y);
-
-        if (raw.mask.is_valid()) {
-            LFS_ASSERT_MSG(std::isfinite(raw.mask_sum_value) && raw.mask_sum_value > 0.0f,
-                           "Masked loss normalization must be positive and finite");
-            const auto mask = prepare_loss_mask(raw.mask, raw.raw_img);
-            const float inv_mask_sum = 1.0f / raw.mask_sum_value;
-            dispatch_target_ptr(raw.gt_img, [&](auto* gt_ptr) {
-                using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(gt_ptr)>>;
-                dispatch_mask_ptr(mask, [&](auto* mask_ptr) {
-                    using MaskT = std::remove_cv_t<std::remove_pointer_t<decltype(mask_ptr)>>;
-                    maskedFusedL1SSIMBackwardCUDA<TargetT, MaskT, /*HasSigmaPartials=*/true, /*Accumulate=*/true, /*ScaledMeanPartial=*/true>
-                        <<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
-                            1.0f, inv_mask_sum, raw.H, raw.W, static_cast<int>(C), C1, C2,
-                            raw.raw_img.ptr<float>(), gt_ptr, mask_ptr,
-                            grad_image.ptr<float>(),
-                            raw.raw_dm_dmu1.ptr<__half>(),
-                            raw.raw_dm_dsigma1_sq.ptr<__half>(),
-                            raw.raw_dm_dsigma12.ptr<__half>());
-                    LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.masked_decoupled_raw_backward");
-                });
-            });
-            return;
-        }
-
-        int grad_h = raw.H;
-        int grad_w = raw.W;
-        if (raw.apply_valid_padding) {
-            grad_h = grad_h > 10 ? grad_h - 10 : grad_h;
-            grad_w = grad_w > 10 ? grad_w - 10 : grad_w;
-        }
-        const size_t numel = N * C * grad_h * grad_w;
-        const float grad_per_pixel = 1.0f / static_cast<float>(numel);
-
-        dispatch_target_ptr(raw.gt_img, [&](auto* gt_ptr) {
-            using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(gt_ptr)>>;
-            fusedL1SSIMBackwardCUDA<TargetT, /*HasSigmaPartials=*/true, /*Accumulate=*/true>
-                <<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
-                    1.0f, raw.H, raw.W, static_cast<int>(C), C1, C2,
-                    grad_per_pixel, raw.apply_valid_padding,
-                    raw.raw_img.ptr<float>(), gt_ptr,
-                    grad_image.ptr<float>(),
-                    raw.raw_dm_dmu1.ptr<__half>(),
-                    raw.raw_dm_dsigma1_sq.ptr<__half>(),
-                    raw.raw_dm_dsigma12.ptr<__half>());
-            LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.decoupled_raw_backward");
-        });
+        dispatch_decoupled_raw_gradient</*Accumulate=*/true>(raw, grad_image);
     }
 
     // ============================================================================
@@ -3350,12 +3368,12 @@ namespace lfs::training::kernels {
         template <int K, int R, int SV, int Rows, int Cols, typename Tap, typename Source, typename RowSums, typename Store>
         __device__ __forceinline__ void separable(const Tap tap, const Source& source, RowSums& rows, const Store& store) {
             filter_pass<K, R, 2, false, 0, R, Rows + 2 * R, Cols>(
-                tap, [&](const int y, const int x, float(&v)[K]) { unpack(source[y][x], v); },
-                [&](const int y, const int x, const float(&a)[K]) { rows[y][x - R] = pack(a); });
+                tap, [&](const int y, const int x, float (&v)[K]) { unpack(source[y][x], v); },
+                [&](const int y, const int x, const float (&a)[K]) { rows[y][x - R] = pack(a); });
             __syncthreads();
             filter_pass<K, R, SV, true, R, 0, Rows, Cols>(
-                tap, [&](const int y, const int x, float(&v)[K]) { unpack(rows[y][x], v); },
-                [&](const int y, const int x, const float(&a)[K]) { store(y - R, x, a); });
+                tap, [&](const int y, const int x, float (&v)[K]) { unpack(rows[y][x], v); },
+                [&](const int y, const int x, const float (&a)[K]) { store(y - R, x, a); });
         }
 
         // Row sums of five window moments, column-major for conflict-free row writes and column reads.
@@ -3368,15 +3386,15 @@ namespace lfs::training::kernels {
         template <typename Sample>
         __device__ __forceinline__ void window_moments(MomentRows& rows, const Sample& sample, const float inv_window, float (&m)[5]) {
             filter_pass<5, HALO, 4, false, 0, HALO, SHARED_Y, BLOCK_X>(
-                WindowTaps{}, sample, [&](const int y, const int x, const float(&a)[5]) {
+                WindowTaps{}, sample, [&](const int y, const int x, const float (&a)[5]) {
                     rows.a[x - HALO][y] = make_float4(a[0], a[1], a[2], a[3]);
                     rows.b[x - HALO][y] = a[4]; });
             __syncthreads();
             filter_pass<5, HALO, 1, true, HALO, 0, BLOCK_Y, BLOCK_X>(
-                WindowTaps{}, [&](const int y, const int x, float(&v)[5]) {
+                WindowTaps{}, [&](const int y, const int x, float (&v)[5]) {
                     unpack(rows.a[x][y], reinterpret_cast<float (&)[4]>(v));
                     v[4] = rows.b[x][y]; },
-                [&](int, int, const float(&a)[5]) {
+                [&](int, int, const float (&a)[5]) {
 #pragma unroll
                     for (int k = 0; k < 5; ++k)
                         m[k] = a[k] * inv_window; });
@@ -3450,7 +3468,7 @@ namespace lfs::training::kernels {
             });
             const bool all_kept = __syncthreads_and(region_kept);
             if (!all_kept)
-                separable<2, R, 2, SHARED_Y, SHARED_X>(taps, source, s.rows, [&](const int r, const int q, const float(&a)[2]) {
+                separable<2, R, 2, SHARED_Y, SHARED_X>(taps, source, s.rows, [&](const int r, const int q, const float (&a)[2]) {
                     support[r][q] = at.inside(r - HALO, q - HALO) && a[0] > 1.0e-30f ? 1.f / a[0] : 0.f;
                 });
 
@@ -3469,16 +3487,16 @@ namespace lfs::training::kernels {
                 // Sharp moments: corrected, raw, raw^2, raw photo, photo; blurred: photo^2, G corrected, G raw,
                 // (G raw)^2, G raw photo.
                 float ms[5], mb[5];
-                window_moments(s.moments, [&](const int r, const int q, float(&v)[5]) {
+                window_moments(s.moments, [&](const int r, const int q, float (&v)[5]) {
                     const float2 x = source[r + R][q + R];
                     const float py = photo[r][q], w = Masked ? weights[r][q] : 1.f;
                     v[0] = w * x.x, v[1] = w * x.y, v[2] = w * (x.y * x.y), v[3] = w * (x.y * py), v[4] = w * py; }, inv_window, ms);
-                separable<2, R, 2, SHARED_Y, SHARED_X>(taps, source, s.rows, [&](const int r, const int q, const float(&a)[2]) {
+                separable<2, R, 2, SHARED_Y, SHARED_X>(taps, source, s.rows, [&](const int r, const int q, const float (&a)[2]) {
                     const float n = all_kept ? 1.f : support[r][q];
                     source[r + R][q + R] = make_float2(a[0] * n, a[1] * n);
                 });
                 __syncthreads();
-                window_moments(s.moments, [&](const int r, const int q, float(&v)[5]) {
+                window_moments(s.moments, [&](const int r, const int q, float (&v)[5]) {
                     const float2 g = source[r + R][q + R];
                     const float py = photo[r][q], w = Masked ? weights[r][q] : 1.f;
                     v[0] = w * (py * py), v[1] = w * g.x, v[2] = w * g.y, v[3] = w * (g.y * g.y), v[4] = w * (g.y * py); }, inv_window, mb);
@@ -3568,12 +3586,12 @@ namespace lfs::training::kernels {
                 });
                 __syncthreads();
                 float m[4], t[2]; // W(partials), T(source) at this pixel
-                separable<4, HALO, 1, BLOCK_Y, BLOCK_X>(WindowTaps{}, data, conv, [&](int, int, const float(&a)[4]) {
+                separable<4, HALO, 1, BLOCK_Y, BLOCK_X>(WindowTaps{}, data, conv, [&](int, int, const float (&a)[4]) {
 #pragma unroll
                     for (int k = 0; k < 4; ++k)
                         m[k] = a[k];
                 });
-                separable<2, R, 1, BLOCK_Y, BLOCK_X>(taps, source, rows, [&](int, int, const float(&a)[2]) { t[0] = a[0], t[1] = a[1]; });
+                separable<2, R, 1, BLOCK_Y, BLOCK_X>(taps, source, rows, [&](int, int, const float (&a)[2]) { t[0] = a[0], t[1] = a[1]; });
                 if (!in_image)
                     continue;
                 const int q = plane + pix;

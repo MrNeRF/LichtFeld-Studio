@@ -4,9 +4,65 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 namespace fast_lfs::rasterization {
+
+    inline constexpr int kSparseReboundSlots = 7;
+
+    // Arena-backed GPU scratch for expand-only block bounds in sparse backward preprocessing.
+    // Slots: 0:means, 1:sh0, 2:scaling, 3:rotation, 4:opacity, 5:shN_joint, 6:shN_value.
+    struct SparseReboundState {
+        std::uint32_t* counts_pre = nullptr;
+        std::uint32_t* counts_post = nullptr;
+        std::uint32_t* dirty_bits = nullptr;
+        std::uint32_t* rebound_list = nullptr;
+        std::uint32_t* needed_u = nullptr; // [7 * n_blocks]: float-as-uint max |u| (slots 0..5) or |v| (slot 6)
+        std::uint32_t* needed_s = nullptr; // [6 * n_blocks]: float-as-uint max log_s (slots 0..5)
+        std::uint32_t n_blocks = 0u;
+        std::uint32_t words_per_slot = 0u;
+        std::size_t clear_bytes = 0u;
+
+        static std::size_t align256(const std::size_t n) noexcept {
+            return (n + 255u) & ~std::size_t{255};
+        }
+
+        static std::size_t required_bytes(const int n_primitives) noexcept {
+            if (n_primitives <= 0)
+                return 0;
+            const std::size_t nb = (static_cast<std::size_t>(n_primitives) + 255u) / 256u;
+            const std::size_t words = (nb + 31u) / 32u;
+            const std::size_t counts_bytes = align256(2u * kSparseReboundSlots * sizeof(std::uint32_t));
+            const std::size_t dirty_bytes = align256(kSparseReboundSlots * words * sizeof(std::uint32_t));
+            const std::size_t needed_u_bytes = align256(kSparseReboundSlots * nb * sizeof(std::uint32_t));
+            const std::size_t needed_s_bytes = align256((kSparseReboundSlots - 1) * nb * sizeof(std::uint32_t));
+            const std::size_t list_bytes = align256(kSparseReboundSlots * nb * sizeof(std::uint32_t));
+            return counts_bytes + dirty_bytes + needed_u_bytes + needed_s_bytes + list_bytes;
+        }
+
+        static SparseReboundState from_blob(char* blob, const int n_primitives) noexcept {
+            SparseReboundState s{};
+            if (!blob || n_primitives <= 0)
+                return s;
+            const std::size_t nb = (static_cast<std::size_t>(n_primitives) + 255u) / 256u;
+            const std::size_t words = (nb + 31u) / 32u;
+            const std::size_t counts_bytes = align256(2u * kSparseReboundSlots * sizeof(std::uint32_t));
+            const std::size_t dirty_bytes = align256(kSparseReboundSlots * words * sizeof(std::uint32_t));
+            const std::size_t needed_u_bytes = align256(kSparseReboundSlots * nb * sizeof(std::uint32_t));
+            const std::size_t needed_s_bytes = align256((kSparseReboundSlots - 1) * nb * sizeof(std::uint32_t));
+            s.n_blocks = static_cast<std::uint32_t>(nb);
+            s.words_per_slot = static_cast<std::uint32_t>(words);
+            s.counts_pre = reinterpret_cast<std::uint32_t*>(blob);
+            s.counts_post = s.counts_pre + kSparseReboundSlots;
+            s.dirty_bits = reinterpret_cast<std::uint32_t*>(blob + counts_bytes);
+            s.needed_u = reinterpret_cast<std::uint32_t*>(blob + counts_bytes + dirty_bytes);
+            s.needed_s = reinterpret_cast<std::uint32_t*>(blob + counts_bytes + dirty_bytes + needed_u_bytes);
+            s.rebound_list = reinterpret_cast<std::uint32_t*>(blob + counts_bytes + dirty_bytes + needed_u_bytes + needed_s_bytes);
+            s.clear_bytes = counts_bytes + dirty_bytes + needed_u_bytes + needed_s_bytes;
+            return s;
+        }
+    };
 
     // Optimizer moments use joint (u, log_s) packing plus float4 bounds per
     // 256-splat block. joint_bits == 0 disables updates; 8 or 16 selects the codec.
@@ -42,8 +98,40 @@ namespace fast_lfs::rasterization {
         float screen_share_penalty = 0.0f;
     };
 
+    // Optional per-step MRNF visibility/error/peak fold fused into sparse backward.
+    struct MrnfFoldArgs {
+        float* refine_weight = nullptr;
+        float* densification_info = nullptr;
+        float* coverage_views = nullptr;
+        const bool* frozen_mask = nullptr;
+        std::size_t frozen_n = 0;
+        float* step_peak = nullptr;
+        float* peak = nullptr;
+        float* renders = nullptr;
+        float inv_peak_scale = 1.0f;
+        std::size_t n_primitives = 0;
+    };
+
+    // Optional post-Adam MRNF low-opacity mean noise injection fused across sparse
+    // geometry (contributing rows) and invisible decay (non-contributing rows).
+    struct MrnfNoiseArgs {
+        const float* vis_count = nullptr;
+        const bool* frozen_mask = nullptr;
+        std::size_t frozen_mask_size = 0;
+        float lr_mean_noise_weight = 0.0f;
+        float median_scale = 0.0f;
+        float max_logit = -1.0e30f;
+        std::uint64_t seed = 0;
+        bool enabled = false;
+    };
+
     struct FusedAdamSettings {
         bool enabled = false;
+        std::uint32_t step_seed = 0u;
+        std::uint16_t* lazy_last_step = nullptr;
+        int lazy_last_step_n = 0;
+        std::uint16_t* geom_last_step = nullptr;
+        int geom_last_step_n = 0;
         float beta1 = 0.9f;
         float beta2 = 0.999f;
         float eps = 1e-15f;
@@ -85,6 +173,8 @@ namespace fast_lfs::rasterization {
         FusedAdamParam opacity;
         FusedAdamParam sh0;
         FusedAdamParam shN;
+        MrnfFoldArgs mrnf_fold{};
+        MrnfNoiseArgs mrnf_noise{};
     };
 
 } // namespace fast_lfs::rasterization

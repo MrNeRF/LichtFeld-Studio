@@ -16,7 +16,7 @@ namespace fast_lfs::rasterization {
     void set_force_generic_preprocess_for_testing(bool force) noexcept;
     [[nodiscard]] bool force_generic_preprocess_for_testing() noexcept;
 
-    void backward(
+    bool backward(
         const float* densification_error_map,
         const float* grad_image,
         const BackgroundAlphaGradient& background_grad,
@@ -37,10 +37,16 @@ namespace fast_lfs::rasterization {
         const uint* sorted_primitive_indices,
         const unsigned char* contributor_masks,
         const uint* contributor_positions,
-        uint* primitive_touched,
+        std::uint8_t* primitive_touched,
         const uint* primitive_work_indices,
+        const uint* visible_indices,
+        const std::uint8_t* active_block_flag,
+        const uint* active_block_ids,
+        const int n_active_blocks,
+        char* sparse_rebound_blob,
         float* grad_opacity_helper,
         float3* grad_color_helper,
+        float3* grad_color_mean_helper,
         float2* grad_mean2d_helper,
         float3* grad_conic_helper,
         float* grad_depth_helper,
@@ -52,6 +58,7 @@ namespace fast_lfs::rasterization {
         const int n_primitives,
         const int n_instances,
         const int n_visible,
+        const int visible_capacity,
         const int active_sh_bases,
         const int sh_layout_bases,
         const int width,
@@ -73,5 +80,12 @@ namespace fast_lfs::rasterization {
         float* edge_score_out,
         cudaStream_t stream,
         const ColorVarianceLoss& color_variance = {});
+
+    void flush_lazy_adam(
+        const FusedAdamSettings& fused_adam,
+        const int n_primitives,
+        const int active_sh_bases,
+        const int sh_layout_bases,
+        cudaStream_t stream);
 
 } // namespace fast_lfs::rasterization

@@ -1025,6 +1025,64 @@ namespace lfs::training {
             "(joint (u,log_s) is the only Adam codec)");
     }
 
+    std::uint16_t* AdamOptimizer::ensure_lazy_step_buffer(
+        lfs::core::Tensor& buf,
+        const size_t n_live,
+        const std::uint32_t init_committed_step,
+        const cudaStream_t stream) {
+        if (n_live == 0)
+            return nullptr;
+        const size_t cap = std::max({lazy_reserved_capacity_, n_live, splat_data_.means().capacity()});
+        const std::uint16_t init_step = encode_lazy_step_host(init_committed_step);
+        if (!buf.is_valid() || buf.ndim() != 2 ||
+            buf.shape()[1] != 2 || buf.dtype() != lfs::core::DataType::UInt8 ||
+            buf.shape()[0] > n_live || buf.capacity() < n_live) {
+            auto fresh = lfs::core::Tensor::zeros_direct(
+                lfs::core::TensorShape({n_live, size_t{2}}), cap,
+                lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+            const cudaStream_t s = stream ? stream : lfs::core::getCurrentCUDAStream();
+            size_t copied = 0;
+            if (buf.is_valid() && buf.ndim() == 2 &&
+                buf.shape()[1] == 2 &&
+                buf.dtype() == lfs::core::DataType::UInt8 &&
+                buf.shape()[0] > 0 && buf.shape()[0] < n_live) {
+                lfs::core::waitForCUDAStream(s, buf.stream());
+                copied = buf.shape()[0];
+                LFS_CUDA_CHECK(cudaMemcpyAsync(
+                    fresh.ptr<uint8_t>(), buf.ptr<uint8_t>(),
+                    copied * size_t{2},
+                    cudaMemcpyDeviceToDevice, s));
+            }
+            if (init_step != 0u && copied < n_live) {
+                fast_lfs::optimizer::fill_u16_range(
+                    reinterpret_cast<std::uint16_t*>(fresh.ptr<uint8_t>()),
+                    static_cast<int>(copied), static_cast<int>(n_live - copied), init_step, s);
+            }
+            fresh.set_stream(s);
+            buf = std::move(fresh);
+        } else if (buf.shape()[0] < n_live) {
+            const size_t old_n = buf.shape()[0];
+            buf.commit_rows(n_live);
+            const cudaStream_t s = stream ? stream : lfs::core::getCurrentCUDAStream();
+            lfs::core::waitForCUDAStream(s, buf.stream());
+            fast_lfs::optimizer::fill_u16_range(
+                reinterpret_cast<std::uint16_t*>(buf.ptr<uint8_t>()),
+                static_cast<int>(old_n), static_cast<int>(n_live - old_n), init_step, s);
+            buf.set_stream(s);
+        }
+        if (stream)
+            buf.sync_to_stream(stream);
+        return reinterpret_cast<std::uint16_t*>(buf.ptr<uint8_t>());
+    }
+
+    std::uint16_t* AdamOptimizer::ensure_lazy_last_step(const size_t n_live, const cudaStream_t stream) {
+        return ensure_lazy_step_buffer(lazy_last_step_, n_live, last_shn_committed_step_, stream);
+    }
+
+    std::uint16_t* AdamOptimizer::ensure_geom_last_step(const size_t n_live, const cudaStream_t stream) {
+        return ensure_lazy_step_buffer(geom_last_step_, n_live, last_geom_committed_step_, stream);
+    }
+
     FastGSFusedAdamState AdamOptimizer::prepare_fastgs_fused_adam(
         const int iteration,
         const cudaStream_t execution_stream) {
@@ -1038,6 +1096,7 @@ namespace lfs::training {
 
         FastGSFusedAdamState fused;
         fused.enabled = true;
+        fused.step_seed = static_cast<std::uint32_t>(iteration);
         fused.beta1 = static_cast<float>(config_.beta1);
         fused.beta2 = static_cast<float>(config_.beta2);
         fused.eps = static_cast<float>(config_.eps);
@@ -1247,6 +1306,32 @@ namespace lfs::training {
 
         fused.enabled = fused.means.enabled || fused.sh0.enabled || fused.shN.enabled ||
                         fused.scaling.enabled || fused.rotation.enabled || fused.opacity.enabled;
+        if (fused.enabled && splat_data_.size() > 0) {
+            const size_t n_live = static_cast<size_t>(splat_data_.size());
+            fused.lazy_last_step = ensure_lazy_last_step(n_live, execution_stream);
+            fused.lazy_last_step_n = static_cast<int>(n_live);
+            // Rotation and sh0 rows of non-contributing splats coast lazily once the
+            // second-moment bias correction has flattened; they are caught up in closed
+            // form when the splat contributes again or before any full-model consumer.
+            constexpr int64_t kMinLazyGeomStep = 2000;
+            const auto rot_it = states_.find(param_name(ParamType::Rotation));
+            const auto sh0_it = states_.find(param_name(ParamType::Sh0));
+            const bool lazy_geom_ready =
+                fused.rotation.enabled && fused.sh0.enabled &&
+                fused.rotation.joint_bits == 16 && fused.sh0.joint_bits == 16 &&
+                rot_it != states_.end() && sh0_it != states_.end() &&
+                rot_it->second.step_count >= kMinLazyGeomStep &&
+                sh0_it->second.step_count >= kMinLazyGeomStep &&
+                static_cast<int64_t>(iteration) > fused_step_iteration_;
+            if (lazy_geom_ready || geom_last_step_.is_valid()) {
+                // A fresh buffer starts with every row current as of the previous step.
+                if (!geom_last_step_.is_valid() && iteration > 0)
+                    last_geom_committed_step_ = static_cast<std::uint32_t>(iteration - 1);
+                fused.geom_last_step = ensure_geom_last_step(n_live, execution_stream);
+                fused.geom_last_step_n = static_cast<int>(n_live);
+                fused.last_geom_committed_step = last_geom_committed_step_;
+            }
+        }
         return fused;
     }
 
@@ -1271,6 +1356,11 @@ namespace lfs::training {
             auto& state = states_[name];
             if (state.exp_avg.is_valid() && state.is_joint()) {
                 state.step_count++;
+                if (type == ParamType::ShN && iteration > 0) {
+                    last_shn_committed_step_ = static_cast<std::uint32_t>(iteration);
+                } else if (type == ParamType::Means && iteration > 0) {
+                    last_geom_committed_step_ = static_cast<std::uint32_t>(iteration);
+                }
             }
         }
         fused_step_iteration_ = iteration;
@@ -1321,6 +1411,16 @@ namespace lfs::training {
                     state.joint_bits,
                     static_cast<int>(splat_data_.size()),
                     stream);
+                if (lazy_last_step_.is_valid() &&
+                    lazy_last_step_.shape()[0] == static_cast<size_t>(splat_data_.size())) {
+                    lfs::core::waitForCUDAStream(stream, lazy_last_step_.stream());
+                    fast_lfs::optimizer::fill_u16_at_indices(
+                        reinterpret_cast<uint16_t*>(lazy_last_step_.ptr<uint8_t>()),
+                        d_indices, static_cast<int>(indices.size()),
+                        static_cast<int>(splat_data_.size()),
+                        encode_lazy_step_host(last_shn_committed_step_), stream);
+                    lazy_last_step_.set_stream(stream);
+                }
             }
         } else {
             const int bpc = joint_adam::bytes_per_cell(state.joint_bits);
@@ -1336,6 +1436,16 @@ namespace lfs::training {
                     state.joint_bits,
                     static_cast<int>(splat_data_.size()),
                     stream);
+                if (type == ParamType::Means && geom_last_step_.is_valid() &&
+                    geom_last_step_.shape()[0] == static_cast<size_t>(splat_data_.size())) {
+                    lfs::core::waitForCUDAStream(stream, geom_last_step_.stream());
+                    fast_lfs::optimizer::fill_u16_at_indices(
+                        reinterpret_cast<uint16_t*>(geom_last_step_.ptr<uint8_t>()),
+                        d_indices, static_cast<int>(indices.size()),
+                        static_cast<int>(splat_data_.size()),
+                        encode_lazy_step_host(last_geom_committed_step_), stream);
+                    geom_last_step_.set_stream(stream);
+                }
             }
         }
         state.exp_avg.set_stream(stream);
@@ -2031,6 +2141,16 @@ namespace lfs::training {
                         state.joint_bits,
                         static_cast<int>(splat_data_.size()),
                         stream);
+                    if (lazy_last_step_.is_valid() &&
+                        lazy_last_step_.shape()[0] == static_cast<size_t>(splat_data_.size())) {
+                        lfs::core::waitForCUDAStream(stream, lazy_last_step_.stream());
+                        fast_lfs::optimizer::fill_u16_at_indices(
+                            reinterpret_cast<uint16_t*>(lazy_last_step_.ptr<uint8_t>()),
+                            indices_device, static_cast<int>(n_indices),
+                            static_cast<int>(splat_data_.size()),
+                            encode_lazy_step_host(last_shn_committed_step_), stream);
+                        lazy_last_step_.set_stream(stream);
+                    }
                 }
             } else {
                 const int bpc = joint_adam::bytes_per_cell(state.joint_bits);
@@ -2046,6 +2166,16 @@ namespace lfs::training {
                         state.joint_bits,
                         static_cast<int>(splat_data_.size()),
                         stream);
+                    if (type == ParamType::Means && geom_last_step_.is_valid() &&
+                        geom_last_step_.shape()[0] == static_cast<size_t>(splat_data_.size())) {
+                        lfs::core::waitForCUDAStream(stream, geom_last_step_.stream());
+                        fast_lfs::optimizer::fill_u16_at_indices(
+                            reinterpret_cast<uint16_t*>(geom_last_step_.ptr<uint8_t>()),
+                            indices_device, static_cast<int>(n_indices),
+                            static_cast<int>(splat_data_.size()),
+                            encode_lazy_step_host(last_geom_committed_step_), stream);
+                        geom_last_step_.set_stream(stream);
+                    }
                 }
             }
             state.exp_avg.set_stream(stream);
@@ -2316,6 +2446,10 @@ namespace lfs::training {
         loaded_config.sh_warmup = config_.sh_warmup;
         config_ = std::move(loaded_config);
         states_ = std::move(loaded_states);
+        lazy_last_step_ = {};
+        geom_last_step_ = {};
+        last_shn_committed_step_ = 0u;
+        last_geom_committed_step_ = 0u;
 
         // Gradient buffers are transient and allocated lazily by get_grad().
         const auto milliseconds = [](const auto begin, const auto end) {
@@ -2336,10 +2470,21 @@ namespace lfs::training {
         config_ = std::move(loaded.config_);
         states_ = std::move(loaded.states_);
         frozen_lr_scale_ = loaded.frozen_lr_scale_;
+        lazy_last_step_ = {};
+        geom_last_step_ = {};
+        last_shn_committed_step_ = 0u;
+        last_geom_committed_step_ = 0u;
     }
 
     void AdamOptimizer::reserve_capacity(const size_t capacity) {
         using namespace joint_adam;
+        lazy_reserved_capacity_ = std::max(lazy_reserved_capacity_, capacity);
+        if (lazy_last_step_.is_valid() && capacity > lazy_last_step_.capacity()) {
+            reserve_tensor_rows(lazy_last_step_, capacity);
+        }
+        if (geom_last_step_.is_valid() && capacity > geom_last_step_.capacity()) {
+            reserve_tensor_rows(geom_last_step_, capacity);
+        }
 
         for (auto& [name, state] : states_) {
             const bool is_shN = (name == "shN");
@@ -2391,6 +2536,15 @@ namespace lfs::training {
         if (state->joint_bounds.is_valid())
             state->joint_bounds.zero_();
         state->step_count = 0;
+        if (type == ParamType::ShN) {
+            if (lazy_last_step_.is_valid())
+                lazy_last_step_.zero_();
+            last_shn_committed_step_ = 0u;
+        } else if (type == ParamType::Means) {
+            if (geom_last_step_.is_valid())
+                geom_last_step_.zero_();
+            last_geom_committed_step_ = 0u;
+        }
     }
 
 } // namespace lfs::training

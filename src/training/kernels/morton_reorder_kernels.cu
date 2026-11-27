@@ -285,21 +285,39 @@ namespace lfs::training::kernels {
             return std::max(1, (n_prims + kThreads - 1) / kThreads);
         }
 
+        // Packs every `stride`-th mean row into `sample`, so the host reads one contiguous block.
+        __global__ void gather_strided_means_kernel(
+            const float* __restrict__ means,
+            float* __restrict__ sample,
+            int m,
+            int stride) {
+            const int j = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+            if (j >= m) {
+                return;
+            }
+            const std::size_t src = static_cast<std::size_t>(j) * static_cast<std::size_t>(stride) * 3;
+            sample[3 * j + 0] = means[src + 0];
+            sample[3 * j + 1] = means[src + 1];
+            sample[3 * j + 2] = means[src + 2];
+        }
+
         struct ContractionFrame {
             float centre[3] = {0.0f, 0.0f, 0.0f};
             float radius = 1.0f;
         };
 
         // Centre (per-axis median) and radius (median distance from it) of the splat means, from a strided
-        // sample of at most kSample rows copied to the host. Runs once per reorder.
-        ContractionFrame contraction_frame(const float* means, const int n, cudaStream_t stream) {
+        // sample of at most kSample rows copied to the host. Runs once per reorder. The sample is packed in
+        // `staging` (at least 12 bytes per mean row) and read back before this returns.
+        ContractionFrame contraction_frame(const float* means, const int n, float* staging, cudaStream_t stream) {
             constexpr int kSample = 65536;
             const int stride = std::max(1, n / kSample);
             const int m = (n + stride - 1) / stride;
             std::vector<float> host(static_cast<std::size_t>(m) * 3);
-            LFS_CUDA_CHECK(cudaMemcpy2DAsync(host.data(), 3 * sizeof(float), means,
-                                             static_cast<std::size_t>(stride) * 3 * sizeof(float), 3 * sizeof(float),
-                                             static_cast<std::size_t>(m), cudaMemcpyDeviceToHost, stream));
+            gather_strided_means_kernel<<<grid_for_prims(m), kThreads, 0, stream>>>(means, staging, m, stride);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.morton.sample");
+            LFS_CUDA_CHECK(cudaMemcpyAsync(host.data(), staging, host.size() * sizeof(float),
+                                           cudaMemcpyDeviceToHost, stream));
             LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
             // Non-finite rows would break the selection's ordering; they get code 0 either way.
             std::size_t finite = 0;
@@ -367,8 +385,6 @@ namespace lfs::training::kernels {
             lfs::core::waitForCUDAStream(stream, means.stream());
         }
 
-        const ContractionFrame frame = contraction_frame(means.ptr<float>(), n, stream);
-
         // Codes, the int32 order and their sort double buffers; the caller
         // may lend idle memory for them, so only the int64 result is new.
         const std::size_t row_bytes = align_scratch(static_cast<std::size_t>(n) * sizeof(std::uint32_t));
@@ -381,6 +397,10 @@ namespace lfs::training::kernels {
             owned_scratch.set_stream(stream);
             base = static_cast<char*>(owned_scratch.data_ptr());
         }
+
+        // The mean sample (12 bytes per row at most) borrows the first three code
+        // rows, which the encode below overwrites only after it was read back.
+        const ContractionFrame frame = contraction_frame(means.ptr<float>(), n, reinterpret_cast<float*>(base), stream);
         cub::DoubleBuffer<std::uint32_t> codes(reinterpret_cast<std::uint32_t*>(base),
                                                reinterpret_cast<std::uint32_t*>(base + row_bytes));
         cub::DoubleBuffer<std::int32_t> order(reinterpret_cast<std::int32_t*>(base + 2 * row_bytes),

@@ -1024,6 +1024,8 @@ namespace lfs::training {
 
         // Cached GPU scalar to avoid per-iteration allocation
         core::Tensor loss_accumulator_;
+        size_t last_morton_size_ = 0;
+        int last_morton_iter_ = 0;
         // persistent FastGS scale/opacity reg loss scalars (filled in fused bwd)
         core::Tensor fused_scale_reg_loss_;
         core::Tensor fused_opacity_reg_loss_;

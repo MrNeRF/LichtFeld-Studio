@@ -221,7 +221,9 @@ namespace fast_lfs::rasterization {
             return;
         char* primitive_blob = static_cast<char*>(ctx.per_primitive_buffers);
         char* tile_blob = static_cast<char*>(ctx.per_tile_buffers);
-        const auto primitive = PerPrimitiveBuffers::from_persistent_blob(primitive_blob, ctx.n_visible);
+        const auto primitive = PerPrimitiveBuffers::from_persistent_blob(
+            primitive_blob,
+            ctx.visible_capacity > 0 ? ctx.visible_capacity : std::max(ctx.n_visible, 1));
         const uint grid_width = (width + config::tile_width - 1) / config::tile_width;
         const uint grid_height = (height + config::tile_height - 1) / config::tile_height;
         const auto tile = PerTileBuffers::from_blob(tile_blob, static_cast<int>(grid_width * grid_height));

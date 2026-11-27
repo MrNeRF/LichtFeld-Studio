@@ -64,6 +64,8 @@ class MRNFStrategyTest_DirectAuxiliaryGrowthPreservesPrefix_Test;
 class MRNFStrategyTest_PerSplatMeanStepScalesWithExtentAndClamps_Test;
 class MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Test;
 class MRNFStrategyTest_RayDepthStateFollowsItsSplats_Test;
+class MRNFStrategyTest_SparseEdgeScoreAccumulationMatchesDense_Test;
+class MRNFStrategyTest_SparseStepStatsFoldMatchesDenseAcrossSteps_Test;
 
 namespace lfs::training {
 
@@ -122,6 +124,13 @@ namespace lfs::training {
         std::shared_ptr<CameraDataset> get_training_dataset() const override { return _views; }
         lfs::core::Tensor edge_score_scratch(int iter) override;
         void on_edge_score_accumulated(int iter) override;
+        void on_edge_score_accumulated_sparse(
+            int iter, const uint32_t* visible_indices, size_t n_visible, void* stream) override;
+        bool fold_step_stats_sparse(
+            int backward_iter, const uint32_t* visible_indices, size_t n_visible, void* stream) override;
+        bool prepare_fastgs_fused_mrnf_hooks(
+            int backward_iter, bool allow_noise, void* stream, FastGSFusedMrnfHooks& out) override;
+        void commit_fastgs_fused_mrnf_hooks(const FastGSFusedMrnfHooks& prepared, void* stream) override;
         lfs::core::Tensor blend_peak_scratch(int iter) override;
         // The shape regularisers act on rendered splats only.
         bool regularize_rendered_only() const override { return true; }
@@ -169,6 +178,8 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_GrowthExchangeRanksByContributionPerView_Test;
         friend class ::MRNFStrategyTest_SplitAtTheCapConservesTheOpacity_Test;
         friend class ::MRNFStrategyTest_RetireQuotaTakesDeadThenLowestReachAndKeepsLargeCoveredSplats_Test;
+        friend class ::MRNFStrategyTest_SparseEdgeScoreAccumulationMatchesDense_Test;
+        friend class ::MRNFStrategyTest_SparseStepStatsFoldMatchesDenseAcrossSteps_Test;
 
         void clear_rendered_support(const lfs::core::Tensor& indices);
         // Frees rows the way refine() prunes them: free mask, deleted mask, zero
@@ -199,6 +210,7 @@ namespace lfs::training {
         [[nodiscard]] bool peak_rows_on() const;
         // Sizes the peak rows to the model (new rows zero), or drops them without peak rows.
         void ensure_peak_rows();
+        void flush_blend_peak_scale();
         void fold_blend_peak();
         void retire_lowest_reach(int iter, lfs::core::Tensor& prune_mask);
         // MRNF_RETIRE_SHARE x live at iter, tapering linearly from first_iter (the first refine at the
@@ -305,6 +317,7 @@ namespace lfs::training {
         lfs::core::Tensor _edge_score_sum;
         lfs::core::Tensor _edge_view_scores;
         int _edge_sample_count = 0;
+        bool _edge_view_scores_clean = false;
         std::unique_ptr<BlobSeeder> _blob_seeder;
         // Triangulation runs off the training thread; its seeds join at the first refine after it finishes.
         std::future<BlobSeeds> _blob_seeds;
@@ -327,9 +340,12 @@ namespace lfs::training {
         int _exchange_windows = 0;                      // windows in the current importance memory
 
         // Peak rows of the retire quota and keep covered; transient (fresh after a resume).
-        lfs::core::Tensor _blend_peak;                                          // [N] running peak blend weight
+        lfs::core::Tensor _blend_peak;                                          // [N] running peak blend weight (scaled by _blend_peak_scale)
         lfs::core::Tensor _step_blend_peak;                                     // [N] largest blend weight of this step (backward)
         lfs::core::Tensor _renders;                                             // [N] steps rendered since birth
+        double _blend_peak_scale = 1.0;                                         // deferred global decay factor applied on flush
+        bool _step_stats_folded_sparse = false;                                 // set when sparse hook folded the prior backward step
+        bool _noise_injected_fused = false;                                     // set when the sparse backward applied this step's mean noise
         int _retire_first_iter = -1;                                            // first refine at the cap
         size_t _last_retired = 0;                                               // retirees of the current refine
         float _covered_log_size_floor = std::numeric_limits<float>::infinity(); // log of the keep-covered size floor

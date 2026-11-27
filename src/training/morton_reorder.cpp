@@ -69,8 +69,8 @@ namespace lfs::training::morton {
         }
 
         // The start of the borrow viewed with `like`'s shape and dtype, or an
-        // empty tensor when the borrow is smaller. A permute through it
-        // synchronizes before the next one reuses the borrow.
+        // empty tensor when the borrow is smaller. A permute through it ends
+        // on the scratch stream before the next one reuses the borrow.
         [[nodiscard]] Tensor borrowed_like(const IdleArenaScratch& scratch, const Tensor& like,
                                            cudaStream_t stream) {
             if (!like.is_contiguous() || scratch.data() == nullptr || scratch.capacity() < like.bytes()) {
@@ -107,21 +107,30 @@ namespace lfs::training::morton {
             std::size_t used_ = 0;
         };
 
+        // Gathers `live` along `dim` into the scratch on the scratch stream, then
+        // copies it back on the tensor's stream. The scratch stream waits for that
+        // copy, so the next gather cannot overwrite the borrow while it is read.
+        void permute_through_scratch(Tensor& live, const int dim, const Tensor& perm,
+                                     const IdleArenaScratch& scratch, cudaStream_t stream) {
+            Tensor staged = borrowed_like(scratch, live, stream);
+            LFS_ASSERT_MSG(staged.is_valid(), "Morton reorder scratch does not cover a row tensor");
+            live.index_select_into(staged, dim, perm, BoundaryMode::Assert);
+            live.copy_from(staged);
+            lfs::core::waitForCUDAStream(stream, live.stream());
+        }
+
         // Gathers the first perm.numel() rows into the scratch and copies them
         // back in place, keeping any tail. In place also keeps the exportable
         // allocator's fixed per-name region views pointing at the rows.
-        void permute_rows_in_place(Tensor& tensor, const Tensor& perm, const IdleArenaScratch& scratch) {
+        void permute_rows_in_place(Tensor& tensor, const Tensor& perm, const IdleArenaScratch& scratch,
+                                   cudaStream_t stream) {
             const std::size_t n = perm.numel();
             if (!tensor.is_valid() || tensor.numel() == 0 || n == 0 || tensor.ndim() == 0 ||
                 tensor.size(0) < n) {
                 return;
             }
             Tensor live = tensor.size(0) == n ? tensor : tensor.slice(0, 0, n);
-            Tensor staged = borrowed_like(scratch, live, tensor.stream());
-            LFS_ASSERT_MSG(staged.is_valid(), "Morton reorder scratch does not cover a row tensor");
-            live.index_select_into(staged, 0, perm, BoundaryMode::Assert);
-            live.copy_from(staged);
-            LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(), "morton permute through the scratch");
+            permute_through_scratch(live, 0, perm, scratch, stream);
         }
 
         void permute_shN_q16(core::SplatData& splat, const Tensor& perm, cudaStream_t stream,
@@ -286,13 +295,13 @@ namespace lfs::training::morton {
 
             if (optimizer.frozen_mask().is_valid() && optimizer.frozen_mask().numel() >= n) {
                 Tensor frozen = optimizer.frozen_mask();
-                permute_rows_in_place(frozen, perm32, borrow);
+                permute_rows_in_place(frozen, perm32, borrow, stream);
                 optimizer.set_frozen_mask(std::move(frozen));
             }
             if (optimizer.crop_damping_mask().is_valid() &&
                 optimizer.crop_damping_mask().numel() >= n) {
                 Tensor crop = optimizer.crop_damping_mask();
-                permute_rows_in_place(crop, perm32, borrow);
+                permute_rows_in_place(crop, perm32, borrow, stream);
                 optimizer.set_crop_damping_mask(std::move(crop));
             }
 
@@ -306,7 +315,7 @@ namespace lfs::training::morton {
                 }
                 if (state->grad.is_valid() && state->grad.numel() > 0 &&
                     state->grad.ndim() > 0 && state->grad.size(0) == n) {
-                    permute_rows_in_place(state->grad, perm32, borrow);
+                    permute_rows_in_place(state->grad, perm32, borrow, stream);
                 }
                 if (!state->is_joint() || !state->exp_avg.is_valid() ||
                     !state->joint_bounds.is_valid()) {
@@ -342,7 +351,8 @@ namespace lfs::training::morton {
                     stream);
                 state->exp_avg.copy_from(dest_packed);
                 state->joint_bounds.copy_from(dest_bounds);
-                LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(), "morton optimizer permute through the scratch");
+                // The next borrow waits for this copy-back.
+                lfs::core::waitForCUDAStream(stream, state->exp_avg.stream());
             }
         }
 
@@ -499,20 +509,17 @@ namespace lfs::training::morton {
 
         // Dim 0 is the primitive axis unless the tensor is [C, N] with C != N
         // (densification_info). Tensors longer than N on dim 0 keep their tail.
-        void permute_row_tensor(Tensor& tensor, const Tensor& perm32, const IdleArenaScratch& scratch) {
+        void permute_row_tensor(Tensor& tensor, const Tensor& perm32, const IdleArenaScratch& scratch,
+                                cudaStream_t stream) {
             const std::size_t n = perm32.numel();
             if (!tensor.is_valid() || tensor.numel() == 0 || n == 0) {
                 return;
             }
             if (tensor.ndim() == 2 && tensor.size(1) == n && tensor.size(0) != n) {
-                Tensor staged = borrowed_like(scratch, tensor, tensor.stream());
-                LFS_ASSERT_MSG(staged.is_valid(), "Morton reorder scratch does not cover a row tensor");
-                tensor.index_select_into(staged, 1, perm32, BoundaryMode::Assert);
-                tensor.copy_from(staged);
-                LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(), "morton permute through the scratch");
+                permute_through_scratch(tensor, 1, perm32, scratch, stream);
                 return;
             }
-            permute_rows_in_place(tensor, perm32, scratch);
+            permute_rows_in_place(tensor, perm32, scratch, stream);
         }
     } // namespace
 
@@ -571,7 +578,9 @@ namespace lfs::training::morton {
                                                 joint_adam::n_bounds_for_prims(n));
             bounds = BoundsScratch(Tensor::empty_exact(
                 {blocks * 4 * (AdamOptimizer::all_param_types().size() + 1)}, DataType::Float32));
-            LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream), "morton permutation");
+            // A device barrier, not a stream one: the last step's fused Adam reads
+            // the screen-share rows through a raw pointer on its own stream.
+            LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(), "morton permutation");
             if (!scratch.cover(scratch_bytes)) {
                 LOG_INFO("Skipping Morton reorder at {} Gaussians: its {} MiB scratch does not fit in VRAM",
                          n, scratch_bytes >> 20);
@@ -584,35 +593,41 @@ namespace lfs::training::morton {
             return result;
         }
 
-        permute_rows_in_place(splat.means(), perm32, scratch);
-        permute_rows_in_place(splat.sh0(), perm32, scratch);
-        permute_rows_in_place(splat.scaling_raw(), perm32, scratch);
-        permute_rows_in_place(splat.rotation_raw(), perm32, scratch);
-        permute_rows_in_place(splat.opacity_raw(), perm32, scratch);
+        permute_rows_in_place(splat.means(), perm32, scratch, stream);
+        permute_rows_in_place(splat.sh0(), perm32, scratch, stream);
+        permute_rows_in_place(splat.scaling_raw(), perm32, scratch, stream);
+        permute_rows_in_place(splat.rotation_raw(), perm32, scratch, stream);
+        permute_rows_in_place(splat.opacity_raw(), perm32, scratch, stream);
         permute_shN_impl(splat, result.permutation, stream, scratch, bounds);
 
         if (splat._densification_info.is_valid() && splat._densification_info.numel() > 0) {
-            permute_row_tensor(splat._densification_info, perm32, scratch);
+            permute_row_tensor(splat._densification_info, perm32, scratch, stream);
         }
         if (splat._max_screen_share.is_valid() && splat._max_screen_share.numel() > 0) {
-            LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(),
-                               "wait fused adam before screen-share morton permute");
-            permute_row_tensor(splat._max_screen_share, perm32, scratch);
+            permute_row_tensor(splat._max_screen_share, perm32, scratch, stream);
             if (optimizer != nullptr) {
                 optimizer->refresh_screen_share_buffer();
             }
         }
         if (splat.has_deleted_mask()) {
-            permute_row_tensor(splat.deleted(), perm32, scratch);
+            permute_row_tensor(splat.deleted(), perm32, scratch, stream);
             splat.notify_deleted_mask_changed();
         }
 
         if (optimizer != nullptr) {
             permute_optimizer(*optimizer, result.permutation, perm32, stream, scratch, bounds);
             permute_optimizer_shN(*optimizer, splat, result.permutation, stream, scratch, bounds);
+            auto& lazy_step = optimizer->lazy_last_step_mutable();
+            if (lazy_step.is_valid() && lazy_step.ndim() == 2 && lazy_step.size(0) == n) {
+                permute_row_tensor(lazy_step, perm32, scratch, stream);
+            }
+            auto& geom_step = optimizer->geom_last_step_mutable();
+            if (geom_step.is_valid() && geom_step.ndim() == 2 && geom_step.size(0) == n) {
+                permute_row_tensor(geom_step, perm32, scratch, stream);
+            }
         }
         if (extra_rows) {
-            extra_rows([&](Tensor& rows) { permute_row_tensor(rows, perm32, scratch); });
+            extra_rows([&](Tensor& rows) { permute_row_tensor(rows, perm32, scratch, stream); });
         }
 
         splat.note_param_layout_changed();

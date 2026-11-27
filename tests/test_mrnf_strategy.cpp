@@ -33,6 +33,8 @@ class MRNFStrategyTest_RefineErrorIsTheCompressedViewMean_Test;
 class MRNFStrategyTest_GrowthExchangeRanksByContributionPerView_Test;
 class MRNFStrategyTest_SplitAtTheCapConservesTheOpacity_Test;
 class MRNFStrategyTest_RetireQuotaTakesDeadThenLowestReachAndKeepsLargeCoveredSplats_Test;
+class MRNFStrategyTest_SparseEdgeScoreAccumulationMatchesDense_Test;
+class MRNFStrategyTest_SparseStepStatsFoldMatchesDenseAcrossSteps_Test;
 
 #include "core/camera.hpp"
 #include "core/cuda/memory_arena.hpp"
@@ -149,11 +151,11 @@ TEST(MRNFStrategyTest, ReplaceParentWeightsMatchesTensorProducts) {
 }
 
 // The growth exchange ranks rows by their position in the importance order. The
-// radix ranking must give up exactly the rows the comparator sort (Tensor::sort)
-// did, with ties, NaN, -0 and +inf present.
+// radix selection must give up exactly the rows the comparator sort (Tensor::sort)
+// did, in its order, with ties, NaN, -0 and +inf present: a single row, a share,
+// every eligible row, and more rows than are eligible (ineligible ones by row).
 TEST(MRNFStrategyTest, ExchangeRanksMatchComparatorSorts) {
     constexpr size_t n = 300007;
-    constexpr size_t count = n / 7;
     const float nan = std::numeric_limits<float>::quiet_NaN();
     const float inf = std::numeric_limits<float>::infinity();
     const std::vector<float> palette{0.0f, -0.0f, 0.25f, 0.5f, 1.0f, 3.0f, inf, nan, 1e-30f};
@@ -183,12 +185,17 @@ TEST(MRNFStrategyTest, ExchangeRanksMatchComparatorSorts) {
         const int64_t rank_b = eligible[b] > 0.5f ? ranks[b] : INT_MAX;
         return rank_a < rank_b;
     });
-    expected.resize(count);
 
-    auto rows = Tensor::empty({count}, Device::CUDA, DataType::Int64);
-    mrnf_strategy::launch_lowest_eligible_rows(
-        primary_d.ptr<float>(), eligible_d.ptr<bool>(), n, count, rows.ptr<int64_t>());
-    EXPECT_EQ(rows.to_vector_int64(), expected);
+    const auto n_eligible = static_cast<size_t>(std::count(eligible.begin(), eligible.end(), 1.0f));
+    ASSERT_GT(n_eligible, n / 2);
+    ASSERT_LT(n_eligible + 1000, n);
+    for (const size_t count : {size_t{1}, n / 7, n_eligible, n_eligible + 1000}) {
+        auto rows = Tensor::empty({count}, Device::CUDA, DataType::Int64);
+        mrnf_strategy::launch_lowest_eligible_rows(
+            primary_d.ptr<float>(), eligible_d.ptr<bool>(), n, count, rows.ptr<int64_t>());
+        const std::vector<int64_t> want(expected.begin(), expected.begin() + static_cast<std::ptrdiff_t>(count));
+        EXPECT_EQ(rows.to_vector_int64(), want) << "count " << count;
+    }
 }
 
 namespace {
@@ -3086,4 +3093,244 @@ TEST(MRNFStrategyTest, AsksForRenderedOnlyRegularizers) {
     MRNF strategy(data);
     strategy.initialize(recipe_test_params(32));
     EXPECT_TRUE(strategy.regularize_rendered_only());
+}
+
+TEST(MRNFStrategyTest, SparseEdgeScoreAccumulationMatchesDense) {
+    constexpr size_t n = 4099;
+    auto dense_data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+    auto sparse_data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+    dense_data.set_frozen_ranges({{100, 140}});
+    sparse_data.set_frozen_ranges({{100, 140}});
+
+    auto params = recipe_test_params(static_cast<int>(n));
+    params.use_edge_map = true;
+    params.start_refine = 10;
+    params.stop_refine = 1000;
+
+    MRNF dense_strat(dense_data);
+    MRNF sparse_strat(sparse_data);
+    dense_strat.initialize(params);
+    sparse_strat.initialize(params);
+
+    for (int step = 0; step < 3; ++step) {
+        const int iter = 20 + step;
+        auto dense_scratch = dense_strat.edge_score_scratch(iter);
+        auto sparse_scratch = sparse_strat.edge_score_scratch(iter);
+        ASSERT_TRUE(dense_scratch.is_valid());
+        ASSERT_TRUE(sparse_scratch.is_valid());
+
+        std::vector<float> host_scores(n, 0.0f);
+        std::vector<int> visible;
+        for (size_t i = 0; i < n; ++i) {
+            if ((i + static_cast<size_t>(step) * 7) % 5 == 0) {
+                visible.push_back(static_cast<int>(i));
+                if (i % 15 == 0) {
+                    host_scores[i] = 0.0f;
+                } else if (i % 25 == 0) {
+                    host_scores[i] = -0.25f;
+                } else if (i == 50) {
+                    host_scores[i] = std::numeric_limits<float>::quiet_NaN();
+                } else {
+                    host_scores[i] = 0.05f + 0.01f * static_cast<float>((i * 13 + step * 3) % 97);
+                }
+            }
+        }
+        // Step 2: test all-zero visible scores (median == 0 branch)
+        if (step == 2) {
+            std::fill(host_scores.begin(), host_scores.end(), 0.0f);
+        }
+
+        const auto scores_gpu = Tensor::from_vector(host_scores, TensorShape({n}), Device::CUDA);
+        dense_scratch.copy_(scores_gpu);
+        sparse_scratch.copy_(scores_gpu);
+
+        const auto vis_gpu = Tensor::from_vector(visible, TensorShape({visible.size()}), Device::CUDA);
+        dense_strat.on_edge_score_accumulated(iter);
+        sparse_strat.on_edge_score_accumulated_sparse(
+            iter, reinterpret_cast<const uint32_t*>(vis_gpu.ptr<int32_t>()), visible.size(), nullptr);
+
+        // Verify sparse path leaves scratch zeroed and marked clean.
+        EXPECT_TRUE(sparse_strat._edge_view_scores_clean);
+        const auto sparse_scratch_after = sparse_strat._edge_view_scores.cpu().to_vector();
+        for (size_t i = 0; i < n; ++i) {
+            EXPECT_EQ(sparse_scratch_after[i], 0.0f) << "step=" << step << " row=" << i;
+        }
+
+        const auto dense_sum = dense_strat._edge_score_sum.cpu().to_vector();
+        const auto sparse_sum = sparse_strat._edge_score_sum.cpu().to_vector();
+        ASSERT_EQ(dense_sum.size(), sparse_sum.size());
+        for (size_t i = 0; i < n; ++i) {
+            EXPECT_NEAR(sparse_sum[i], dense_sum[i], 1e-6f) << "step=" << step << " row=" << i;
+        }
+    }
+}
+
+TEST(MRNFStrategyTest, SparseStepStatsFoldMatchesDenseAcrossSteps) {
+    constexpr size_t n = 1029;
+    auto dense_data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+    auto sparse_data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+    dense_data.set_frozen_ranges({{20, 45}});
+    sparse_data.set_frozen_ranges({{20, 45}});
+
+    auto params = recipe_test_params(static_cast<int>(n));
+    params.start_refine = 10;
+    params.stop_refine = 500;
+    params.grow_until_iter = 500;
+
+    MRNF dense_strat(dense_data);
+    MRNF sparse_strat(sparse_data);
+    dense_strat.initialize(params);
+    sparse_strat.initialize(params);
+    dense_strat.ensure_peak_rows();
+    sparse_strat.ensure_peak_rows();
+    dense_strat.ensure_densification_info_shape();
+    sparse_strat.ensure_densification_info_shape();
+
+    for (int step = 0; step < 12; ++step) {
+        const int backward_iter = 20 + step;
+        const int fold_iter = backward_iter + 1;
+
+        std::vector<float> row0(n, 0.0f), row1(n, 0.0f), step_peak(n, 0.0f);
+        std::vector<int> visible;
+        if (step != 5) { // step 5 exercises zero-visible decay
+            for (size_t i = 0; i < n; ++i) {
+                if ((i + static_cast<size_t>(step) * 11) % 4 == 0) {
+                    visible.push_back(static_cast<int>(i));
+                    row0[i] = (i % 8 == 0) ? 0.0f : (0.1f + 0.02f * static_cast<float>((i + step) % 19));
+                    row1[i] = (i % 12 == 0) ? 0.0f : (0.05f + 0.03f * static_cast<float>((i * 3 + step) % 23));
+                    step_peak[i] = (i % 16 == 0) ? 0.0f : (0.01f * static_cast<float>((i * 5 + step * 7) % 91));
+                }
+            }
+        }
+
+        const auto row0_gpu = Tensor::from_vector(row0, TensorShape({1, n}), Device::CUDA);
+        const auto row1_gpu = Tensor::from_vector(row1, TensorShape({1, n}), Device::CUDA);
+        const auto peak_gpu = Tensor::from_vector(step_peak, TensorShape({n}), Device::CUDA);
+
+        dense_data._densification_info.slice(0, 0, 1).copy_(row0_gpu);
+        dense_data._densification_info.slice(0, 1, 2).copy_(row1_gpu);
+        dense_strat._step_blend_peak.copy_(peak_gpu);
+
+        sparse_data._densification_info.slice(0, 0, 1).copy_(row0_gpu);
+        sparse_data._densification_info.slice(0, 1, 2).copy_(row1_gpu);
+        sparse_strat._step_blend_peak.copy_(peak_gpu);
+
+        // Dense sequence (as executed in post_backward(fold_iter))
+        dense_strat.fold_step_error(fold_iter);
+        zero_frozen_scores_inplace(dense_data, dense_strat._refine_weight_max);
+        auto dense_vis = dense_strat.visibility_accumulator();
+        zero_frozen_scores_inplace(dense_data, dense_vis);
+        dense_strat.fold_blend_peak();
+
+        // Sparse sequence
+        const auto vis_gpu = visible.empty()
+                                 ? Tensor::empty({1}, Device::CUDA, DataType::Int32)
+                                 : Tensor::from_vector(visible, TensorShape({visible.size()}), Device::CUDA);
+        const bool folded = sparse_strat.fold_step_stats_sparse(
+            backward_iter,
+            reinterpret_cast<const uint32_t*>(vis_gpu.ptr<int32_t>()),
+            visible.size(),
+            nullptr);
+        ASSERT_TRUE(folded);
+    }
+
+    // Flush via for_each_gaussian_row (same contract as Morton reorder / refine)
+    sparse_strat.for_each_gaussian_row([](Tensor&) {});
+    EXPECT_DOUBLE_EQ(sparse_strat._blend_peak_scale, 1.0);
+
+    const auto dense_err = dense_strat._refine_weight_max.cpu().to_vector();
+    const auto sparse_err = sparse_strat._refine_weight_max.cpu().to_vector();
+    const auto dense_info = dense_data._densification_info.cpu().to_vector();
+    const auto sparse_info = sparse_data._densification_info.cpu().to_vector();
+    const auto dense_peak = dense_strat._blend_peak.cpu().to_vector();
+    const auto sparse_peak = sparse_strat._blend_peak.cpu().to_vector();
+    const auto dense_step_peak = dense_strat._step_blend_peak.cpu().to_vector();
+    const auto sparse_step_peak = sparse_strat._step_blend_peak.cpu().to_vector();
+    const auto dense_renders = dense_strat._renders.cpu().to_vector();
+    const auto sparse_renders = sparse_strat._renders.cpu().to_vector();
+
+    for (size_t i = 0; i < n; ++i) {
+        EXPECT_NEAR(sparse_err[i], dense_err[i], 1e-6f) << "err row=" << i;
+        EXPECT_NEAR(sparse_peak[i], dense_peak[i], 1e-5f) << "peak row=" << i;
+        EXPECT_EQ(sparse_step_peak[i], 0.0f) << "step_peak row=" << i;
+        EXPECT_EQ(dense_step_peak[i], 0.0f);
+        EXPECT_EQ(sparse_renders[i], dense_renders[i]) << "renders row=" << i;
+    }
+    ASSERT_EQ(dense_info.size(), sparse_info.size());
+    for (size_t i = 0; i < dense_info.size(); ++i) {
+        EXPECT_NEAR(sparse_info[i], dense_info[i], 1e-6f) << "info idx=" << i;
+    }
+    if (dense_strat._exchange_window_views.is_valid()) {
+        ASSERT_TRUE(sparse_strat._exchange_window_views.is_valid());
+        const auto d_ex = dense_strat._exchange_window_views.cpu().to_vector();
+        const auto s_ex = sparse_strat._exchange_window_views.cpu().to_vector();
+        ASSERT_EQ(d_ex.size(), s_ex.size());
+        for (size_t i = 0; i < d_ex.size(); ++i) {
+            EXPECT_EQ(s_ex[i], d_ex[i]) << "exchange_window_views row=" << i;
+        }
+    }
+}
+
+TEST(MRNFStrategyTest, NoiseInjectionEarlyExitMatchesThreshold) {
+    constexpr size_t n = 256;
+    const float lr_mean = 1.6e-4f;
+    const float noise_weight = 5e5f;
+    const float median_scale = 0.25f;
+    const float scale = lr_mean * noise_weight;
+    const float min_factor = 1e-12f / scale;
+    const float max_p = 1.0f - std::pow(min_factor, 1.0f / 150.0f);
+    const float max_logit = std::log(max_p / (1.0f - max_p));
+
+    std::vector<float> raw_opac(n);
+    std::vector<float> vis(n, 1.0f);
+    for (size_t i = 0; i < n; ++i) {
+        if (i < 64) {
+            raw_opac[i] = -6.0f + 0.1f * static_cast<float>(i);
+        } else if (i < 128) {
+            // Sweep tightly across the max_logit boundary
+            raw_opac[i] = max_logit + (static_cast<float>(i) - 96.0f) * 1e-3f;
+        } else if (i < 192) {
+            // Well above max_logit (fast early exit)
+            raw_opac[i] = max_logit + 0.5f + 0.1f * static_cast<float>(i - 128);
+        } else {
+            raw_opac[i] = -2.0f;
+            vis[i] = 0.0f; // invisible
+        }
+    }
+    raw_opac[0] = std::numeric_limits<float>::quiet_NaN();
+    raw_opac[1] = std::numeric_limits<float>::infinity();
+    raw_opac[2] = -std::numeric_limits<float>::infinity();
+
+    auto means = Tensor::zeros({n, 3}, Device::CUDA);
+    const auto opac_gpu = Tensor::from_vector(raw_opac, TensorShape({n}), Device::CUDA);
+    const auto vis_gpu = Tensor::from_vector(vis, TensorShape({n}), Device::CUDA);
+
+    mrnf_strategy::launch_mrnf_noise_injection(
+        means.ptr<float>(), opac_gpu.ptr<float>(), vis_gpu.ptr<float>(),
+        nullptr, 0, lr_mean, noise_weight, median_scale, n, 12345ULL);
+
+    const auto out = means.cpu().to_vector();
+    // Low-opacity visible rows must receive non-zero noise; high-opacity / invisible / NaN / +inf rows must stay 0.
+    int nonzero_low = 0;
+    for (size_t i = 0; i < n; ++i) {
+        const float mag = std::abs(out[3 * i]) + std::abs(out[3 * i + 1]) + std::abs(out[3 * i + 2]);
+        if (i == 0 || i == 1 || i >= 192 || (i >= 128 && i < 192)) {
+            EXPECT_EQ(mag, 0.0f) << "row=" << i << " raw_opac=" << raw_opac[i];
+        } else if (raw_opac[i] < max_logit - 0.05f && vis[i] > 0.0f) {
+            if (mag > 0.0f) {
+                ++nonzero_low;
+            }
+        }
+    }
+    EXPECT_GT(nonzero_low, 30);
+
+    // Zero scale early return must leave means untouched.
+    auto means_zero = Tensor::ones({n, 3}, Device::CUDA);
+    mrnf_strategy::launch_mrnf_noise_injection(
+        means_zero.ptr<float>(), opac_gpu.ptr<float>(), vis_gpu.ptr<float>(),
+        nullptr, 0, 0.0f, noise_weight, median_scale, n, 12345ULL);
+    const auto out_zero = means_zero.cpu().to_vector();
+    for (float v : out_zero) {
+        EXPECT_EQ(v, 1.0f);
+    }
 }

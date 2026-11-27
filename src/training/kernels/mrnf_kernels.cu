@@ -132,65 +132,17 @@ namespace lfs::training::mrnf_strategy {
         return (bits & 0x80000000u) ? ~bits : (bits | 0x80000000u);
     }
 
-    // Eligible rows by ascending value, a NaN still below every ineligible row.
-    __global__ void lowest_eligible_keys_kernel(
+    // Eligible rows by ascending value, a NaN still below every ineligible row,
+    // stored bit-inverted so the lowest rows are the largest keys.
+    __global__ void lowest_eligible_inverted_keys_kernel(
         const float* __restrict__ values,
         const bool* __restrict__ eligible,
         uint32_t* __restrict__ keys,
-        uint32_t* __restrict__ rows,
         const size_t N) {
         const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
         if (i >= N)
             return;
-        keys[i] = eligible[i] ? min(ascending_float_key(values[i]), 0xfffffffeu) : 0xffffffffu;
-        rows[i] = static_cast<uint32_t>(i);
-    }
-
-    __global__ void widen_rows_kernel(
-        const uint32_t* __restrict__ rows,
-        int64_t* __restrict__ out,
-        const size_t count) {
-        const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-        if (i < count)
-            out[i] = static_cast<int64_t>(rows[i]);
-    }
-
-    void launch_lowest_eligible_rows(
-        const float* values,
-        const bool* eligible,
-        const size_t N,
-        const size_t count,
-        int64_t* rows,
-        void* stream) {
-        if (N == 0 || count == 0)
-            return;
-        LFS_ASSERT_MSG(N <= static_cast<size_t>(INT_MAX) && count <= N,
-                       "MRNF lowest rows exceed int32 row capacity");
-        constexpr int threads = 256;
-        const int blocks = static_cast<int>((N + threads - 1) / threads);
-        const cudaStream_t s = resolve_stream(stream);
-        const lfs::core::CUDAStreamGuard stream_guard(s);
-
-        const auto buffer = [N] {
-            return lfs::core::Tensor::empty({N}, lfs::core::Device::CUDA, lfs::core::DataType::Int32);
-        };
-        auto keys_a = buffer(), keys_b = buffer(), rows_a = buffer(), rows_b = buffer();
-        const auto u32 = [](lfs::core::Tensor& t) { return reinterpret_cast<uint32_t*>(t.ptr<int32_t>()); };
-
-        lowest_eligible_keys_kernel<<<blocks, threads, 0, s>>>(values, eligible, u32(keys_a), u32(rows_a), N);
-        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.lowest_eligible_keys");
-        // Stable, so equal keys keep row order.
-        cub::DoubleBuffer<uint32_t> keys(u32(keys_a), u32(keys_b));
-        cub::DoubleBuffer<uint32_t> values_rows(u32(rows_a), u32(rows_b));
-        const auto radix_sort = [&](void* workspace, size_t& workspace_bytes) {
-            return cub::DeviceRadixSort::SortPairs(workspace, workspace_bytes, keys, values_rows,
-                                                   static_cast<int>(N), 0, 32, s);
-        };
-        cuda_scratch::CubWorkspace workspace("cub::DeviceRadixSort::SortPairs", s, radix_sort);
-        workspace.run(radix_sort);
-        widen_rows_kernel<<<static_cast<int>((count + threads - 1) / threads), threads, 0, s>>>(
-            values_rows.Current(), rows, count);
-        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.lowest_eligible_rows");
+        keys[i] = ~(eligible[i] ? min(ascending_float_key(values[i]), 0xfffffffeu) : 0xffffffffu);
     }
 
     __global__ void fill_index_mask_kernel(
@@ -216,7 +168,7 @@ namespace lfs::training::mrnf_strategy {
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.fill_index_mask");
     }
 
-    __global__ void mrnf_noise_injection_kernel(
+    __global__ void __launch_bounds__(256, 6) mrnf_noise_injection_kernel(
         float* __restrict__ means,
         const float* __restrict__ raw_opacities,
         const float* __restrict__ vis_count,
@@ -225,11 +177,18 @@ namespace lfs::training::mrnf_strategy {
         float lr_mean,
         float noise_weight,
         float median_scale,
+        float max_logit,
         size_t N,
         uint64_t seed) {
 
         const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
         if (idx >= N)
+            return;
+
+        // Host-precomputed logit ceiling above which (1 - sigmoid(x))^150 * scale < 1e-12
+        // strictly holds; exits after one coalesced float load for high-opacity splats.
+        const float raw_opac = raw_opacities[idx];
+        if (raw_opac > max_logit)
             return;
         if (frozen_mask != nullptr && idx < frozen_mask_size && frozen_mask[idx])
             return;
@@ -237,9 +196,9 @@ namespace lfs::training::mrnf_strategy {
         if (vis_count[idx] <= 0.0f)
             return;
 
-        const float inv_opac = 1.0f - d_sigmoid(raw_opacities[idx]);
-        float weight = powf(fmaxf(inv_opac, 0.0f), 150.0f);
-        weight *= lr_mean * noise_weight;
+        // 1 - sigmoid(x) == sigmoid(-x) == 1 / (1 + exp(x)), avoiding cancellation at large logits.
+        const float inv_opac = 1.0f / (1.0f + expf(raw_opac));
+        float weight = powf(fmaxf(inv_opac, 0.0f), 150.0f) * (lr_mean * noise_weight);
 
         if (weight < 1e-12f)
             return;
@@ -272,6 +231,18 @@ namespace lfs::training::mrnf_strategy {
         if (N == 0)
             return;
 
+        const double scale = static_cast<double>(lr_mean) * static_cast<double>(noise_weight);
+        if (std::isfinite(scale) && scale < 1e-12)
+            return;
+
+        float max_logit = std::numeric_limits<float>::infinity();
+        if (std::isfinite(scale) && scale > 0.0) {
+            const double p_min = std::pow(1e-12 / scale, 1.0 / 150.0);
+            if (p_min > 0.0 && p_min < 1.0 - 1e-4) {
+                max_logit = static_cast<float>(std::log((1.0 - p_min) / p_min)) + 1e-2f;
+            }
+        }
+
         constexpr int threads = 256;
         const int blocks = static_cast<int>((N + threads - 1) / threads);
         cudaStream_t s = resolve_stream(stream);
@@ -279,7 +250,7 @@ namespace lfs::training::mrnf_strategy {
         mrnf_noise_injection_kernel<<<blocks, threads, 0, s>>>(
             means, raw_opacities, vis_count,
             frozen_mask, frozen_mask_size,
-            lr_mean, noise_weight, median_scale, N, seed);
+            lr_mean, noise_weight, median_scale, max_logit, N, seed);
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.noise_injection");
     }
 
@@ -748,6 +719,52 @@ namespace lfs::training::mrnf_strategy {
             cuda_scratch::CubWorkspace workspace("cub::DeviceSelect::If", s, select);
             workspace.run(select);
         }
+
+        // Rows of the K largest keys in descending key order, ties by ascending row,
+        // as a stable descending sort of all N keys would give. Only the K winners
+        // are sorted: radix select finds the threshold, DeviceSelect keeps row order.
+        void write_largest_key_rows(const uint32_t* keys, const size_t N, const size_t K,
+                                    int64_t* output_indices, const cudaStream_t s) {
+            const auto threshold = radix_select_largest(keys, N, K, s);
+
+            const size_t pick_bytes = cuda_scratch::checked_bytes(K, sizeof(uint32_t), "MRNF top-k picks");
+            cuda_scratch::DeviceBuffer rows_buffer(pick_bytes, s, "mrnf.topk.rows");
+            cuda_scratch::DeviceBuffer rows_sorted_buffer(pick_bytes, s, "mrnf.topk.rows_sorted");
+            cuda_scratch::DeviceBuffer pick_keys_buffer(pick_bytes, s, "mrnf.topk.pick_keys");
+            cuda_scratch::DeviceBuffer pick_keys_sorted_buffer(pick_bytes, s, "mrnf.topk.pick_keys_sorted");
+            auto* rows = rows_buffer.as<uint32_t>();
+
+            select_rows(KeyAbove{keys, threshold.bits}, N, rows, s);
+            if (threshold.remaining > 0) {
+                // Ties at the threshold go to the lowest rows.
+                cuda_scratch::DeviceBuffer equal_buffer(
+                    cuda_scratch::checked_bytes(threshold.equal, sizeof(uint32_t), "MRNF top-k ties"), s,
+                    "mrnf.topk.ties");
+                select_rows(KeyEquals{keys, threshold.bits}, N, equal_buffer.as<uint32_t>(), s);
+                LFS_CUDA_CHECK_MSG(cudaMemcpyAsync(rows + threshold.greater, equal_buffer.as<uint32_t>(),
+                                                   threshold.remaining * sizeof(uint32_t),
+                                                   cudaMemcpyDeviceToDevice, s),
+                                   "MRNF top-k tie rows");
+            }
+
+            constexpr int threads = 256;
+            const int output_blocks = static_cast<int>((K + threads - 1) / threads);
+            gather_key_bits_kernel<<<output_blocks, threads, 0, s>>>(keys, rows, pick_keys_buffer.as<uint32_t>(), K);
+            LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.topk_pick_keys");
+
+            cub::DoubleBuffer<uint32_t> key_buffers(pick_keys_buffer.as<uint32_t>(),
+                                                    pick_keys_sorted_buffer.as<uint32_t>());
+            cub::DoubleBuffer<uint32_t> row_buffers(rows, rows_sorted_buffer.as<uint32_t>());
+            auto sort_pairs = [&](void* workspace, size_t& workspace_bytes) {
+                return cub::DeviceRadixSort::SortPairsDescending(
+                    workspace, workspace_bytes, key_buffers, row_buffers, static_cast<int>(K), 0, 32, s);
+            };
+            cuda_scratch::CubWorkspace sort_workspace("cub::DeviceRadixSort::SortPairsDescending", s, sort_pairs);
+            sort_workspace.run(sort_pairs);
+
+            widen_gumbel_indices_kernel<<<output_blocks, threads, 0, s>>>(row_buffers.Current(), output_indices, K);
+            LFS_CUDA_LAUNCH_CHECK(s, "MRNF top-k uint32 output widening");
+        }
     } // namespace
 
     float launch_kth_largest(
@@ -811,43 +828,30 @@ namespace lfs::training::mrnf_strategy {
             weights, keys, N, seed);
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.gumbel_keys");
 
-        const auto threshold = radix_select_largest(keys, N, K, s);
+        write_largest_key_rows(keys, N, K, output_indices, s);
+    }
 
-        const size_t pick_bytes = cuda_scratch::checked_bytes(K, sizeof(uint32_t), "MRNF Gumbel picks");
-        cuda_scratch::DeviceBuffer rows_buffer(pick_bytes, s, "mrnf.gumbel.rows");
-        cuda_scratch::DeviceBuffer rows_sorted_buffer(pick_bytes, s, "mrnf.gumbel.rows_sorted");
-        cuda_scratch::DeviceBuffer pick_keys_buffer(pick_bytes, s, "mrnf.gumbel.pick_keys");
-        cuda_scratch::DeviceBuffer pick_keys_sorted_buffer(pick_bytes, s, "mrnf.gumbel.pick_keys_sorted");
-        auto* rows = rows_buffer.as<uint32_t>();
-
-        select_rows(KeyAbove{keys, threshold.bits}, N, rows, s);
-        if (threshold.remaining > 0) {
-            // Ties at the threshold go to the lowest rows.
-            cuda_scratch::DeviceBuffer equal_buffer(
-                cuda_scratch::checked_bytes(threshold.equal, sizeof(uint32_t), "MRNF Gumbel ties"), s,
-                "mrnf.gumbel.ties");
-            select_rows(KeyEquals{keys, threshold.bits}, N, equal_buffer.as<uint32_t>(), s);
-            LFS_CUDA_CHECK_MSG(cudaMemcpyAsync(rows + threshold.greater, equal_buffer.as<uint32_t>(),
-                                               threshold.remaining * sizeof(uint32_t),
-                                               cudaMemcpyDeviceToDevice, s),
-                               "MRNF Gumbel tie rows");
-        }
-
-        const int output_blocks = static_cast<int>((K + threads - 1) / threads);
-        gather_key_bits_kernel<<<output_blocks, threads, 0, s>>>(keys, rows, pick_keys_buffer.as<uint32_t>(), K);
-        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.gumbel_pick_keys");
-
-        cub::DoubleBuffer<uint32_t> key_buffers(pick_keys_buffer.as<uint32_t>(), pick_keys_sorted_buffer.as<uint32_t>());
-        cub::DoubleBuffer<uint32_t> row_buffers(rows, rows_sorted_buffer.as<uint32_t>());
-        auto sort_pairs = [&](void* workspace, size_t& workspace_bytes) {
-            return cub::DeviceRadixSort::SortPairsDescending(
-                workspace, workspace_bytes, key_buffers, row_buffers, static_cast<int>(K), 0, 32, s);
-        };
-        cuda_scratch::CubWorkspace sort_workspace("cub::DeviceRadixSort::SortPairsDescending", s, sort_pairs);
-        sort_workspace.run(sort_pairs);
-
-        widen_gumbel_indices_kernel<<<output_blocks, threads, 0, s>>>(row_buffers.Current(), output_indices, K);
-        LFS_CUDA_LAUNCH_CHECK(s, "MRNF Gumbel uint32 output widening");
+    void launch_lowest_eligible_rows(
+        const float* values,
+        const bool* eligible,
+        const size_t N,
+        const size_t count,
+        int64_t* rows,
+        void* stream) {
+        if (N == 0 || count == 0)
+            return;
+        LFS_ASSERT_MSG(N <= static_cast<size_t>(INT_MAX) && count <= N,
+                       "MRNF lowest rows exceed int32 row capacity");
+        const cudaStream_t s = resolve_stream(stream);
+        cuda_scratch::DeviceBuffer key_buffer(
+            cuda_scratch::checked_bytes(N, sizeof(uint32_t), "MRNF lowest-row keys"), s, "mrnf.lowest.keys");
+        constexpr int threads = 256;
+        lowest_eligible_inverted_keys_kernel<<<static_cast<int>((N + threads - 1) / threads), threads, 0, s>>>(
+            values, eligible, key_buffer.as<uint32_t>(), N);
+        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.lowest_eligible_keys");
+        // The largest inverted keys, ties to the lowest rows, in descending
+        // inverted order: the first `count` rows of a stable ascending sort.
+        write_largest_key_rows(key_buffer.as<uint32_t>(), N, count, rows, s);
     }
 
     __global__ void far_field_mask_kernel(

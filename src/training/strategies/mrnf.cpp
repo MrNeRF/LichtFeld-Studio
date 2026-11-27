@@ -22,6 +22,7 @@
 #include "lfs/training/ray_depth_step.cuh"
 #include "lfs/training/sh_value_storage.hpp"
 #include "noise_infill.hpp"
+#include "rasterization/fast_rasterizer.hpp"
 #include "strategy_utils.hpp"
 #include "training/dataset.hpp"
 #include <algorithm>
@@ -654,9 +655,10 @@ namespace lfs::training {
         if (!_edge_view_scores.is_valid() || _edge_view_scores.ndim() != 1 ||
             _edge_view_scores.numel() != n) {
             _edge_view_scores = zero_splat_vector(n, _splat_data->means().device());
-        } else {
+        } else if (!_edge_view_scores_clean) {
             _edge_view_scores.zero_();
         }
+        _edge_view_scores_clean = false;
         return _edge_view_scores;
     }
 
@@ -675,8 +677,275 @@ namespace lfs::training {
         normalize_by_positive_median_inplace(_edge_view_scores);
         zero_frozen_scores_inplace(*_splat_data, _edge_view_scores);
         _edge_score_sum.add_(_edge_view_scores);
+        _edge_view_scores_clean = false;
         ++_edge_sample_count;
         publish_vram_attribution();
+    }
+
+    void MRNF::on_edge_score_accumulated_sparse(
+        const int iter,
+        const uint32_t* visible_indices,
+        const size_t n_visible,
+        void* stream) {
+        if (!_params || !_params->use_edge_map ||
+            iter <= static_cast<int>(_params->start_refine) ||
+            iter >= static_cast<int>(_params->stop_refine) ||
+            !_edge_view_scores.is_valid() || !_edge_score_sum.is_valid() ||
+            _edge_view_scores.numel() != _edge_score_sum.numel()) {
+            return;
+        }
+        if (visible_indices == nullptr) {
+            on_edge_score_accumulated(iter);
+            return;
+        }
+        if (n_visible > 0) {
+            const cudaStream_t s =
+                stream != nullptr ? static_cast<cudaStream_t>(stream) : lfs::core::getCurrentCUDAStream();
+            const size_t n = static_cast<size_t>(_splat_data->size());
+            const auto frozen_mask = make_frozen_mask(*_splat_data, n, _splat_data->means().device());
+            _edge_view_scores.sync_to_stream(s);
+            _edge_score_sum.sync_to_stream(s);
+            if (frozen_mask.is_valid()) {
+                frozen_mask.sync_to_stream(s);
+            }
+            kernels::launch_normalize_and_accumulate_edge_scores_sparse(
+                _edge_view_scores.ptr<float>(),
+                _edge_score_sum.ptr<float>(),
+                frozen_mask.is_valid() ? frozen_mask.ptr<bool>() : nullptr,
+                frozen_mask.is_valid() ? frozen_mask.numel() : 0,
+                visible_indices,
+                n_visible,
+                s);
+            _edge_view_scores.set_stream(s);
+            _edge_score_sum.set_stream(s);
+        }
+        _edge_view_scores_clean = true;
+        ++_edge_sample_count;
+        publish_vram_attribution();
+    }
+
+    bool MRNF::fold_step_stats_sparse(
+        const int backward_iter,
+        const uint32_t* visible_indices,
+        const size_t n_visible,
+        void* stream) {
+        using namespace lfs::core;
+        const int fold_iter = backward_iter + 1;
+        if (_topology_frozen || !_params || !_splat_data || visible_indices == nullptr ||
+            fold_iter >= static_cast<int>(_params->stop_refine)) {
+            return false;
+        }
+        const size_t n = static_cast<size_t>(_splat_data->size());
+        if (n == 0) {
+            return false;
+        }
+        auto& info = _splat_data->_densification_info;
+        if (!_refine_weight_max.is_valid() || _refine_weight_max.numel() != n ||
+            !info.is_valid() || info.ndim() != 2 ||
+            info.shape()[0] < densification_row_count() || info.shape()[1] != n) {
+            return false;
+        }
+        const bool do_peak = peak_rows_on();
+        if (do_peak && (!_blend_peak.is_valid() || _blend_peak.numel() != n ||
+                        !_step_blend_peak.is_valid() || _step_blend_peak.numel() != n ||
+                        !_renders.is_valid() || _renders.numel() != n)) {
+            return false;
+        }
+
+        float* coverage_views = nullptr;
+        if (growth_exchange_active(fold_iter)) {
+            if (!_exchange_window_views.is_valid() || _exchange_window_views.numel() != n) {
+                _exchange_window_views = Tensor::zeros({n}, _splat_data->means().device());
+            }
+            coverage_views = _exchange_window_views.ptr<float>();
+        }
+
+        float inv_peak_scale = 1.0f;
+        if (do_peak) {
+            constexpr double kPeakHalfLifeSteps = 800.0;
+            _blend_peak_scale *= std::pow(0.5, 1.0 / kPeakHalfLifeSteps);
+            if (_blend_peak_scale < 1e-3) {
+                flush_blend_peak_scale();
+            }
+            inv_peak_scale = static_cast<float>(1.0 / _blend_peak_scale);
+        }
+
+        if (n_visible > 0) {
+            const cudaStream_t s =
+                stream != nullptr ? static_cast<cudaStream_t>(stream) : getCurrentCUDAStream();
+            const auto frozen_mask = make_frozen_mask(*_splat_data, n, _splat_data->means().device());
+            _refine_weight_max.sync_to_stream(s);
+            info.sync_to_stream(s);
+            if (_exchange_window_views.is_valid() && coverage_views != nullptr) {
+                _exchange_window_views.sync_to_stream(s);
+            }
+            if (frozen_mask.is_valid()) {
+                frozen_mask.sync_to_stream(s);
+            }
+            if (do_peak) {
+                _step_blend_peak.sync_to_stream(s);
+                _blend_peak.sync_to_stream(s);
+                _renders.sync_to_stream(s);
+            }
+            mrnf_strategy::launch_fold_step_stats_sparse(
+                visible_indices,
+                n_visible,
+                _refine_weight_max.ptr<float>(),
+                info.ptr<float>(),
+                coverage_views,
+                frozen_mask.is_valid() ? frozen_mask.ptr<bool>() : nullptr,
+                frozen_mask.is_valid() ? frozen_mask.numel() : 0,
+                do_peak ? _step_blend_peak.ptr<float>() : nullptr,
+                do_peak ? _blend_peak.ptr<float>() : nullptr,
+                do_peak ? _renders.ptr<float>() : nullptr,
+                inv_peak_scale,
+                n,
+                s);
+            _refine_weight_max.set_stream(s);
+            info.set_stream(s);
+            if (_exchange_window_views.is_valid() && coverage_views != nullptr) {
+                _exchange_window_views.set_stream(s);
+            }
+            if (do_peak) {
+                _step_blend_peak.set_stream(s);
+                _blend_peak.set_stream(s);
+                _renders.set_stream(s);
+            }
+        }
+        _step_stats_folded_sparse = true;
+        return true;
+    }
+
+    bool MRNF::prepare_fastgs_fused_mrnf_hooks(
+        const int backward_iter,
+        const bool allow_noise,
+        void* stream,
+        FastGSFusedMrnfHooks& out) {
+        using namespace lfs::core;
+        out = FastGSFusedMrnfHooks{};
+        const int fold_iter = backward_iter + 1;
+        if (_topology_frozen || !_params || !_splat_data || fold_iter >= static_cast<int>(_params->stop_refine)) {
+            return false;
+        }
+        const size_t n = static_cast<size_t>(_splat_data->size());
+        if (n == 0) {
+            return false;
+        }
+        auto& info = _splat_data->_densification_info;
+        if (!_refine_weight_max.is_valid() || _refine_weight_max.numel() != n ||
+            !info.is_valid() || info.ndim() != 2 ||
+            info.shape()[0] < densification_row_count() || info.shape()[1] != n) {
+            return false;
+        }
+        const bool do_peak = peak_rows_on();
+        if (do_peak && (!_blend_peak.is_valid() || _blend_peak.numel() != n ||
+                        !_step_blend_peak.is_valid() || _step_blend_peak.numel() != n ||
+                        !_renders.is_valid() || _renders.numel() != n)) {
+            return false;
+        }
+
+        float* coverage_views = nullptr;
+        if (growth_exchange_active(fold_iter)) {
+            if (!_exchange_window_views.is_valid() || _exchange_window_views.numel() != n) {
+                _exchange_window_views = Tensor::zeros({n}, _splat_data->means().device());
+            }
+            coverage_views = _exchange_window_views.ptr<float>();
+        }
+
+        // The decayed scale is only committed once the sparse backward consumed the fold.
+        // A flush keeps the represented peaks unchanged, so it may run ahead of the commit.
+        constexpr double kPeakHalfLifeSteps = 800.0;
+        double next_scale = _blend_peak_scale;
+        float inv_peak_scale = 1.0f;
+        if (do_peak) {
+            next_scale = _blend_peak_scale * std::pow(0.5, 1.0 / kPeakHalfLifeSteps);
+            if (next_scale < 1e-3) {
+                flush_blend_peak_scale();
+                next_scale = _blend_peak_scale * std::pow(0.5, 1.0 / kPeakHalfLifeSteps);
+            }
+            inv_peak_scale = static_cast<float>(1.0 / next_scale);
+        }
+
+        const cudaStream_t s = stream != nullptr ? static_cast<cudaStream_t>(stream) : getCurrentCUDAStream();
+        auto frozen_mask = make_frozen_mask(*_splat_data, n, _splat_data->means().device());
+        _refine_weight_max.sync_to_stream(s);
+        info.sync_to_stream(s);
+        if (coverage_views != nullptr) {
+            _exchange_window_views.sync_to_stream(s);
+        }
+        if (frozen_mask.is_valid()) {
+            frozen_mask.sync_to_stream(s);
+        }
+        if (do_peak) {
+            _step_blend_peak.sync_to_stream(s);
+            _blend_peak.sync_to_stream(s);
+            _renders.sync_to_stream(s);
+        }
+
+        auto& fold = out.fold;
+        fold.refine_weight = _refine_weight_max.ptr<float>();
+        fold.densification_info = info.ptr<float>();
+        fold.coverage_views = coverage_views;
+        fold.frozen_mask = frozen_mask.is_valid() ? frozen_mask.ptr<bool>() : nullptr;
+        fold.frozen_n = frozen_mask.is_valid() ? frozen_mask.numel() : 0;
+        fold.step_peak = do_peak ? _step_blend_peak.ptr<float>() : nullptr;
+        fold.peak = do_peak ? _blend_peak.ptr<float>() : nullptr;
+        fold.renders = do_peak ? _renders.ptr<float>() : nullptr;
+        fold.inv_peak_scale = inv_peak_scale;
+        fold.n_primitives = n;
+        out.next_blend_peak_scale = next_scale;
+        out.fold_prepared = true;
+
+        // The next post_backward injects mean noise on these rows with the means rate that
+        // step(backward_iter) sets: apply it right after the rows' Adam update instead.
+        if (allow_noise && _bounds_valid && _optimizer && static_cast<size_t>(backward_iter) < _params->iterations) {
+            const double next_mean_lr =
+                (_mean_lr_unscaled * _mean_lr_gamma) * static_cast<double>(_bounds.median_size);
+            const float lr_mean = static_cast<float>(next_mean_lr);
+            const float noise_weight = _params->means_noise_weight;
+            auto& noise = out.noise;
+            const double scale = static_cast<double>(lr_mean) * static_cast<double>(noise_weight);
+            noise.enabled = !(std::isfinite(scale) && scale < 1e-12);
+            float max_logit = std::numeric_limits<float>::infinity();
+            if (std::isfinite(scale) && scale > 0.0) {
+                const double p_min = std::pow(1e-12 / scale, 1.0 / 150.0);
+                if (p_min > 0.0 && p_min < 1.0 - 1e-4) {
+                    max_logit = static_cast<float>(std::log((1.0 - p_min) / p_min)) + 1e-2f;
+                }
+            }
+            noise.max_logit = max_logit;
+            noise.lr_mean_noise_weight = lr_mean * noise_weight;
+            noise.median_scale = _bounds.median_size;
+            noise.vis_count = info.ptr<float>() + 2 * n;
+            noise.frozen_mask = fold.frozen_mask;
+            noise.frozen_mask_size = fold.frozen_n;
+            noise.seed = static_cast<uint64_t>(
+                std::chrono::high_resolution_clock::now().time_since_epoch().count());
+            out.noise_prepared = true;
+        }
+        out.frozen_mask_keepalive = std::move(frozen_mask);
+        return true;
+    }
+
+    void MRNF::commit_fastgs_fused_mrnf_hooks(const FastGSFusedMrnfHooks& prepared, void* stream) {
+        using namespace lfs::core;
+        if (!prepared.fold_prepared) {
+            return;
+        }
+        const cudaStream_t s = stream != nullptr ? static_cast<cudaStream_t>(stream) : getCurrentCUDAStream();
+        _blend_peak_scale = prepared.next_blend_peak_scale;
+        _refine_weight_max.set_stream(s);
+        _splat_data->_densification_info.set_stream(s);
+        if (prepared.fold.coverage_views != nullptr && _exchange_window_views.is_valid()) {
+            _exchange_window_views.set_stream(s);
+        }
+        if (prepared.fold.peak != nullptr) {
+            _step_blend_peak.set_stream(s);
+            _blend_peak.set_stream(s);
+            _renders.set_stream(s);
+        }
+        _step_stats_folded_sparse = true;
+        _noise_injected_fused = prepared.noise_prepared;
     }
 
     void MRNF::pre_step(int iter, RenderOutput& render_output) {
@@ -711,6 +980,8 @@ namespace lfs::training {
         const int completed_views = std::exchange(_edge_sample_count, 0);
         _precomputed_edge_scores = std::move(_edge_score_sum);
         _edge_view_scores = lfs::core::Tensor();
+        _edge_view_scores_clean = false;
+        _precomputed_edge_scores.sync_to_stream(lfs::core::getCurrentCUDAStream());
         _precomputed_edge_scores.div_(static_cast<float>(completed_views));
         zero_frozen_scores_inplace(*_splat_data, _precomputed_edge_scores);
         _edge_precompute_valid = true;
@@ -745,6 +1016,7 @@ namespace lfs::training {
         _edge_score_sum = lfs::core::Tensor();
         _edge_view_scores = lfs::core::Tensor();
         _edge_sample_count = 0;
+        _edge_view_scores_clean = false;
     }
 
     void MRNF::publish_vram_attribution() noexcept {
@@ -825,6 +1097,8 @@ namespace lfs::training {
     void MRNF::post_backward(int iter, RenderOutput& /*render_output*/) {
         LOG_TIMER("MRNF::post_backward");
         using namespace lfs::core;
+        const bool already_folded_sparse = std::exchange(_step_stats_folded_sparse, false);
+        const bool noise_injected_fused = std::exchange(_noise_injected_fused, false);
 
         // The only degree-bump site is post-commit when refining,
         // otherwise immediately. Same cadence as before — bump when
@@ -880,19 +1154,21 @@ namespace lfs::training {
         assert(info.shape()[0] >= densification_row_count());
         assert(info.shape()[1] == n);
 
-        if (_refine_weight_max.numel() == n) {
-            fold_step_error(iter);
-            zero_frozen_scores_inplace(*_splat_data, _refine_weight_max);
-            auto vis = visibility_accumulator();
-            zero_frozen_scores_inplace(*_splat_data, vis);
-        } else if (info.is_valid() && info.numel() > 0) {
-            _splat_data->_densification_info.zero_();
+        if (!already_folded_sparse) {
+            if (_refine_weight_max.numel() == n) {
+                fold_step_error(iter);
+                zero_frozen_scores_inplace(*_splat_data, _refine_weight_max);
+                auto vis = visibility_accumulator();
+                zero_frozen_scores_inplace(*_splat_data, vis);
+            } else if (info.is_valid() && info.numel() > 0) {
+                _splat_data->_densification_info.zero_();
+            }
         }
 
-        if (_bounds_valid) {
+        if (_bounds_valid && !noise_injected_fused) {
             inject_noise(iter);
         }
-        if (peak_rows_on()) {
+        if (!already_folded_sparse && peak_rows_on()) {
             fold_blend_peak();
         }
 
@@ -908,6 +1184,7 @@ namespace lfs::training {
     }
 
     void MRNF::for_each_gaussian_row(const std::function<void(lfs::core::Tensor&)>& visit) {
+        flush_blend_peak_scale();
         for (auto* rows : {&_refine_weight_max, &_rendered_count, &_precomputed_edge_scores, &_edge_score_sum,
                            &_free_mask, &_exchange_importance_sum, &_exchange_birth,
                            &_exchange_view_count, &_exchange_window_views, &_far_field_mask,
@@ -932,6 +1209,16 @@ namespace lfs::training {
         LFS_VRAM_SCOPE("MRNF::refine");
         const RefineVramWindow vram_window(*_splat_data);
         using namespace lfs::core;
+        flush_blend_peak_scale();
+        const cudaStream_t cur_stream = getCurrentCUDAStream();
+        if (_refine_weight_max.is_valid())
+            _refine_weight_max.sync_to_stream(cur_stream);
+        if (_splat_data->_densification_info.is_valid())
+            _splat_data->_densification_info.sync_to_stream(cur_stream);
+        if (_exchange_window_views.is_valid())
+            _exchange_window_views.sync_to_stream(cur_stream);
+        if (_renders.is_valid())
+            _renders.sync_to_stream(cur_stream);
         // q16 stays authoritative for the refine window (gather/scatter/append
         // re-encode only touched 256-splat blocks). IEEE-f16 still expands.
 
@@ -992,8 +1279,11 @@ namespace lfs::training {
         if (pruned_count > 0) {
             soft_delete_rows(compact_bool_indices(prune_mask, static_cast<size_t>(pruned_count)));
 
-            LOG_DEBUG("MRNF: soft-pruned {} splats at iter {} (active: {}, total slots: {})",
-                      pruned_count, iter, active_count(), _splat_data->size());
+            // The active count costs a device sync: read it only when the line is emitted.
+            if (lfs::core::Logger::get().is_enabled(lfs::core::LogLevel::Debug)) {
+                LOG_DEBUG("MRNF: soft-pruned {} splats at iter {} (active: {}, total slots: {})",
+                          pruned_count, iter, active_count(), _splat_data->size());
+            }
             LFS_COUNTER_ADD("strategy.mrnf.pruned", pruned_count);
         }
 
@@ -1037,13 +1327,16 @@ namespace lfs::training {
             record_exchange_births(growth.split_indices);
         }
 
-        LOG_DEBUG("MRNF refine {}: active {} / cap {}, pruned {}, retired {}, exchanged {}, refilled {}, grown {}", iter,
-                  active_count(), _params->max_cap, pruned_count, _last_retired, growth.exchange_victims,
-                  growth.replacement_count, growth.growth_count);
+        const bool debug_log = lfs::core::Logger::get().is_enabled(lfs::core::LogLevel::Debug);
+        if (debug_log) {
+            LOG_DEBUG("MRNF refine {}: active {} / cap {}, pruned {}, retired {}, exchanged {}, refilled {}, grown {}", iter,
+                      active_count(), _params->max_cap, pruned_count, _last_retired, growth.exchange_victims,
+                      growth.replacement_count, growth.growth_count);
+        }
         enforce_max_cap();
         if (exchanging) {
             reset_exchange_window_outputs();
-            if (exchange_ready) {
+            if (exchange_ready && debug_log) {
                 LOG_DEBUG("MRNF growth exchange: quota={}, victims={}, replacements={}, growth={}, active_after={}",
                           quota, victims_deleted, growth.replacement_count,
                           growth.growth_count, active_count());
@@ -1481,6 +1774,21 @@ namespace lfs::training {
                current_active - result.exchange_victims + split_indices.numel() <=
                    static_cast<size_t>(_params->max_cap));
 
+        // Keep split parents in ascending (Morton) row order so free-slot refills
+        // match parent and destination quantiles and preserve spatial locality.
+        if (split_indices.numel() > 1) {
+            const size_t k = split_indices.numel();
+            const size_t temp_bytes = mrnf_strategy::sort_int64_temp_bytes(k);
+            auto sorted = Tensor::empty({k}, split_indices.device(), DataType::Int64);
+            Tensor temp = temp_bytes > 0
+                              ? Tensor::empty({temp_bytes}, split_indices.device(), DataType::UInt8)
+                              : Tensor();
+            mrnf_strategy::launch_sort_int64(
+                split_indices.ptr<int64_t>(), sorted.ptr<int64_t>(), k,
+                temp.is_valid() ? temp.ptr<uint8_t>() : nullptr, temp_bytes);
+            split_indices = std::move(sorted);
+        }
+
         result.split_indices = split_indices;
 
         const size_t K = split_indices.numel();
@@ -1510,11 +1818,17 @@ namespace lfs::training {
         const auto [reused, n_append] = split_parents_into_children(
             split_indices, std::max<std::size_t>(1, CHILD_CHUNK_BYTES / child_row_bytes), split_at_cap);
 
+        // One active count for the log and the gauge, read only when either is on.
+        const bool debug_log = lfs::core::Logger::get().is_enabled(lfs::core::LogLevel::Debug);
+        const bool gauges_on = lfs::diagnostics::VramProfiler::instance().enabled();
+        const size_t live_after = debug_log || gauges_on ? active_count() : 0;
         LOG_DEBUG("MRNF: split {} splats at iter {} (reused: {}, appended: {}, active: {}, total slots: {})",
-                  K, iter, reused, n_append, active_count(), _splat_data->size());
+                  K, iter, reused, n_append, live_after, _splat_data->size());
         LFS_COUNTER_ADD("strategy.mrnf.split", K);
         LFS_COUNTER_ADD("strategy.mrnf.appended", n_append);
-        LFS_GAUGE("model.gaussians.live", active_count());
+        if (gauges_on) {
+            LFS_GAUGE("model.gaussians.live", live_after);
+        }
         LFS_GAUGE("model.gaussians.capacity", static_cast<double>(_splat_data->size()));
         publish_vram_attribution();
         return result;
@@ -1904,6 +2218,21 @@ namespace lfs::training {
             _ray_depth_state = Tensor();
         if (_rendered_count.is_valid() && _rendered_count.numel() > new_size)
             compact(_rendered_count);
+        auto& lazy_step = _optimizer->lazy_last_step_mutable();
+        if (lazy_step.is_valid() && lazy_step.ndim() == 2 &&
+            lazy_step.shape()[0] == old_size && lazy_step.shape()[1] == 2) {
+            compact(lazy_step);
+        } else if (lazy_step.is_valid()) {
+            lazy_step = Tensor();
+        }
+        auto& geom_step = _optimizer->geom_last_step_mutable();
+        if (geom_step.is_valid() && geom_step.ndim() == 2 &&
+            geom_step.shape()[0] == old_size && geom_step.shape()[1] == 2) {
+            compact(geom_step);
+        } else if (geom_step.is_valid()) {
+            geom_step = Tensor();
+        }
+        flush_blend_peak_scale();
         for (auto* rows : {&_blend_peak, &_step_blend_peak, &_renders}) {
             if (rows->is_valid() && rows->numel() == old_size)
                 compact(*rows);
@@ -1944,6 +2273,7 @@ namespace lfs::training {
             _exchange_window_views = Tensor();
         }
         _edge_view_scores = Tensor();
+        _edge_view_scores_clean = false;
 
         remap_frozen_ranges_after_compaction(*_splat_data, valid_indices, old_size);
         apply_frozen_ranges_to_optimizer(*_splat_data, *_optimizer);
@@ -1961,11 +2291,15 @@ namespace lfs::training {
         auto seed = static_cast<uint64_t>(
             std::chrono::high_resolution_clock::now().time_since_epoch().count());
         const auto frozen_mask = make_frozen_mask(*_splat_data, n, _splat_data->means().device());
+        auto vis = visibility_accumulator();
+        if (vis.is_valid()) {
+            vis.sync_to_stream(lfs::core::getCurrentCUDAStream());
+        }
 
         mrnf_strategy::launch_mrnf_noise_injection(
             _splat_data->means().ptr<float>(),
             _splat_data->opacity_raw().ptr<float>(),
-            visibility_accumulator().ptr<float>(),
+            vis.ptr<float>(),
             frozen_mask.is_valid() ? frozen_mask.ptr<bool>() : nullptr,
             frozen_mask.is_valid() ? frozen_mask.numel() : 0,
             lr_mean,
@@ -1990,6 +2324,7 @@ namespace lfs::training {
         assert(!_params->opacity_decay_rendered_only || _params->gut || _rendered_count.numel() == n);
         lfs::core::Tensor reach;
         if (peak_rows_on()) {
+            flush_blend_peak_scale();
             ensure_peak_rows(); // rows appended by this refine start within the grace: factor 1
             reach = covered_factor();
         }
@@ -2671,6 +3006,10 @@ namespace lfs::training {
     void MRNF::deserialize(std::istream& is) {
         cancel_blob_seeding();
         _ray_depth_state = lfs::core::Tensor();
+        _blend_peak_scale = 1.0;
+        _step_stats_folded_sparse = false;
+        _noise_injected_fused = false;
+        _edge_view_scores_clean = false;
         // Growth exchange importance is transient: after a resume it warms up again.
         reset_exchange_state();
         uint32_t magic = 0, version = 0;
@@ -2809,12 +3148,16 @@ namespace lfs::training {
         _blend_peak = lfs::core::Tensor();
         _step_blend_peak = lfs::core::Tensor();
         _renders = lfs::core::Tensor();
+        _blend_peak_scale = 1.0;
+        _step_stats_folded_sparse = false;
+        _noise_injected_fused = false;
         _retire_first_iter = -1;
         std::swap(_precomputed_edge_scores, source._precomputed_edge_scores);
         std::swap(_edge_precompute_valid, source._edge_precompute_valid);
         std::swap(_edge_score_sum, source._edge_score_sum);
         std::swap(_edge_view_scores, source._edge_view_scores);
         std::swap(_edge_sample_count, source._edge_sample_count);
+        std::swap(_edge_view_scores_clean, source._edge_view_scores_clean);
         std::swap(_free_mask, source._free_mask);
         reset_exchange_state();
         std::swap(_far_field_mask, source._far_field_mask);

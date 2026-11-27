@@ -265,6 +265,66 @@ namespace fast_lfs::optimizer {
         LFS_CUDA_CHECK(cudaFreeAsync(block_touched, stream));
     }
 
+    namespace {
+        __global__ void fill_u16_at_indices_cu(
+            std::uint16_t* __restrict__ data,
+            const int64_t* __restrict__ indices,
+            const int n_indices,
+            const int n_prims,
+            const std::uint16_t value) {
+            const int i = blockIdx.x * blockDim.x + threadIdx.x;
+            if (i >= n_indices)
+                return;
+            const int64_t row = indices[i];
+            if (row >= 0 && row < static_cast<int64_t>(n_prims))
+                data[row] = value;
+        }
+
+        __global__ void fill_u16_range_cu(
+            std::uint16_t* __restrict__ data,
+            const int start,
+            const int count,
+            const std::uint16_t value) {
+            const int i = blockIdx.x * blockDim.x + threadIdx.x;
+            if (i < count)
+                data[start + i] = value;
+        }
+    } // namespace
+
+    void fill_u16_at_indices(
+        std::uint16_t* data,
+        const int64_t* indices_device,
+        const int n_indices,
+        const int n_prims,
+        const std::uint16_t value,
+        cudaStream_t stream) {
+        if (!data || !indices_device || n_indices <= 0 || n_prims <= 0)
+            return;
+        const dim3 grid(div_round_up(n_indices, config::block_size_adam_step));
+        const dim3 block(config::block_size_adam_step);
+        fill_u16_at_indices_cu<<<grid, block, 0, stream>>>(data, indices_device, n_indices, n_prims, value);
+        LFS_CUDA_LAUNCH_CHECK(stream, "fill_u16_at_indices");
+    }
+
+    void fill_u16_range(
+        std::uint16_t* data,
+        const int start,
+        const int count,
+        const std::uint16_t value,
+        cudaStream_t stream) {
+        if (!data || count <= 0 || start < 0)
+            return;
+        if (value == 0u) {
+            LFS_CUDA_CHECK(cudaMemsetAsync(
+                data + start, 0, static_cast<size_t>(count) * sizeof(std::uint16_t), stream));
+            return;
+        }
+        const dim3 grid(div_round_up(count, config::block_size_adam_step));
+        const dim3 block(config::block_size_adam_step);
+        fill_u16_range_cu<<<grid, block, 0, stream>>>(data, start, count, value);
+        LFS_CUDA_LAUNCH_CHECK(stream, "fill_u16_range");
+    }
+
     void joint_transcode_gathered_rows_at_indices(
         std::uint8_t* packed,
         const float* bounds,
