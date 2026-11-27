@@ -2411,6 +2411,8 @@ class ModelAlignmentDisplayMode(enum.Enum):
 
     OVERLAY_RIGHT = 2
 
+    WIPE = 3
+
 class ModelAlignmentState:
     @property
     def active(self) -> bool: ...

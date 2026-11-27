@@ -337,7 +337,7 @@ namespace lfs::vis::tools {
                                      : std::string{});
             } else {
                 const auto projection = pointPickOverlayFrame(
-                                            *tool_context_, alignment->composite.value_or(SplitViewPanelId::Right))
+                                            *tool_context_, alignment->compositePanel().value_or(SplitViewPanelId::Right))
                                             .panel;
                 drawPointPickHud(*overlay, projection, LOC("align.pair_preview"),
                                  LOCF("align.pair_progress", picked_points.size() / 2),

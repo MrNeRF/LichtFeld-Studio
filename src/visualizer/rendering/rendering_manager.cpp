@@ -1028,7 +1028,7 @@ namespace lfs::vis {
 
     bool RenderingManager::isIndependentSplitViewActive() const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        return split_view_service_.isIndependentDualActive(settings_);
+        return split_view_service_.isIndependentDualActive(settings_) && !isSplitWipeActive();
     }
 
     float RenderingManager::getSplitPosition() const {
@@ -1312,7 +1312,7 @@ namespace lfs::vis {
 
     Viewport& RenderingManager::resolvePanelViewport(Viewport& primary_viewport, const SplitViewPanelId panel) {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        if (split_view_service_.isIndependentDualActive(settings_) &&
+        if (split_view_service_.isIndependentDualActive(settings_) && !isSplitWipeActive() &&
             panel == SplitViewPanelId::Right) {
             return split_view_service_.secondaryViewport();
         }
@@ -1323,7 +1323,7 @@ namespace lfs::vis {
         const Viewport& primary_viewport,
         const SplitViewPanelId panel) const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        if (split_view_service_.isIndependentDualActive(settings_) &&
+        if (split_view_service_.isIndependentDualActive(settings_) && !isSplitWipeActive() &&
             panel == SplitViewPanelId::Right) {
             return split_view_service_.secondaryViewport();
         }

@@ -3227,6 +3227,8 @@
     "models": "对齐模型",
     "link_cameras": "联动相机",
     "separate": "每个视图显示一个模型，不叠加。",
+    "wipe": "拖动分隔线，从同一相机视角对比两个模型。",
+    "wipe_camera": "滑动对比使用同一个相机。",
     "composite_left": "在左侧视图中显示两个已对齐的模型。",
     "composite_right": "在右侧视图中显示两个已对齐的模型。",
     "reference_name": "参考模型：{}",

@@ -3227,6 +3227,8 @@
     "models": "Aligner les modèles",
     "link_cameras": "Lier les caméras",
     "separate": "Un modèle par vue, sans superposition.",
+    "wipe": "Faites glisser le séparateur pour comparer les deux modèles depuis la même caméra.",
+    "wipe_camera": "La comparaison par balayage utilise une seule caméra.",
     "composite_left": "Afficher les deux modèles alignés dans la vue gauche.",
     "composite_right": "Afficher les deux modèles alignés dans la vue droite.",
     "reference_name": "Référence : {}",

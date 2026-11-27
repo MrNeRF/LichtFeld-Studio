@@ -429,6 +429,7 @@ namespace lfs::vis {
         struct IndependentSplitOverrides {
             std::array<IndependentPanelOverride, 2> panels;
             bool exact_surface_picking = false;
+            bool wipe = false;
         };
         // Viewer-thread rendering inputs, borrowed from the active workflow's state.
         void setIndependentPanelOverrides(std::optional<IndependentSplitOverrides> overrides) {
@@ -436,6 +437,9 @@ namespace lfs::vis {
             markDirty(DirtyFlag::ALL, FrameReason::SceneChange);
         }
         const auto& independentPanelOverrides() const { return independent_panel_overrides_; }
+        [[nodiscard]] bool isSplitWipeActive() const {
+            return independent_panel_overrides_ && independent_panel_overrides_->wipe;
+        }
         [[nodiscard]] float getSplitPosition() const;
         [[nodiscard]] std::optional<float> getSplitDividerScreenX(const glm::vec2& viewport_pos,
                                                                   const glm::vec2& viewport_size) const;

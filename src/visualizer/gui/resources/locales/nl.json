@@ -3227,6 +3227,8 @@
     "models": "Modellen uitlijnen",
     "link_cameras": "Camera’s koppelen",
     "separate": "Eén model per weergave, zonder overlay.",
+    "wipe": "Sleep de scheidingslijn om beide modellen vanuit dezelfde camera te vergelijken.",
+    "wipe_camera": "De schuifvergelijking gebruikt één gedeelde camera.",
     "composite_left": "Toon beide uitgelijnde modellen in de linkerweergave.",
     "composite_right": "Toon beide uitgelijnde modellen in de rechterweergave.",
     "reference_name": "Referentie: {}",

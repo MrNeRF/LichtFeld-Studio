@@ -3227,6 +3227,8 @@
     "models": "Alinear modelos",
     "link_cameras": "Vincular cámaras",
     "separate": "Un modelo por vista, sin superposición.",
+    "wipe": "Arrastra el divisor para comparar ambos modelos desde la misma cámara.",
+    "wipe_camera": "La comparación deslizante usa una sola cámara.",
     "composite_left": "Muestra ambos modelos alineados en la vista izquierda.",
     "composite_right": "Muestra ambos modelos alineados en la vista derecha.",
     "reference_name": "Referencia: {}",

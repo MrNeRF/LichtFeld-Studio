@@ -3227,6 +3227,8 @@
     "models": "Modelle ausrichten",
     "link_cameras": "Kameras koppeln",
     "separate": "Ein Modell je Ansicht, ohne Überlagerung.",
+    "wipe": "Ziehe die Trennlinie, um beide Modelle aus derselben Kamerasicht zu vergleichen.",
+    "wipe_camera": "Der Wischvergleich verwendet eine gemeinsame Kamera.",
     "composite_left": "Beide ausgerichteten Modelle in der linken Ansicht anzeigen.",
     "composite_right": "Beide ausgerichteten Modelle in der rechten Ansicht anzeigen.",
     "reference_name": "Referenz: {}",

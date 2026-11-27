@@ -596,6 +596,7 @@ namespace lfs::vis {
             const Viewport& primary_viewport,
             const SplitViewService& split_view_service,
             const RenderSettings& settings,
+            const bool wipe,
             const glm::vec2& screen_viewport_pos,
             const glm::vec2& screen_viewport_size) {
             std::vector<ViewportInteractionPanel> panels;
@@ -627,7 +628,7 @@ namespace lfs::vis {
             };
 
             const auto layouts = split_view_service.panelLayouts(settings, full_screen_width);
-            if (!layouts || full_screen_width <= 1) {
+            if (wipe || !layouts || full_screen_width <= 1) {
                 make_panel(SplitViewPanelId::Left, &primary_viewport, 0.0f, screen_viewport_size.x);
                 return panels;
             }
@@ -2084,6 +2085,9 @@ namespace lfs::vis {
             }
 
             auto& split = vulkan_mesh_frame_.split_view;
+            // A cached two-camera image cannot be reused on the first wipe frame.
+            if (isSplitWipeActive() && split.left.normalize_x_to_panel)
+                return false;
             // PLY panels are rendered with a 12.5%-viewport-width overlap around
             // the cached splitter. A drag inside that overlap only changes the
             // composite divider; leaving it is the point where panel renders must
@@ -2154,6 +2158,7 @@ namespace lfs::vis {
             context.viewport,
             split_view_service_,
             frame_settings,
+            isSplitWipeActive(),
             screen_viewport_pos,
             screen_viewport_size);
         if (!context.preparing_import)
@@ -2210,7 +2215,7 @@ namespace lfs::vis {
         const bool only_split_position_pending =
             (pending_dirty & ~DirtyFlag::SPLIT_POSITION) == 0;
         const bool split_position_requires_panel_rerender =
-            split_view_service_.isIndependentDualActive(frame_settings);
+            split_view_service_.isIndependentDualActive(frame_settings) && !isSplitWipeActive();
         // Import validation must execute panel allocations, not reuse the
         // splitter's cached image while other dirty work remains deferred.
         if (!context.preparing_import && (pending_dirty & DirtyFlag::SPLIT_POSITION) != 0 &&
@@ -3964,10 +3969,12 @@ namespace lfs::vis {
         } else if (splitViewUsesIndependentPanels(frame_settings.split_view_mode)) {
             if (const auto layouts = split_view_service_.panelLayouts(frame_settings, render_size.x);
                 layouts && render_size.x > 1) {
+                const bool wipe = isSplitWipeActive();
                 const auto render_panel = [&](const SplitViewPanelId panel, const Viewport& viewport,
                                               const VksplatViewportRenderer::OutputSlot output) {
                     const auto index = splitViewPanelIndex(panel);
-                    const glm::ivec2 size{std::max((*layouts)[index].width, 1), render_size.y};
+                    // The wipe clips two full projections at presentation time.
+                    const glm::ivec2 size = wipe ? render_size : glm::ivec2{std::max((*layouts)[index].width, 1), render_size.y};
                     const auto* overrides = independent_panel_overrides_ ? &independent_panel_overrides_->panels[index] : nullptr;
                     if (!overrides || !scene_manager)
                         return render_panel_image(viewport, size, panel, std::nullopt, nullptr, nullptr, output);
@@ -3990,7 +3997,7 @@ namespace lfs::vis {
                 };
                 auto left = render_panel(SplitViewPanelId::Left, context.viewport,
                                          VksplatViewportRenderer::OutputSlot::SplitLeft);
-                auto right = render_panel(SplitViewPanelId::Right, split_view_service_.secondaryViewport(),
+                auto right = render_panel(SplitViewPanelId::Right, wipe ? context.viewport : split_view_service_.secondaryViewport(),
                                           VksplatViewportRenderer::OutputSlot::SplitRight);
                 if (left && right) {
                     pending_split_view.enabled = true;
@@ -3998,9 +4005,9 @@ namespace lfs::vis {
                     pending_split_view.background = frame_settings.background_color;
                     pending_split_view.content_rect = {0, 0, render_size.x, render_size.y};
                     pending_split_view.left = make_split_panel(
-                        *left, (*layouts)[0].start_position, (*layouts)[0].end_position, true);
+                        *left, (*layouts)[0].start_position, (*layouts)[0].end_position, !wipe);
                     pending_split_view.right = make_split_panel(
-                        *right, (*layouts)[1].start_position, (*layouts)[1].end_position, true);
+                        *right, (*layouts)[1].start_position, (*layouts)[1].end_position, !wipe);
                     rendered_metadata = makeSplitMetadata(left->metadata, right->metadata, frame_settings.split_position);
                     rendered_split_info = SplitViewInfo{
                         .enabled = true,
@@ -4197,7 +4204,7 @@ namespace lfs::vis {
             pending_split_view.coordinate_extent =
                 rendered_image_contains_ground_truth ? gt_comparison_size : render_size;
             if (environmentBackgroundUsesTransparentViewerCompositing(frame_settings)) {
-                const bool independent = splitViewUsesIndependentPanels(frame_settings.split_view_mode);
+                const bool independent = splitViewUsesIndependentPanels(frame_settings.split_view_mode) && !isSplitWipeActive();
                 const auto panel_environment = [&](const Viewport& viewport, const VulkanSplitViewPanel& panel) {
                     const glm::ivec2 size = independent
                                                 ? glm::ivec2{std::max(static_cast<int>(std::lround(

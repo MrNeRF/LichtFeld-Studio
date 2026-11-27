@@ -4436,7 +4436,14 @@ namespace lfs::vis {
         const int sample_x = static_cast<int>(local_x);
         const int sample_y = static_cast<int>(local_y);
         float depth = -1.0f;
-        if (auto* const scene_manager = services().sceneOrNull()) {
+        const bool wipe = rendering->isSplitWipeActive();
+        if (wipe) {
+            // Wipe depth uses full viewport coordinates and one output slot per side.
+            const glm::ivec2 rendered_size{interaction->render_width, interaction->render_height};
+            const glm::ivec2 pixel{local_x * rendered_size.x / interaction->width,
+                                   local_y * rendered_size.y / interaction->height};
+            depth = rendering->getSurfaceDepthAtPixel(pixel.x, pixel.y, rendered_size, interaction->panel);
+        } else if (auto* const scene_manager = services().sceneOrNull()) {
             depth = rendering->renderExpectedDepthAtPixel(
                 RenderingManager::ExpectedDepthSampleRequest{
                     .scene_manager = scene_manager,
@@ -4449,7 +4456,7 @@ namespace lfs::vis {
                     .panel = interaction->panel,
                 });
         }
-        if (depth <= 0.0f) {
+        if (depth <= 0.0f && !wipe) {
             depth = rendering->getDepthAtPixel(sample_x, sample_y, interaction->panel);
         }
 

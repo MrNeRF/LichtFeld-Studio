@@ -3240,6 +3240,8 @@
     "models": "Allinea modelli",
     "link_cameras": "Collega camere",
     "separate": "Un modello per vista, senza sovrapposizione.",
+    "wipe": "Trascina il divisore per confrontare i due modelli dalla stessa camera.",
+    "wipe_camera": "Il confronto a tendina usa una sola camera.",
     "composite_left": "Mostra entrambi i modelli allineati nella vista sinistra.",
     "composite_right": "Mostra entrambi i modelli allineati nella vista destra.",
     "reference_name": "Riferimento: {}",
