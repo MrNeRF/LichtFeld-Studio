@@ -47,6 +47,30 @@ class TestHookDecorators:
         assert hasattr(lf, "on_training_end")
         assert callable(lf.on_training_end)
 
+    def test_on_save_start_exists(self, lf):
+        """Test on_save_start decorator exists."""
+        assert hasattr(lf, "on_save_start")
+        assert callable(lf.on_save_start)
+
+    def test_on_save_end_exists(self, lf):
+        """Test on_save_end decorator exists."""
+        assert hasattr(lf, "on_save_end")
+        assert callable(lf.on_save_end)
+
+    def test_save_decorators_return_function(self, lf):
+        """Test the save decorators return the decorated function."""
+
+        @lf.on_save_start
+        def started(save):
+            pass
+
+        @lf.on_save_end
+        def ended(save):
+            pass
+
+        assert callable(started)
+        assert callable(ended)
+
     def test_decorator_returns_function(self, lf):
         """Test decorators return the decorated function."""
 
@@ -77,6 +101,8 @@ class TestHookEnum:
         assert hasattr(lf.Hook, "pre_optimizer_step")
         assert hasattr(lf.Hook, "post_step")
         assert hasattr(lf.Hook, "training_end")
+        assert hasattr(lf.Hook, "save_start")
+        assert hasattr(lf.Hook, "save_end")
 
 
 class TestSessionClass:
@@ -90,6 +116,13 @@ class TestSessionClass:
         """Test Session can be instantiated."""
         session = lf.Session()
         assert session is not None
+
+    def test_control_session_has_save_hooks(self, lf):
+        """Test ControlSession registers the save hooks, and clear() drops them."""
+        session = lf.ControlSession()
+        session.on_save_start(lambda save: None)
+        session.on_save_end(lambda save: None)
+        session.clear()
 
     def test_session_has_control_methods(self, lf):
         """Test Session has training control methods."""
