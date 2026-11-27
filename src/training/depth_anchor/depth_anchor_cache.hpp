@@ -6,11 +6,13 @@
 #include "training/kernels/depth_loss.hpp"
 
 #include <cstdint>
+#include <expected>
 #include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -23,8 +25,7 @@ namespace lfs::training {
 
     using RawDepthAnchorMap = std::unordered_map<std::string, kernels::DepthAnchor>;
 
-    // Identifies the inputs a cached anchor set was fitted against. A mismatch
-    // (re-run SfM, regenerated depth, changed resize) forces a recompute.
+    // Identifies the geometry, camera data and depth files behind a cached fit.
     struct DepthAnchorFingerprint {
         std::uint64_t hash = 0;
         int version = 0;
@@ -57,9 +58,17 @@ namespace lfs::training {
     // Fingerprints the fit's seed geometry, camera observations, intrinsics,
     // pose, and depth-file metadata and content. Startup only: the cloud is
     // copied to the host once. Different cloud subsets conservatively miss.
+    [[nodiscard]] std::uint64_t computeAnchorSeedFingerprint(const lfs::core::Tensor& means);
     [[nodiscard]] DepthAnchorFingerprint computeAnchorFingerprint(
+        std::uint64_t seed_fingerprint,
+        const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras,
+        const DepthAnchorProgress& progress = {});
+
+    [[nodiscard]] inline DepthAnchorFingerprint computeAnchorFingerprint(
         const lfs::core::Tensor& means,
-        const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras);
+        const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras) {
+        return computeAnchorFingerprint(computeAnchorSeedFingerprint(means), cameras);
+    }
 
     // Sidecar lives next to the depth priors it aligns: derived from the shared
     // parent of the cameras' depth paths (handles depth/ vs depths/). Empty when
@@ -72,7 +81,7 @@ namespace lfs::training {
         const RawDepthAnchorMap& anchors,
         const DepthAnchorFingerprint& fingerprint);
 
-    [[nodiscard]] std::optional<RawDepthAnchorMap> readDepthAnchorSidecar(
+    [[nodiscard]] std::expected<RawDepthAnchorMap, std::string_view> readDepthAnchorSidecar(
         const std::filesystem::path& path,
         const DepthAnchorFingerprint& expected);
 

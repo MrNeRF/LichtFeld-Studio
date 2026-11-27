@@ -339,24 +339,30 @@ namespace lfs::training {
         return anchors;
     }
 
-    DepthAnchorFingerprint computeAnchorFingerprint(
-        const lfs::core::Tensor& means,
-        const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras) {
-
-        DepthAnchorFingerprint fingerprint;
-        fingerprint.version = kSchemaVersion;
-
+    std::uint64_t computeAnchorSeedFingerprint(const lfs::core::Tensor& means) {
         std::uint64_t hash = 0xcbf29ce484222325ull;
-        hash_scalar(hash, kSchemaVersion);
-        // Keep the sidecar layout; invalidate keys made before geometry/content hashing.
-        constexpr std::uint64_t input_revision = 1;
-        hash_scalar(hash, input_revision);
+        // These domain values are part of depth_anchor_seed_v1, frozen at
+        // the legacy sidecar values. Sidecar schema changes must not change them.
+        constexpr std::int32_t seed_v1_domain = 3;
+        constexpr std::uint64_t seed_v1_revision = 1;
+        hash_scalar(hash, seed_v1_domain);
+        hash_scalar(hash, seed_v1_revision);
         const std::uint64_t point_values = means.is_valid() ? means.numel() : 0;
         hash_scalar(hash, point_values);
         if (point_values) {
             const auto host = means.cpu().contiguous();
             hash_bytes(hash, host.ptr<float>(), point_values * sizeof(float));
         }
+
+        return hash;
+    }
+
+    DepthAnchorFingerprint computeAnchorFingerprint(
+        std::uint64_t hash,
+        const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras,
+        const DepthAnchorProgress& progress) {
+        DepthAnchorFingerprint fingerprint;
+        fingerprint.version = kSchemaVersion;
 
         std::vector<const lfs::core::Camera*> depth_cameras;
         depth_cameras.reserve(cameras.size());
@@ -370,7 +376,10 @@ namespace lfs::training {
                       return a->image_name() < b->image_name();
                   });
 
+        std::size_t checked = 0;
         for (const auto* cam : depth_cameras) {
+            if (progress)
+                progress(++checked, depth_cameras.size());
             const std::string& name = cam->image_name();
             hash_bytes(hash, name.data(), name.size());
             hash_scalar(hash, cam->focal_x());
@@ -424,6 +433,7 @@ namespace lfs::training {
                 hash_bytes(hash, buffer.data(), static_cast<std::size_t>(depth.gcount()));
             }
             if (!depth.eof() || depth.bad()) {
+                LOG_WARN("Depth anchors: unable to read {}", lfs::core::path_to_utf8(cam->depth_path()));
                 // An incomplete fingerprint must neither reuse nor publish a cache.
                 return {};
             }
@@ -478,34 +488,38 @@ namespace lfs::training {
         return output.commit().has_value();
     }
 
-    std::optional<RawDepthAnchorMap> readDepthAnchorSidecar(
+    std::expected<RawDepthAnchorMap, std::string_view> readDepthAnchorSidecar(
         const std::filesystem::path& path,
         const DepthAnchorFingerprint& expected) {
+        if (expected.version != kSchemaVersion)
+            return std::unexpected("failed to fingerprint the depth inputs");
         std::error_code ec;
-        if (expected.version != kSchemaVersion || path.empty() || !lfs::core::native_fs::exists(path, ec)) {
-            return std::nullopt;
-        }
+        const bool exists = !path.empty() && lfs::core::native_fs::exists(path, ec);
+        if (ec)
+            return std::unexpected("failed to inspect the sidecar");
+        if (!exists)
+            return std::unexpected("no sidecar found");
         std::ifstream file(lfs::core::native_fs::native_path(path), std::ios::binary);
-        if (!file) {
-            return std::nullopt;
-        }
+        if (!file)
+            return std::unexpected("failed to open the sidecar");
         try {
             const nlohmann::json root = nlohmann::json::parse(file);
             if (root.value("schema_version", -1) != expected.version) {
-                return std::nullopt;
+                return std::unexpected("sidecar schema version differs");
             }
             if (root.value("fingerprint", std::string{}) != std::format("{:016x}", expected.hash)) {
-                return std::nullopt;
+                return std::unexpected("sidecar fingerprint differs from the current anchor inputs");
             }
+            const auto& entries = root.at("anchors");
+            if (!entries.is_object())
+                return std::unexpected("sidecar anchors are malformed");
             RawDepthAnchorMap anchors;
-            if (root.contains("anchors")) {
-                for (const auto& [name, value] : root["anchors"].items()) {
-                    anchors[name] = anchor_from_json(value);
-                }
+            for (const auto& [name, value] : entries.items()) {
+                anchors[name] = anchor_from_json(value);
             }
             return anchors;
         } catch (const std::exception&) {
-            return std::nullopt;
+            return std::unexpected("sidecar data is malformed");
         }
     }
 

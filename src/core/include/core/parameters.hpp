@@ -634,6 +634,9 @@ namespace lfs::core {
             bool exclude_frozen_add_splats_from_export = false;
             bool include_provenance = true; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
 
+            // Internal checkpoint metadata. Hash of the original depth-anchor geometry.
+            std::optional<std::uint64_t> depth_anchor_seed_v1;
+
             // Checkpoint to resume training from
             std::optional<std::filesystem::path> resume_checkpoint = std::nullopt;
 

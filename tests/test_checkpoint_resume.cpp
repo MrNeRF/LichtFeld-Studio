@@ -1676,6 +1676,7 @@ namespace {
         params.import_cameras_path = std::filesystem::path("/tmp/lfs_sparse/0");
         params.add_splat_paths = {"/tmp/lfs_statue.ply", "/tmp/lfs_pedestal.ply"};
         params.add_splat_freeze = {true, false};
+        params.depth_anchor_seed_v1 = 0xfedcba9876543210ULL;
 
         auto source_model = make_checkpoint_test_splat(2);
         lfs::training::MCMC source_strategy(*source_model);
@@ -1692,6 +1693,7 @@ namespace {
         EXPECT_EQ(loaded->add_splat_paths, params.add_splat_paths);
         EXPECT_EQ(loaded->add_splat_freeze, params.add_splat_freeze);
         EXPECT_TRUE(loaded->add_splats_applied);
+        EXPECT_EQ(loaded->depth_anchor_seed_v1, params.depth_anchor_seed_v1);
 
         auto target_model = make_checkpoint_test_splat(1);
         lfs::training::MCMC target_strategy(*target_model);
@@ -1705,6 +1707,7 @@ namespace {
         EXPECT_EQ(resumed_params.add_splat_paths, params.add_splat_paths);
         EXPECT_EQ(resumed_params.add_splat_freeze, params.add_splat_freeze);
         EXPECT_TRUE(resumed_params.add_splats_applied);
+        EXPECT_EQ(resumed_params.depth_anchor_seed_v1, params.depth_anchor_seed_v1);
 
         std::filesystem::remove_all(temp_dir, ec);
     }

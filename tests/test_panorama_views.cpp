@@ -4,6 +4,7 @@
 #include "core/image_io.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
+#include "io/exporter.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include "licht_test_support.hpp"
 #include "training/dataset.hpp"
@@ -12,6 +13,7 @@
 #include "training/popspa_cameras.hpp"
 #include "training/strategies/strategy_factory.hpp"
 #include "training/trainer.hpp"
+#include <chrono>
 #include <format>
 #include <glm/geometric.hpp>
 #include <glm/vec3.hpp>
@@ -65,6 +67,13 @@ namespace lfs::training {
             trainer.fitDepthAnchors(drawn.size());
             strategy = std::move(trainer.strategy_);
             return trainer.depth_anchors_;
+        }
+        static void resume(Trainer& trainer, std::optional<std::uint64_t> seed) {
+            trainer.current_iteration_ = 5;
+            trainer.depth_anchor_seed_ = seed;
+        }
+        static auto snapshot_params(const Trainer& trainer) {
+            return trainer.params_for_project_snapshot();
         }
     };
 } // namespace lfs::training
@@ -604,6 +613,9 @@ namespace {
         using namespace lfs::training;
         lfs::test::licht::TemporaryDirectory temp;
         const auto photo = prior_panorama(temp.path / "images" / "source.png");
+        std::filesystem::create_directories(temp.path / "images");
+        const std::vector<uint8_t> rgb(128 * 64 * 3, 127);
+        ASSERT_TRUE(save_png(temp.path / "images" / "source.png", rgb.data(), 128, 64, 3, 8, 0));
         photo->set_depth_path(temp.path / "depth" / "source.png");
         std::filesystem::create_directories(photo->depth_path().parent_path());
         std::vector<uint16_t> depth(128 * 64);
@@ -640,17 +652,84 @@ namespace {
         params.optimization.depth_loss_weight = 1;
         params.optimization.depth_loss_mode = "ssi-disparity";
         const auto views = make_camera_views(*photo, plan_camera_views(*photo, 0), 10);
-        Trainer trainer(scene);
-        for (const auto& drawn : {views, views, std::vector{photo}}) {
-            const auto anchors = TrainerDepthAnchorTestAccess::fit(trainer, params, drawn, strategy);
-            EXPECT_EQ(lfs::test::licht::read_file_bytes(sidecar), prepared);
-            ASSERT_EQ(anchors.size(), drawn.size());
-            for (const auto& camera : drawn) {
-                ASSERT_TRUE(anchors.contains(camera->uid()));
-                EXPECT_EQ(anchors.at(camera->uid()).disparity.scale, 7);
-                EXPECT_EQ(anchors.at(camera->uid()).disparity.samples, 999);
+        std::optional<std::uint64_t> saved_seed;
+        {
+            Trainer trainer(scene);
+            for (const auto& drawn : {views, views, std::vector{photo}}) {
+                const auto anchors = TrainerDepthAnchorTestAccess::fit(trainer, params, drawn, strategy);
+                EXPECT_EQ(lfs::test::licht::read_file_bytes(sidecar), prepared);
+                ASSERT_EQ(anchors.size(), drawn.size());
+                for (const auto& camera : drawn) {
+                    ASSERT_TRUE(anchors.contains(camera->uid()));
+                    EXPECT_EQ(anchors.at(camera->uid()).disparity.scale, 7);
+                    EXPECT_EQ(anchors.at(camera->uid()).disparity.samples, 999);
+                }
             }
+
+            saved_seed = TrainerDepthAnchorTestAccess::snapshot_params(trainer).depth_anchor_seed_v1;
+            ASSERT_TRUE(saved_seed);
         }
+
+        // A checkpoint contains optimized positions, while the cache belongs to the initial cloud.
+        strategy->get_model().means() = means + 1.0f;
+
+        {
+            // Old checkpoints can reuse the same sidecar if the original geometry is recovered.
+            const auto seed_path = temp.path / "init.ply";
+            const PointCloud seed_cloud(means.cpu(), Tensor::zeros({2000, 3}, Device::CPU));
+            ASSERT_TRUE(lfs::io::save_ply(seed_cloud, {.output_path = seed_path}));
+            auto legacy_params = params;
+            legacy_params.init_path = path_to_utf8(seed_path);
+            Trainer legacy(scene);
+            TrainerDepthAnchorTestAccess::resume(legacy, std::nullopt);
+            const auto recovered = TrainerDepthAnchorTestAccess::fit(legacy, legacy_params, {photo}, strategy);
+            ASSERT_TRUE(recovered.contains(photo->uid()));
+            EXPECT_EQ(recovered.at(photo->uid()).disparity.samples, 999);
+            EXPECT_EQ(lfs::test::licht::read_file_bytes(sidecar), prepared);
+        }
+
+        Trainer resumed(scene);
+        TrainerDepthAnchorTestAccess::resume(resumed, saved_seed);
+        const auto loaded = TrainerDepthAnchorTestAccess::fit(resumed, params, {photo}, strategy);
+        ASSERT_TRUE(loaded.contains(photo->uid()));
+        EXPECT_EQ(loaded.at(photo->uid()).disparity.samples, 999);
+        EXPECT_EQ(lfs::test::licht::read_file_bytes(sidecar), prepared);
+
+        // Changed depth bytes invalidate the cache. With no source cloud, fall
+        // back to the restored model and persist the geometry actually used.
+        depth[0] += 1;
+        ASSERT_TRUE(save_png(photo->depth_path(), depth.data(), 128, 64, 1, 16, 0));
+        TrainerDepthAnchorTestAccess::fit(resumed, params, {photo}, strategy);
+        const auto restored_seed = computeAnchorSeedFingerprint(strategy->get_model().means());
+        EXPECT_EQ(TrainerDepthAnchorTestAccess::snapshot_params(resumed).depth_anchor_seed_v1, restored_seed);
+        EXPECT_TRUE(readDepthAnchorSidecar(sidecar, computeAnchorFingerprint(restored_seed, {photo})));
+
+        ASSERT_TRUE(std::filesystem::remove(sidecar));
+        // A checkpoint without a seed can initialize depth against the original cloud
+        // when its sidecar is missing or stale.
+        auto first_depth_params = params;
+        first_depth_params.init_path = path_to_utf8(temp.path / "init.ply");
+        TrainerDepthAnchorTestAccess::resume(resumed, std::nullopt);
+        TrainerDepthAnchorTestAccess::fit(resumed, first_depth_params, {photo}, strategy);
+        EXPECT_EQ(TrainerDepthAnchorTestAccess::snapshot_params(resumed).depth_anchor_seed_v1, saved_seed);
+        EXPECT_TRUE(readDepthAnchorSidecar(sidecar, computeAnchorFingerprint(means, {photo})));
+        EXPECT_FALSE(readDepthAnchorSidecar(sidecar, computeAnchorFingerprint(strategy->get_model().means(), {photo})));
+
+        // The checkpoint still refers to the old seed if the first run stopped
+        // after replacing the sidecar but before writing its next checkpoint.
+        const auto old_write_time = std::filesystem::last_write_time(sidecar) - std::chrono::seconds(10);
+        std::filesystem::last_write_time(sidecar, old_write_time);
+        TrainerDepthAnchorTestAccess::resume(resumed, restored_seed);
+        TrainerDepthAnchorTestAccess::fit(resumed, first_depth_params, {photo}, strategy);
+        EXPECT_EQ(std::filesystem::last_write_time(sidecar), old_write_time);
+        EXPECT_EQ(TrainerDepthAnchorTestAccess::snapshot_params(resumed).depth_anchor_seed_v1, saved_seed);
+
+        auto capped_legacy_params = first_depth_params;
+        capped_legacy_params.optimization.max_cap = 1000;
+        TrainerDepthAnchorTestAccess::resume(resumed, std::nullopt);
+        TrainerDepthAnchorTestAccess::fit(resumed, capped_legacy_params, {photo}, strategy);
+        EXPECT_EQ(TrainerDepthAnchorTestAccess::snapshot_params(resumed).depth_anchor_seed_v1, saved_seed);
+        EXPECT_EQ(std::filesystem::last_write_time(sidecar), old_write_time);
     }
 
     // Fails if area resampling takes a fixed number of samples per face pixel: toward a pole one face pixel spans

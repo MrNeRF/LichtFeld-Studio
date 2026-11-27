@@ -532,6 +532,8 @@ namespace lfs::training {
             params_json["optimization"] =
                 params.optimization.to_json();
             params_json["dataset"] = params.dataset.to_json();
+            if (params.depth_anchor_seed_v1)
+                params_json["depth_anchor_seed_v1"] = *params.depth_anchor_seed_v1;
             if (params.init_path) {
                 params_json["init_path"] = *params.init_path;
             }
@@ -811,6 +813,8 @@ namespace lfs::training {
                     cli_bg_color_set;
                 lfs::core::param::apply_explicit_training_overrides(
                     loaded_params, loaded_params.overrides);
+            } else {
+                loaded_params.depth_anchor_seed_v1.reset();
             }
             if (loaded_params.optimization.max_cap < 0)
                 return std::unexpected("Invalid checkpoint parameters: max_cap must be nonnegative");
