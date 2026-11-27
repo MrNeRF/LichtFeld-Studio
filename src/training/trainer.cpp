@@ -2782,8 +2782,20 @@ namespace lfs::training {
     // Fits each camera's depth-prior alignment against the initial point
     // cloud once, so the supervision target is absolute and multi-view
     // consistent instead of chasing the current render.
-    void Trainer::fitDepthAnchors(const size_t cameras_with_depth) {
+    lfs::Result<void> Trainer::fitDepthAnchors(const size_t cameras_with_depth) {
         nvtxRangePush("fit_depth_anchors");
+        struct FitRange {
+            ~FitRange() { nvtxRangePop(); }
+        } fit_range;
+        const auto unavailable = [](std::string detail) {
+            return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::FailedPrecondition,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message = "Training failed.",
+                .detail = std::format("Cannot resume depth supervision with the original anchors: {}", detail),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
+        };
         const auto fit_start = std::chrono::steady_clock::now();
         const auto phase_ms = [](std::chrono::steady_clock::time_point start) {
             return std::chrono::duration<double, std::milli>(
@@ -2795,15 +2807,34 @@ namespace lfs::training {
         depth_anchor_fit_attempted_ = false;
         const auto configured_depth_prior = depth_prior_from_mode(params_.optimization.depth_loss_mode);
         resolved_depth_prior_ = configured_depth_prior;
-        auto& model = strategy_->get_model();
-        const auto& means = model.means();
-        const auto num_points = static_cast<size_t>(model.size());
-        if (num_points == 0) {
-            LOG_WARN("Depth anchors: no initial point cloud available; depth supervision is disabled without anchors");
-            nvtxRangePop();
-            return;
+        const bool resumed = current_iteration_.load() > 0;
+        std::optional<std::uint64_t> seed;
+        {
+            std::lock_guard lock(params_mutex_);
+            seed = depth_anchor_seed_;
         }
-        depth_anchor_fit_attempted_ = true;
+        lfs::core::Tensor means;
+        if (!resumed) {
+            means = strategy_->get_model().means();
+            if (!means.is_valid() || means.numel() == 0) {
+                LOG_WARN("Depth anchors: no initial point cloud available; depth supervision is disabled without anchors");
+                return {};
+            }
+            seed = computeAnchorSeedFingerprint(means);
+        }
+        const auto recover_seed = [&]() -> lfs::Result<void> {
+            auto loaded = loadInitialPointCloud(params_, scene_->getTrainingDataOrigin());
+            if (!loaded)
+                return unavailable(std::format("Cannot recover the initial point cloud: {}", loaded.error().user_message()));
+            if (!*loaded || !(*loaded)->means.is_valid() || (*loaded)->means.numel() == 0)
+                return unavailable("The original training geometry is unavailable.");
+            means = (*loaded)->means.to(lfs::core::DataType::Float32).contiguous();
+            const auto recovered = computeAnchorSeedFingerprint(means);
+            if (seed && recovered != *seed)
+                return unavailable("The recovered point cloud differs from the checkpoint's original anchor geometry.");
+            seed = recovered;
+            return {};
+        };
 
         // Prefer a precomputed sidecar (written by `preprocess` or a prior run);
         // fall back to fitting here and write it through so the next run is fast.
@@ -2823,9 +2854,16 @@ namespace lfs::training {
             cameras.push_back(group.photograph);
         const auto sidecar = depthAnchorSidecarPath(cameras);
 
+        const bool legacy_resume = resumed && !seed;
+        if (legacy_resume) {
+            LOG_INFO("Depth anchors: recovering the initial point cloud for a checkpoint without anchor metadata");
+            if (auto result = recover_seed(); !result)
+                return result;
+        }
+        LOG_INFO("Depth anchors: validating depth files for {} photographs", cameras.size());
         nvtxRangePush("depth_anchors/fingerprint");
         const auto fingerprint_start = std::chrono::steady_clock::now();
-        const auto fingerprint = computeAnchorFingerprint(means, cameras);
+        const auto fingerprint = computeAnchorFingerprint(*seed, cameras);
         const auto fingerprint_ms = phase_ms(fingerprint_start);
         nvtxRangePop();
 
@@ -2841,16 +2879,37 @@ namespace lfs::training {
             raw = std::move(*cached);
             LOG_INFO("Depth anchors: loaded {} cached anchors from {}", raw.size(), lfs::core::path_to_utf8(sidecar));
         } else {
-            nvtxRangePush("depth_anchors/compute");
+            LOG_INFO("Depth anchors: cache miss after {:.1f} ms fingerprinting ({})", fingerprint_ms, cached.error());
+            if (legacy_resume)
+                return unavailable(std::format("Legacy checkpoint has no saved anchor seed and its sidecar could not be validated ({})", cached.error()));
+            if (resumed) {
+                if (fingerprint.version == 0)
+                    return unavailable("The depth files could not be fingerprinted.");
+                if (auto result = recover_seed(); !result)
+                    return result;
+            }
+            LOG_INFO("Depth anchors: no matching readable sidecar; fitting against the initial geometry");
             const auto compute_start = std::chrono::steady_clock::now();
-            raw = computeRawDepthAnchors(
-                means, cameras, params_.dataset.resize_factor, params_.dataset.max_width);
+            {
+                nvtxRangePush("depth_anchors/compute");
+                const FitRange compute_range;
+                raw = computeRawDepthAnchors(
+                    means.to(lfs::core::Device::CUDA), cameras, params_.dataset.resize_factor, params_.dataset.max_width,
+                    [](std::size_t started, std::size_t total) {
+                        if (started == 1 || started == total || started % 256 == 0)
+                            LOG_INFO("Depth anchors: fitting photograph {}/{}", started, total);
+                    });
+            }
             source_ms = phase_ms(compute_start);
-            nvtxRangePop();
             if (!sidecar.empty() && !writeDepthAnchorSidecar(sidecar, raw, fingerprint)) {
                 LOG_WARN("Depth anchors: failed to write sidecar {}", lfs::core::path_to_utf8(sidecar));
             }
         }
+        {
+            std::lock_guard lock(params_mutex_);
+            depth_anchor_seed_ = seed;
+        }
+        depth_anchor_fit_attempted_ = true;
         LOG_INFO("Depth anchors: fingerprint {:.1f} ms, {} {:.1f} ms",
                  fingerprint_ms, cached ? "sidecar load" : "recompute", source_ms);
 
@@ -2952,7 +3011,7 @@ namespace lfs::training {
                      "({} cameras with depth); depth loss will be skipped for this anchored dataset",
                      cameras_with_depth);
         }
-        nvtxRangePop();
+        return {};
     }
 
     bool Trainer::fillCameraLossColors(
@@ -3258,6 +3317,7 @@ namespace lfs::training {
 
         try {
             params_ = params;
+            depth_anchor_seed_.reset();
 
             // Wire CLI instruments (replaces former env flags).
             PerfBenchCollector::configure(
@@ -9661,7 +9721,8 @@ namespace lfs::training {
                 } else {
                     LOG_INFO("Depth maps available for {}/{} training cameras",
                              cameras_with_depth, train_dataset_->get_cameras().size());
-                    fitDepthAnchors(cameras_with_depth);
+                    if (auto result = fitDepthAnchors(cameras_with_depth); !result)
+                        throw lfs::Exception(std::move(result).error());
                 }
             }
             if (aux_pipeline_config.load_normals) {
@@ -10828,7 +10889,12 @@ namespace lfs::training {
     }
 
     lfs::core::param::TrainingParameters Trainer::params_for_project_snapshot() const {
-        auto params = getParams();
+        auto params = [this] {
+            std::lock_guard lock(params_mutex_);
+            auto snapshot = params_;
+            snapshot.depth_anchor_seed_v1 = depth_anchor_seed_;
+            return snapshot;
+        }();
         if (scene_) {
             const auto disabled = scene_->getTrainingDisabledCameraUids();
             params.disabled_camera_uids.assign(disabled.begin(), disabled.end());
@@ -10956,6 +11022,10 @@ namespace lfs::training {
             restore_popspa ? popspa_optimizer_.get() : nullptr, calibration_correction_.get());
         if (!result) {
             return result;
+        }
+        {
+            std::lock_guard lock(params_mutex_);
+            depth_anchor_seed_ = params_.depth_anchor_seed_v1;
         }
         adopt_legacy_view_uids();
         if (!params_.optimization.calibration_correction)

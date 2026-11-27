@@ -287,6 +287,12 @@ namespace lfs::core {
                     "Invalid checkpoint parameters: add_splat_freeze count does not match add_splat_paths");
             }
         };
+        base_params.depth_anchor_seed_v1.reset();
+        if (const auto seed = params_json.find("depth_anchor_seed_v1"); seed != params_json.end()) {
+            if (!seed->is_number_unsigned())
+                throw std::runtime_error("Invalid checkpoint parameters: depth_anchor_seed_v1 must be unsigned");
+            base_params.depth_anchor_seed_v1 = seed->get<std::uint64_t>();
+        }
         if (!params_json.contains("optimization")) {
             base_params.optimization = param::OptimizationParameters::from_json(params_json);
             validate_splat_composition(base_params);

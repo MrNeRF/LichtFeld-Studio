@@ -222,7 +222,6 @@
       "src/tcp/tcp_publisher.cpp:292"
     ],
     "training": [
-      "src/training/depth_anchor/depth_anchor_cache.cpp:489",
       "src/training/include/lfs/cuda_scratch.hpp:36",
       "src/training/include/lfs/cuda_scratch.hpp:43",
       "src/training/rasterization/fastgs/rasterization/src/rasterization_api.cu:417",
