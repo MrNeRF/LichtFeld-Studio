@@ -63,6 +63,12 @@ struct Parameters {
 };
 [[vk::push_constant]] ConstantBuffer<Parameters> p;
 
+// A draw's records at their 64-bit byte address, not as an index from the buffer's pointer: NVIDIA's Vulkan computes an
+// access chain's byte offset in 32 bits without VK_EXT_shader_64bit_indexing, and the 64-byte records pass 4 GiB at
+// 67.1M draws. The address and the bytes are the ones the index gave, so every backend computes the same values.
+ProjectedSplat splat_at(uint id) { return ((Ptr<ProjectedSplat, Access.Read>)(uint64_t(p.splats) + uint64_t(id) * 64u))[0]; }
+GutSplat gut_at(uint id) { return ((Ptr<GutSplat, Access.Read>)(uint64_t(p.gut) + uint64_t(id) * 64u))[0]; }
+
 uint depth_split_threshold(RasterStatus status, RasterParameters r) {
     return status.required > uint64_t(r.tiles) * 896ul ? 2048u : 16384u;
 }
@@ -234,9 +240,9 @@ void tile_blend(uint3 group_id : SV_GroupID, uint3 thread : SV_GroupThreadID) {
             bool active = source_lane < source_count;
             if (active) {
                 id = p.indices[batch + source_lane];
-                splat = p.splats[id];
+                splat = splat_at(id);
                 if (kRasterMode == 3u)
-                    g = p.gut[id];
+                    g = gut_at(id);
             }
             if (compact_candidates) {
                 // Integer support with a one-pixel rounding margin.
@@ -640,9 +646,9 @@ void tile_depth_compose(uint3 group_id : SV_GroupID, uint3 thread : SV_GroupThre
                 ProjectedSplat v = (ProjectedSplat)0;
                 GutSplat g = (GutSplat)0;
                 if (source < available)
-                    v = p.splats[id];
+                    v = splat_at(id);
                 if (kRasterMode == 3u && source < available)
-                    g = p.gut[id];
+                    g = gut_at(id);
                 const bool intersects = kRasterMode == 3u
                                             ? all(int2(v.bounds.xy) < int2(live_max) + 2) && all(int2(v.bounds.zw) > int2(live_min) - 1)
                                             : conic_intersects_pixels(v, live_min, live_max);

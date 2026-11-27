@@ -225,15 +225,24 @@ float3 evaluate_sh(float3 dc, float3 direction, uint primitive, uint layout_rest
 
 float3 rotate_axis(float4 q, float3 v) { return v + 2.0f * cross(q.yzw, cross(q.yzw, v) + q.x * v); }
 
+// Per-splat rows and records at their 64-bit byte address, not as an index from the buffer's pointer, for the reason
+// in sh_component: 3-float rows pass 4 GiB at 357.9M splats, rotations at 268.4M, and the 64-byte ProjectedSplat and
+// GutSplat records at 67.1M draws. The addresses and the bytes are the ones the indices gave.
 float3 load3(Ptr<float, Access.Read> data, uint index) {
-    return float3(data[index * 3u], data[index * 3u + 1u], data[index * 3u + 2u]);
+    const Ptr<float, Access.Read> row = (Ptr<float, Access.Read>)(uint64_t(data) + uint64_t(index) * 12u);
+    return float3(row[0], row[1], row[2]);
 }
 float3 load_half3(Ptr<float, Access.Read> data, uint index, uint stride) {
-    const Ptr<half, Access.Read> h = (Ptr<half, Access.Read>)data;
-    return float3(float(h[index * stride]), float(h[index * stride + 1u]), float(h[index * stride + 2u]));
+    const Ptr<half, Access.Read> row = (Ptr<half, Access.Read>)(uint64_t(data) + uint64_t(index) * stride * 2u);
+    return float3(float(row[0]), float(row[1]), float(row[2]));
 }
 
-void store_output(uint i, ProjectedSplat value) { p.output[i] = value; }
+void store_output(uint i, ProjectedSplat value) {
+    ((Ptr<ProjectedSplat, Access.ReadWrite>)(uint64_t(p.output) + uint64_t(i) * 64u))[0] = value;
+}
+Ptr<GutSplat, Access.ReadWrite> gut_record(uint i) {
+    return (Ptr<GutSplat, Access.ReadWrite>)(uint64_t(p.gut_output) + uint64_t(i) * 64u);
+}
 
 [shader("compute")]
 [numthreads(256, 1, 1)]
@@ -369,11 +378,11 @@ void project_splats(uint3 tid : SV_DispatchThreadID) {
         radius = 2.0f;
         conic = float3(1, 0, 1);
     } else {
-        float4 q = layout.half_attrs != 0u ? float4(float(((Ptr<half, Access.Read>)p.rotations)[source * 4u]),
-                                                    float(((Ptr<half, Access.Read>)p.rotations)[source * 4u + 1u]),
-                                                    float(((Ptr<half, Access.Read>)p.rotations)[source * 4u + 2u]),
-                                                    float(((Ptr<half, Access.Read>)p.rotations)[source * 4u + 3u]))
-                                             : p.rotations[source];
+        const uint64_t rotations = uint64_t(p.rotations);
+        const Ptr<half, Access.Read> half_rotation = (Ptr<half, Access.Read>)(rotations + uint64_t(source) * 8u);
+        float4 q = layout.half_attrs != 0u ? float4(float(half_rotation[0]), float(half_rotation[1]),
+                                                    float(half_rotation[2]), float(half_rotation[3]))
+                                             : ((Ptr<float4, Access.Read>)(rotations + uint64_t(source) * 16u))[0];
         const float norm2 = dot(q, q);
         if (!isfinite(norm2))
             return;
@@ -507,7 +516,7 @@ void project_splats(uint3 tid : SV_DispatchThreadID) {
             gut.inverse1 = float4(cross(gc, ga) / determinant, 0);
             gut.inverse2 = float4(cross(ga, gb) / determinant, 0);
             gut.mean_opacity = float4(view, alpha);
-            p.gut_output[i] = gut;
+            gut_record(i)[0] = gut;
         }
         // Dilation and the covariance cap use source viewport pixels.
         const float raster_scale = isfinite(frame.rasterization.x) && frame.rasterization.x > 0 ? frame.rasterization.x : 1.f;
@@ -541,11 +550,11 @@ void project_splats(uint3 tid : SV_DispatchThreadID) {
                                                    : (billboard.x >= billboard.z ? float2(1, 0) : float2(0, 1));
             const float clip = min(1.f, .5f * sqrt(max(0.f, log(source_alpha * 255.f))));
             portal_extent = sqrt(8.f * float2(first, second)) * clip;
-            GutSplat gut = p.gut_output[i];
+            GutSplat gut = gut_record(i)[0];
             gut.inverse0.w = portal_axis.x;
             gut.inverse1.w = portal_axis.y;
             gut.inverse2.w = portal_extent.y;
-            p.gut_output[i] = gut;
+            gut_record(i)[0] = gut;
             bin_covariance = 2.f * billboard;
         }
         const float eigen = .5f * (bin_covariance.x + bin_covariance.z) +
