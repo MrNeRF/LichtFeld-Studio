@@ -173,11 +173,14 @@ namespace lfs::training::vulkan {
         p.clip_right = (1.15f * width - p.cx) / p.fx;
         p.clip_top = (-0.15f * height - p.cy) / p.fy;
         p.clip_bottom = (1.15f * height - p.cy) / p.fy;
-        p.means = address(inputs.means);
-        p.scales = address(inputs.raw_scales);
-        p.rotations = address(inputs.raw_rotations);
-        p.opacities = address(inputs.raw_opacities);
-        p.sh0 = address(inputs.sh0);
+        // The per-Gaussian rows are read at 64-bit byte addresses (fast_common.slangh's loadFloat, load3, load4), the
+        // SH from 64-bit row addresses (shRowAddress) and the records at projectedAddress, so those bindings may pass
+        // 4 GiB; every other buffer is indexed from its start and stays guarded.
+        p.means = wide_address(inputs.means);
+        p.scales = wide_address(inputs.raw_scales);
+        p.rotations = wide_address(inputs.raw_rotations);
+        p.opacities = wide_address(inputs.raw_opacities);
+        p.sh0 = wide_address(inputs.sh0);
         p.view = address(view);
         p.camera = address(camera);
         p.background = address(background);
@@ -196,7 +199,7 @@ namespace lfs::training::vulkan {
                     LFS_ASSERT_MSG(inputs.sh_value_bounds.is_contiguous() && inputs.sh_value_bounds.dtype() == DataType::Float32 &&
                                        inputs.sh_value_bounds.numel() >= ((count + 255) / 256) * 2,
                                    "Fast SH bounds are smaller than the live block count");
-                p.sh = address(inputs.shN);
+                p.sh = wide_address(inputs.shN);
                 p.sh_bounds = q16 ? address(inputs.sh_value_bounds) : 0;
                 p.sh_format = params.sh.storage == ShStorage::Float32 ? 1 : q16 ? 3
                                                                                 : 2;
@@ -225,7 +228,7 @@ namespace lfs::training::vulkan {
             p.original_to_work = address(s.original_to_work);
             p.work_to_original = address(s.work_to_original);
             s.projected = s.temporary(6, count * sizeof(Projected) / 4, DataType::Float32);
-            p.projected = address(s.projected);
+            p.projected = wide_address(s.projected);
             s.counts = s.temporary(7, count, DataType::Int64);
             p.counts = address(s.counts);
             if (depth_ordered) {

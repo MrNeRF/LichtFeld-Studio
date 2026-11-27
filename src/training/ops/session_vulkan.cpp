@@ -156,7 +156,8 @@ namespace lfs::training {
             state.current = bytes;
             state.peak = std::max(state.peak, bytes);
             state.active_frame = state.next_frame++;
-            return {&state, reinterpret_cast<char*>(vk::address(state.storage)), bytes, state.active_frame};
+            // Not a kernel binding: the borrower carves the arena into its own buffers, so the guard does not apply.
+            return {&state, reinterpret_cast<char*>(vk::wide_address(state.storage)), bytes, state.active_frame};
         }
         void release_idle_arena(const lfs::gpu_ops::IdleArenaBorrow& borrow, core::TensorExecutionTarget) {
             if (borrow.owner != &arena())

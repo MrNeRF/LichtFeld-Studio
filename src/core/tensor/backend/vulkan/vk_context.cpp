@@ -5,6 +5,7 @@
 #include "core/vulkan_queue_sync.hpp"
 
 #include "core/assert.hpp"
+#include "core/environment.hpp"
 #include "core/error.hpp"
 #include "core/logger.hpp"
 #include "core/native_fs.hpp"
@@ -36,6 +37,7 @@
 #include <limits>
 #include <optional>
 #include <ranges>
+#include <set>
 #include <sstream>
 #include <string_view>
 #include <unordered_set>
@@ -175,6 +177,35 @@ namespace lfs::core::internal {
                                properties.pipelineCacheUUID, VK_UUID_SIZE) == 0;
         }
 
+        std::atomic<uint64_t> g_address_guard_limit{0};
+        std::atomic<bool> g_address_guard_report{false};
+        std::mutex g_address_guard_sites_mutex;
+        std::set<std::pair<std::string, uint_least32_t>> g_address_guard_sites;
+
+        // The guard for a device (vulkan_address_guard_limit). The proposal of VK_EXT_shader_64bit_indexing: "This
+        // extension relaxes the maxStorageBufferRange limit, allowing more than 4GB to be accessed through a buffer
+        // binding (or through a buffer device address)", because "Implementations have taken advantage of the 32-bit
+        // maxStorageBufferRange to use 32-bit integers for addressing calculations (aside from adding in a 64-bit base
+        // address)". MoltenVK is exempt by default: Metal's pointers are 64-bit.
+        VulkanAddressGuard address_guard_for(const VkDeviceCaps& caps) {
+            const auto mode = lfs::core::environment::value("LFS_VULKAN_ADDRESS_GUARD");
+            if (mode && *mode != "0" && *mode != "1" && *mode != "report")
+                LOG_WARN("LFS_VULKAN_ADDRESS_GUARD='{}' is not 0, 1 or report; ignored", *mode);
+            if (mode && *mode == "0")
+                return {};
+            const bool report = mode && *mode == "report";
+            uint64_t limit = caps.moltenvk && !(mode && (*mode == "1" || report)) ? 0 : caps.max_storage_buffer_range;
+            if (const auto bytes = lfs::core::environment::value("LFS_VULKAN_ADDRESS_GUARD_BYTES")) {
+                uint64_t value = 0;
+                const auto [end, error] = std::from_chars(bytes->data(), bytes->data() + bytes->size(), value);
+                if (error == std::errc{} && end == bytes->data() + bytes->size() && value != 0)
+                    limit = value;
+                else
+                    LOG_WARN("LFS_VULKAN_ADDRESS_GUARD_BYTES='{}' is not a positive byte count; ignored", *bytes);
+            }
+            return {.limit = limit, .report = report};
+        }
+
         std::optional<uint32_t> parse_device_index(const std::string_view value) {
             uint32_t result = 0;
             const auto [end, error] = std::from_chars(
@@ -219,6 +250,8 @@ namespace lfs::core::internal {
             VkPhysicalDeviceIDProperties ids{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
             VkPhysicalDeviceFloatControlsProperties float_controls{
                 VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FLOAT_CONTROLS_PROPERTIES};
+            VkPhysicalDeviceDriverProperties driver{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+            float_controls.pNext = &driver;
             VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
             properties.pNext = &subgroup;
             subgroup.pNext = has_size_control ? static_cast<void*>(&subgroup_control_props)
@@ -250,6 +283,8 @@ namespace lfs::core::internal {
                             caps->max_workgroup_count.begin());
                 caps->shared_memory_size =
                     properties.properties.limits.maxComputeSharedMemorySize;
+                caps->max_storage_buffer_range = properties.properties.limits.maxStorageBufferRange;
+                caps->moltenvk = driver.driverID == VK_DRIVER_ID_MOLTENVK;
                 caps->shader_int64 = features.features.shaderInt64;
                 caps->timestamp_period = properties.properties.limits.timestampPeriod;
                 caps->shader_float64 = features.features.shaderFloat64;
@@ -423,6 +458,13 @@ namespace lfs::core::internal {
         memory_ = std::make_unique<VulkanMemory>(*this);
         pipelines_ = std::make_unique<VulkanPipelines>(*this);
         create_fault_buffer();
+        const VulkanAddressGuard guard = address_guard_for(caps_);
+        g_address_guard_report.store(guard.report, std::memory_order_relaxed);
+        g_address_guard_limit.store(guard.limit, std::memory_order_relaxed);
+        if (guard.limit != 0)
+            LOG_INFO("Tensor Vulkan address guard: bindings of kernels that index a buffer from its start may reach {} "
+                     "bytes past their address; past that they are {} (LFS_VULKAN_ADDRESS_GUARD=0 turns this off)",
+                     guard.limit, guard.report ? "logged" : "refused");
         LOG_INFO("Tensor Vulkan backend initialized: {} (device {}, UUID {}, subgroup {}, "
                  "host upload path={}, device {}, external memory={}, external semaphore={})",
                  properties_.deviceName, device_index_,
@@ -1334,6 +1376,44 @@ namespace lfs::core::internal {
             }));
         }
         return {};
+    }
+
+    uint64_t vulkan_address_guard_limit() noexcept { return g_address_guard_limit.load(std::memory_order_relaxed); }
+
+    void vulkan_binding_past_guard(const uint64_t reach, const uint64_t limit, const bool known,
+                                   const lfs::core::SourceSite site) {
+        const bool report = g_address_guard_report.load(std::memory_order_relaxed);
+        if (!known && !report)
+            return;
+        const std::string where = std::format("{}:{} ({})", site.file_name(), site.line(), site.function_name());
+        if (report) {
+            std::lock_guard lock(g_address_guard_sites_mutex);
+            if (g_address_guard_sites.emplace(site.file_name(), site.line()).second) {
+                if (known)
+                    LOG_WARN("Vulkan address guard: {} binds elements reaching {} bytes past their address; the "
+                             "limit is {}", where, reach, limit);
+                else
+                    LOG_WARN("Vulkan address guard: {} binds a ref of unknown extent with {} bytes of storage past "
+                             "its address (the limit is {}); let through", where, reach, limit);
+            }
+            return;
+        }
+        ::lfs::core::detail::assertion_failed(
+            "LFS boundary contract", "Vulkan binding within the device's buffer range",
+            std::format("A Vulkan kernel binding at {} reaches {} bytes past its address. Without 64-bit indexing this "
+                        "device's shaders are only promised {} bytes past a buffer address, and this kernel still "
+                        "indexes the buffer from its start, so it would read and write the wrong addresses past that. "
+                        "LFS_VULKAN_ADDRESS_GUARD=0 runs it anyway.",
+                        where, reach, limit),
+            site);
+    }
+
+    VulkanAddressGuard set_vulkan_address_guard_for_testing(const VulkanAddressGuard guard) noexcept {
+        const VulkanAddressGuard previous{.limit = g_address_guard_limit.load(std::memory_order_relaxed),
+                                          .report = g_address_guard_report.load(std::memory_order_relaxed)};
+        g_address_guard_report.store(guard.report, std::memory_order_relaxed);
+        g_address_guard_limit.store(guard.limit, std::memory_order_relaxed);
+        return previous;
     }
 
     bool vulkan_context_adopted() noexcept {

@@ -28,6 +28,9 @@ namespace lfs::training {
     namespace {
         namespace ops = lfs::gpu_ops;
         namespace mk = vulkan;
+        // gsplat's kernels read and write the per-Gaussian float rows (means, scales, quats, sh0, colours and their
+        // gradients), the gradient rows and the SH at 64-bit byte addresses (gsplat_row, gsplat_grad_row, shReadCell,
+        // shRowAddress), so those bindings are wide; the rest are indexed from their start and stay guarded.
         template <class P>
         void launch(uint32_t stage, const P& p, std::initializer_list<const core::Tensor*> tensors, uint32_t groups, const core::Tensor* control = nullptr, size_t word = 0) {
             std::vector<mk::StorageRef> refs;
@@ -315,9 +318,9 @@ namespace lfs::training {
             f.depths = depth_keys;
             if (count > 0) {
                 const ProjectParams project{
-                    mk::address(f.camera), mk::address(f.means), mk::address(f.scales), mk::address(f.quats),
-                    mk::address(f.opacities), mk::address(sh0), mk::address(sh_codes.is_valid() ? sh_codes : sh_rest), mk::address(sh_codes),
-                    mk::address(sh_bounds), mk::address(f.radii), mk::address(f.means2d), mk::address(f.colors),
+                    mk::address(f.camera), mk::wide_address(f.means), mk::wide_address(f.scales), mk::wide_address(f.quats),
+                    mk::address(f.opacities), mk::wide_address(sh0), mk::wide_address(sh_codes.is_valid() ? sh_codes : sh_rest), mk::wide_address(sh_codes),
+                    mk::address(sh_bounds), mk::address(f.radii), mk::address(f.means2d), mk::wide_address(f.colors),
                     mk::address(depth_keys), mk::address(tile_counts), f.count, f.width, f.height, tiles_x, tiles_y,
                     degree, f.layout_rest, params.sh.storage == ops::ShStorage::Q16 ? 3u : params.sh.storage == ops::ShStorage::IeeeFloat16 ? 2u
                                                                                                                                             : 1u,
@@ -397,11 +400,11 @@ namespace lfs::training {
                 } else {
                     const RasterParams raster{
                         .camera = mk::address(f.camera),
-                        .means = mk::address(f.means),
-                        .scales = mk::address(f.scales),
-                        .quats = mk::address(f.quats),
+                        .means = mk::wide_address(f.means),
+                        .scales = mk::wide_address(f.scales),
+                        .quats = mk::wide_address(f.quats),
                         .opacities = mk::address(f.opacities),
-                        .colors = mk::address(f.colors),
+                        .colors = mk::wide_address(f.colors),
                         .bg_color = mk::address(f.bg_color),
                         .bg_image = mk::address(f.bg_image),
                         .tile_offsets = mk::address(f.tile_offsets),
@@ -492,11 +495,11 @@ namespace lfs::training {
             const uint32_t tiles_y = (f.height + kTile - 1) / kTile;
             const BackParams p{
                 .camera = mk::address(f.camera),
-                .means = mk::address(f.means),
-                .scales = mk::address(f.scales),
-                .quats = mk::address(f.quats),
+                .means = mk::wide_address(f.means),
+                .scales = mk::wide_address(f.scales),
+                .quats = mk::wide_address(f.quats),
                 .opacities = mk::address(f.opacities),
-                .colors = mk::address(f.colors),
+                .colors = mk::wide_address(f.colors),
                 .bg_color = mk::address(color),
                 .bg_image = mk::address(image),
                 .tile_offsets = mk::address(f.tile_offsets),
@@ -586,11 +589,11 @@ namespace lfs::training {
                 const uint32_t tiles_y = (f.height + kTile - 1) / kTile;
                 const BackParams raster{
                     .camera = mk::address(f.camera),
-                    .means = mk::address(f.means),
-                    .scales = mk::address(f.scales),
-                    .quats = mk::address(f.quats),
+                    .means = mk::wide_address(f.means),
+                    .scales = mk::wide_address(f.scales),
+                    .quats = mk::wide_address(f.quats),
                     .opacities = mk::address(f.opacities),
-                    .colors = mk::address(f.colors),
+                    .colors = mk::wide_address(f.colors),
                     .bg_color = mk::address(f.bg_color),
                     .bg_image = mk::address(f.bg_image),
                     .tile_offsets = mk::address(f.tile_offsets),
@@ -599,7 +602,7 @@ namespace lfs::training {
                     .last_ids = mk::address(f.last_ids),
                     .v_image = mk::address(v_image),
                     .v_alpha = mk::address(v_alpha),
-                    .grads = mk::address(grads),
+                    .grads = mk::wide_address(grads),
                     .densification = update_densification && errors.is_valid() ? mk::address(densification) : 0,
                     .error_map = mk::address(errors),
                     .edge_map = mk::address(edges),
@@ -645,18 +648,18 @@ namespace lfs::training {
                 return;
             const AccumulateParams accumulate{
                 .camera = mk::address(f.camera),
-                .means = mk::address(f.means),
-                .scales = mk::address(f.scales),
+                .means = mk::wide_address(f.means),
+                .scales = mk::wide_address(f.scales),
                 .opacities = mk::address(f.opacities),
-                .grads = mk::address(grads),
+                .grads = mk::wide_address(grads),
                 .radii = mk::address(f.radii),
                 .means2d = mk::address(f.means2d),
-                .means_grad = mk::address(means_grad),
-                .scaling_grad = mk::address(scaling_grad),
-                .rotation_grad = mk::address(rotation_grad),
+                .means_grad = mk::wide_address(means_grad),
+                .scaling_grad = mk::wide_address(scaling_grad),
+                .rotation_grad = mk::wide_address(rotation_grad),
                 .opacity_grad = mk::address(opacity_grad),
-                .sh0_grad = mk::address(sh0_grad),
-                .sh_rest_grad = mk::address(sh_rest_grad),
+                .sh0_grad = mk::wide_address(sh0_grad),
+                .sh_rest_grad = mk::wide_address(sh_rest_grad),
                 .grad_norms = update_densification && !errors.is_valid() ? mk::address(densification) : 0,
                 .shares = shares ? mk::address(max_screen_share) : 0,
                 .count = f.count,

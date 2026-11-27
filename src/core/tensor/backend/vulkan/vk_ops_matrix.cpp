@@ -21,6 +21,7 @@
 namespace lfs::core::internal {
     namespace {
         using vk::address;
+        using vk::storage_piece;
         using vk::checked_u32;
         using vk::dispatch_groups;
         using vk::kLocalSize;
@@ -124,11 +125,15 @@ namespace lfs::core::internal {
             for (size_t batch_offset = 0; batch_offset < program.batch; batch_offset += batch_per_dispatch) {
                 const size_t batches = std::min(batch_per_dispatch, program.batch - batch_offset);
                 if (skinny) {
-                    // Every row in one dispatch; the shader strides over the grid.
+                    // Every row in one dispatch; the shader strides over the grid. Each binding is guarded over the
+                    // batches of this dispatch, which is all its kernel reaches from the address.
                     const GemmPush push{
-                        .a_address = address(lhs) + batch_offset * program.m * program.k * sizeof(float),
-                        .b_address = address(rhs) + batch_offset * program.k * program.n * sizeof(float),
-                        .c_address = address(output) + batch_offset * program.m * program.n * sizeof(float),
+                        .a_address = address(storage_piece(lhs, batch_offset * program.m * program.k * sizeof(float),
+                                                           batches * program.m * program.k * sizeof(float))),
+                        .b_address = address(storage_piece(rhs, batch_offset * program.k * program.n * sizeof(float),
+                                                           batches * program.k * program.n * sizeof(float))),
+                        .c_address = address(storage_piece(output, batch_offset * program.m * program.n * sizeof(float),
+                                                           batches * program.m * program.n * sizeof(float))),
                         .bias_address = bias != nullptr ? address(*bias) : 0,
                         .m = checked_u32(program.m, "Vulkan GEMM rows exceed uint32"),
                         .n = checked_u32(program.n, "Vulkan GEMM columns exceed uint32"),
@@ -146,11 +151,22 @@ namespace lfs::core::internal {
                 }
                 for (size_t row_offset = 0; row_offset < program.m; row_offset += rows_per_dispatch) {
                     const size_t rows = std::min(rows_per_dispatch, program.m - row_offset);
+                    // This dispatch's rows of each of its batches: guarded from its first row to its last batch's
+                    // last row.
+                    const size_t a_span = (batches - 1) * program.m * program.k + rows * program.k;
+                    const size_t c_span = (batches - 1) * program.m * program.n + rows * program.n;
                     const GemmPush push{
-                        .a_address = address(lhs) + (batch_offset * program.m * program.k + row_offset * program.k) * sizeof(float),
-                        .b_address = address(rhs) + batch_offset * program.k * program.n * sizeof(float),
-                        .c_address = address(output) + (batch_offset * program.m * program.n + row_offset * program.n) * sizeof(float),
-                        .bias_address = bias != nullptr ? address(*bias) + row_offset * sizeof(float) : 0,
+                        .a_address = address(storage_piece(
+                            lhs, (batch_offset * program.m * program.k + row_offset * program.k) * sizeof(float),
+                            a_span * sizeof(float))),
+                        .b_address = address(storage_piece(rhs, batch_offset * program.k * program.n * sizeof(float),
+                                                           batches * program.k * program.n * sizeof(float))),
+                        .c_address = address(storage_piece(
+                            output, (batch_offset * program.m * program.n + row_offset * program.n) * sizeof(float),
+                            c_span * sizeof(float))),
+                        .bias_address = bias != nullptr ? address(storage_piece(*bias, row_offset * sizeof(float),
+                                                                                rows * sizeof(float)))
+                                                        : 0,
                         .m = checked_u32(rows, "Vulkan GEMM rows exceed uint32"),
                         .n = checked_u32(program.n, "Vulkan GEMM columns exceed uint32"),
                         .k = checked_u32(program.k, "Vulkan GEMM depth exceeds uint32"),

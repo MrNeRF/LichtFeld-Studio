@@ -21,7 +21,8 @@ namespace lfs::core::internal {
             for (size_t i = 0; i < 9; ++i)
                 if (pool.regions[i].is_valid()) {
                     writes.push_back(storage_ref(pool.regions[i]));
-                    p.regions[i] = vk::address(writes.back());
+                    // rad_page.slang writes every region through put(), at 64-bit byte addresses.
+                    p.regions[i] = vk::wide_address(writes.back());
                 }
             const std::array constants{phase};
             const auto& pipeline = context->pipelines().specialized("rad_page", sizeof(p), constants);
@@ -46,8 +47,11 @@ namespace lfs::core::internal {
         // Absent attributes, such as the SH of degree-zero splats, have no storage.
         const auto present = [](const Tensor& t) { return t.is_valid() && t.bytes() != 0; };
         const auto address = [&](const Tensor& t) { return present(t) ? vk::address(storage_ref(t)) : uint64_t{0}; };
-        const Sources source{address(src.means), address(src.sh0), src.sh_rest ? address(src.shN) : 0,
-                             address(src.rotation), address(src.scaling), address(src.opacity), address(src.shN_bounds),
+        // The resident rows and SH are read through word() and residentWord(), at 64-bit byte addresses; the Q16
+        // bounds are indexed from their start.
+        const auto wide = [&](const Tensor& t) { return present(t) ? vk::wide_address(storage_ref(t)) : uint64_t{0}; };
+        const Sources source{wide(src.means), wide(src.sh0), src.sh_rest ? wide(src.shN) : 0,
+                             wide(src.rotation), wide(src.scaling), wide(src.opacity), address(src.shN_bounds),
                              src.offset, src.count, src.sh_rest, src.shN.is_valid() && src.shN.dtype() == DataType::Float16, src.sh_q16, 0};
         const auto context = acquire_vulkan_context();
         vk::ScopedAllocation descriptor(*context, sizeof(source));

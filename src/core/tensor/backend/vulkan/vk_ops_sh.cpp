@@ -17,7 +17,9 @@ namespace lfs::core::internal {
         };
         static_assert(sizeof(Push) == 64);
         const auto address = [](const std::optional<StorageRef>& s) { return s ? vk::address(*s) : uint64_t{0}; };
-        const Push push{vk::address(source), vk::address(destination), address(program.indices), address(program.source_bounds), address(program.destination_bounds),
+        // sh_codec and sh_encode read and write the SH stores from 64-bit row addresses (shRowAddress); the indices
+        // and the Q16 bounds are indexed from their start.
+        const Push push{vk::wide_address(source), vk::wide_address(destination), address(program.indices), address(program.source_bounds), address(program.destination_bounds),
                         uint32_t(p.source_rows), uint32_t(p.destination_rows), uint32_t(p.count),
                         uint32_t(p.source_offset), uint32_t(p.destination_offset), 0};
         const std::array constants{uint32_t(p.source_format), uint32_t(p.destination_format),

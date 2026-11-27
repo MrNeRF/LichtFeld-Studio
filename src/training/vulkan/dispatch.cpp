@@ -130,8 +130,13 @@ namespace lfs::training::vulkan {
                        "Vulkan training received storage from another backend");
         return storage;
     }
-    uint64_t address(const core::Tensor& tensor) {
-        return tensor.is_valid() && tensor.numel() ? vk::address(ref(tensor)) : 0;
+    uint64_t address(const core::Tensor& tensor, const core::SourceSite site) {
+        if (!tensor.is_valid() || !tensor.numel())
+            return 0;
+        return vk::address(ref(tensor), site);
+    }
+    uint64_t wide_address(const core::Tensor& tensor) {
+        return tensor.is_valid() && tensor.numel() ? vk::wide_address(ref(tensor)) : 0;
     }
     void dispatch(std::string_view name, const void* parameters, size_t bytes,
                   std::span<const StorageRef> reads, std::span<const StorageRef> writes,

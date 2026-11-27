@@ -623,6 +623,7 @@ namespace lfs::core::internal {
             .dtype = DataType::UInt8,
             .meta = descriptor,
             .flags = allocation_flags(StorageAccountingKind::VulkanOwned, direct_class, true, true),
+            .byte_end = bytes,
         };
     }
 
@@ -1164,11 +1165,13 @@ namespace lfs::core::internal {
         for (const auto& [key, record] : allocations_) {
             if (address >= record->address && address - record->address <= record->requested_size &&
                 bytes <= record->requested_size - (address - record->address)) {
+                const auto offset = static_cast<size_t>(address - record->address);
                 return {.backend = GpuBackend::Vulkan,
                         .data = reinterpret_cast<void*>(record->address),
-                        .byte_offset = static_cast<size_t>(address - record->address),
+                        .byte_offset = offset,
                         .dtype = DataType::UInt8,
-                        .meta = &record->descriptor_owner};
+                        .meta = &record->descriptor_owner,
+                        .byte_end = bytes != 0 ? offset + bytes : 0};
             }
         }
         throw std::invalid_argument("Vulkan tensor view is outside a live allocation");

@@ -1218,7 +1218,8 @@ if(NOT LFS_HAS_CUDA)
             test_tensor_vulkan_index.cpp
             test_tensor_vulkan_matrix_nn.cpp
             test_tensor_vulkan_random.cpp
-            test_tensor_vulkan_buffer.cpp)
+            test_tensor_vulkan_buffer.cpp
+            test_tensor_vulkan_address_guard.cpp)
     endif()
     if(LFS_BUILD_TRAINER)
         list(APPEND TEST_SOURCES
@@ -1889,6 +1890,7 @@ if(LFS_TENSOR_VULKAN)
         test_tensor_vulkan_matrix_nn.cpp
         test_tensor_vulkan_random.cpp
         test_tensor_vulkan_buffer.cpp
+        test_tensor_vulkan_address_guard.cpp
         test_tensor_vulkan_cuda_bridge.cpp
         test_tensor_backend_parity.cpp
         test_tensor_backend_semantics.cpp

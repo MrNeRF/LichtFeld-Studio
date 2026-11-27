@@ -139,8 +139,10 @@ namespace lfs::training {
             if (codec.primitives <= 0 || codec.attributes_or_slots <= 0)
                 return;
             const bool swizzled = codec.layout == JointLayout::SwizzledSH;
-            const JointPush push{vk::address(storage_ref(source)), vk::address(storage_ref(bounds)),
-                                 vk::address(storage_ref(destination)), vk::address(storage_ref(destination_bounds)),
+            // joint_morton.slang reads and writes the moment codes at 64-bit byte addresses (loadByte, storeByteWord,
+            // the 16-bit codes and phase 2's words), so those bindings are wide; bounds and indices stay guarded.
+            const JointPush push{vk::wide_address(storage_ref(source)), vk::address(storage_ref(bounds)),
+                                 vk::wide_address(storage_ref(destination)), vk::address(storage_ref(destination_bounds)),
                                  vk::address(storage_ref(indices)), static_cast<uint32_t>(codec.primitives),
                                  static_cast<uint32_t>(codec.attributes_or_slots), swizzled ? 1u : 0u,
                                  static_cast<uint32_t>(codec.bits), slot_begin,
@@ -178,7 +180,8 @@ namespace lfs::training {
             Tensor alternate_codes = Tensor::empty({count}, Device::GPU, DataType::UInt32);
             Tensor indices = Tensor::empty({count}, Device::GPU, DataType::UInt32);
             Tensor alternate_indices = Tensor::empty({count}, Device::GPU, DataType::UInt32);
-            const MortonPush push{vk::address(storage_ref(input)), vk::address(storage_ref(codes)), vk::address(storage_ref(indices)), {frame.centre[0], frame.centre[1], frame.centre[2]}, 1.0f / frame.radius, static_cast<uint32_t>(count)};
+            // morton.slang reads each mean at its 64-bit row address; codes and indices stay guarded.
+            const MortonPush push{vk::wide_address(storage_ref(input)), vk::address(storage_ref(codes)), vk::address(storage_ref(indices)), {frame.centre[0], frame.centre[1], frame.centre[2]}, 1.0f / frame.radius, static_cast<uint32_t>(count)};
             const auto context = acquire_vulkan_context();
             const auto pipeline = training_pipeline(context, "morton", sizeof(push), 0);
             const std::array reads{storage_ref(input)};

@@ -7,6 +7,7 @@
 
 #include "core/error.hpp"
 #include "core/export.hpp"
+#include "core/source_site.hpp"
 
 #include <array>
 #include <atomic>
@@ -57,6 +58,10 @@ namespace lfs::core::internal {
         bool direct_host_uploads = false;
         bool external_memory = false;
         bool external_semaphore = false;
+        // VkPhysicalDeviceLimits::maxStorageBufferRange, and whether the driver is MoltenVK (Metal's pointers are
+        // 64-bit, so its shaders address buffers past 4 GiB from any address); see vulkan_address_guard_limit.
+        uint64_t max_storage_buffer_range = 0;
+        bool moltenvk = false;
 #ifdef __APPLE__
         bool metal_objects = false;
 #endif
@@ -276,6 +281,24 @@ namespace lfs::core::internal {
     [[nodiscard]] lfs::Status adopt_vulkan_context(const AdoptedDevice& adopted);
     [[nodiscard]] bool vulkan_context_adopted() noexcept;
     [[nodiscard]] LFS_CORE_API std::shared_ptr<VulkanContext> acquire_vulkan_context();
+    // The guard on kernel bindings (vk::address in vk_ops_common.hpp). Without VK_EXT_shader_64bit_indexing a shader
+    // is only promised maxStorageBufferRange bytes past a buffer binding or a buffer device address, and NVIDIA's
+    // driver computes the offsets in 32 bits. A context sets the guard when it starts, from the environment read once:
+    // unset, it is on at the device's maxStorageBufferRange on every driver but MoltenVK (Metal's pointers are 64-bit);
+    // LFS_VULKAN_ADDRESS_GUARD=0 turns it off, =1 turns it on on MoltenVK too, and =report turns it on everywhere but
+    // logs each launcher site past the limit once instead of throwing; LFS_VULKAN_ADDRESS_GUARD_BYTES=<n> sets the
+    // limit to n bytes on any driver (for tests).
+    struct VulkanAddressGuard {
+        uint64_t limit = 0; // 0: off
+        bool report = false;
+    };
+    [[nodiscard]] LFS_CORE_API uint64_t vulkan_address_guard_limit() noexcept;
+    // vk::address's slow path. A binding whose elements are `known` to reach `reach` bytes past its address throws the
+    // guard's error naming the launcher's site, or in report mode logs the site once and returns. One of unknown reach
+    // (its storage has `reach` bytes past the address) is let through, and logged once per site in report mode.
+    LFS_CORE_API void vulkan_binding_past_guard(uint64_t reach, uint64_t limit, bool known, lfs::core::SourceSite site);
+    // Tests: installs a guard and returns the previous one.
+    LFS_CORE_API VulkanAddressGuard set_vulkan_address_guard_for_testing(VulkanAddressGuard guard) noexcept;
     [[nodiscard]] int vulkan_device_count();
     [[nodiscard]] LFS_CORE_API std::shared_ptr<VulkanContext> try_live_vulkan_context() noexcept;
     void shutdown_vulkan_context();
