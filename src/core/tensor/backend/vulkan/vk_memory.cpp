@@ -28,6 +28,13 @@ namespace lfs::core::internal {
         constexpr VkDeviceSize kInitialStagingSize = 64ull * kMib;
         constexpr size_t kTransferChunk = 8 * 1024 * 1024;
         static_assert(kInitialStagingSize >= 2 * kTransferChunk);
+        // The largest region of one device copy or fill command. Through MoltenVK a vkCmdCopyBuffer region past 4 GiB
+        // does not arrive whole: one of 2^32 + 1 bytes from an odd offset moved 1 byte, one of 2^34 + 4 bytes from a
+        // 4-byte offset moved 4 bytes, and a 16-byte-aligned one of 2^34 + 48 bytes arrived at its start but not from
+        // 2^34 - 8 KiB on. A 68.7 GB vkCmdFillBuffer is refused at vkEndCommandBuffer. The specification takes these
+        // sizes as VkDeviceSize; pieces of 2^31 bytes, each with its own offsets, cost other drivers nothing and keep
+        // the bulk of a copy 16-byte aligned and a fill 4-byte aligned.
+        constexpr VkDeviceSize kTransferPiece = VkDeviceSize{1} << 31;
         constexpr VkDeviceSize kSlabLimit = 1ull * kMib;
         constexpr VkDeviceSize kDirectLimit = 16ull * kMib;
         // loadByte/storeByte and packed convert/gather RMW an aligned uint32.
@@ -822,17 +829,19 @@ namespace lfs::core::internal {
                                         ? std::min<size_t>(request.bytes, (16u - (source & 15u)) & 15u)
                                         : request.bytes;
                 const size_t bulk = (request.bytes - head) & ~size_t{15};
-                std::array<VkBufferCopy, 3> regions{};
-                uint32_t count = 0;
+                // Each part in pieces of at most kTransferPiece bytes; a part below that is one region, as before.
+                std::vector<VkBufferCopy> regions;
+                regions.reserve(3 + request.bytes / kTransferPiece);
                 size_t offset = 0;
                 for (const size_t bytes : {head, bulk, request.bytes - head - bulk}) {
-                    if (bytes != 0) {
-                        regions[count++] = VkBufferCopy{source + offset, destination + offset, bytes};
-                        offset += bytes;
+                    for (size_t done = 0; done < bytes; done += kTransferPiece) {
+                        const VkDeviceSize piece = std::min<VkDeviceSize>(kTransferPiece, bytes - done);
+                        regions.push_back(VkBufferCopy{source + offset + done, destination + offset + done, piece});
                     }
+                    offset += bytes;
                 }
-                vkCmdCopyBuffer(command, buffer_for(request.src),
-                                buffer_for(request.dst), count, regions.data());
+                vkCmdCopyBuffer(command, buffer_for(request.src), buffer_for(request.dst),
+                                static_cast<uint32_t>(regions.size()), regions.data());
             },
             VK_PIPELINE_STAGE_2_TRANSFER_BIT, request.bytes);
         if (request.synchronous) {
@@ -866,11 +875,11 @@ namespace lfs::core::internal {
         const std::array writes{request.dst};
         const uint64_t value = context_.recorders().record(
             {}, writes, [&](const VkCommandBuffer command) {
-                if (aligned_bytes != 0) {
-                    const uint32_t pattern = static_cast<uint32_t>(request.value) *
-                                             0x01010101u;
-                    vkCmdFillBuffer(command, buffer_for(request.dst),
-                                    dst_offset + head_bytes, aligned_bytes, pattern);
+                // The aligned interior in pieces of at most kTransferPiece bytes; one below that, as before.
+                const uint32_t pattern = static_cast<uint32_t>(request.value) * 0x01010101u;
+                for (size_t done = 0; done < aligned_bytes; done += kTransferPiece) {
+                    vkCmdFillBuffer(command, buffer_for(request.dst), dst_offset + head_bytes + done,
+                                    std::min<VkDeviceSize>(kTransferPiece, aligned_bytes - done), pattern);
                 }
                 std::array<VkBufferCopy, 2> regions{};
                 uint32_t region_count = 0;
@@ -1028,13 +1037,15 @@ namespace lfs::core::internal {
         const std::array writes{dst};
         const uint64_t value = context_.recorders().record(
             reads, writes, [&](const VkCommandBuffer command) {
-                const VkBufferCopy region{
-                    .srcOffset = offset_for(src),
-                    .dstOffset = offset_for(dst),
-                    .size = bytes,
-                };
-                vkCmdCopyBuffer(command, buffer_for(src), buffer_for(dst), 1,
-                                &region);
+                // In pieces of at most kTransferPiece bytes; one below that, as before.
+                std::vector<VkBufferCopy> regions;
+                regions.reserve(1 + bytes / kTransferPiece);
+                for (size_t done = 0; done < bytes; done += kTransferPiece) {
+                    regions.push_back(VkBufferCopy{offset_for(src) + done, offset_for(dst) + done,
+                                                   std::min<VkDeviceSize>(kTransferPiece, bytes - done)});
+                }
+                vkCmdCopyBuffer(command, buffer_for(src), buffer_for(dst),
+                                static_cast<uint32_t>(regions.size()), regions.data());
                 const VkMemoryBarrier2 host_read{
                     .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
                     .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,

@@ -888,9 +888,8 @@ void main() {
                 auto cmd = beginCommands();
                 if (!cmd)
                     return cmd.error();
-                VkBufferCopy copy{};
-                copy.size = size;
-                vkCmdCopyBuffer(*cmd, staging->buffer, dst.buffer, 1, &copy);
+                const auto copy = buffer_copy_pieces(VkBufferCopy{0, 0, size});
+                vkCmdCopyBuffer(*cmd, staging->buffer, dst.buffer, static_cast<uint32_t>(copy.size()), copy.data());
                 return submitAndWait(*cmd);
             }
 
@@ -1646,8 +1645,9 @@ void main() {
         auto read_cmd = ctx.beginCommands();
         if (!read_cmd)
             return std::unexpected(read_cmd.error());
-        VkBufferCopy output_copy{0, 0, readback_size};
-        vkCmdCopyBuffer(*read_cmd, output_buffer->buffer, output_readback->buffer, 1, &output_copy);
+        const auto output_copy = buffer_copy_pieces(VkBufferCopy{0, 0, readback_size});
+        vkCmdCopyBuffer(*read_cmd, output_buffer->buffer, output_readback->buffer,
+                        static_cast<uint32_t>(output_copy.size()), output_copy.data());
         if (auto submit_error = ctx.submitAndWait(*read_cmd))
             return std::unexpected(*submit_error);
 
