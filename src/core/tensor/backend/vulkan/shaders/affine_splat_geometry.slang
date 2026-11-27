@@ -159,12 +159,15 @@ void main(uint3 tid:SV_DispatchThreadID,uniform Parameters p) {
     // the grid-stride step could wrap near the 2^32 count limit.
     for(uint64_t i=tid.x;i<p.count;i+=uint64_t(groups.x)*LFS_LOCAL_SIZE_X) {
         float s[3],q[4],os[3],oq[4];
-        for(uint k=0;k<3;++k)s[k]=((Ptr<float,Access.Read>)p.scales)[i*3+k];
-        for(uint k=0;k<4;++k)q[k]=((Ptr<float,Access.Read>)p.rotations)[i*4+k];
+        // Each row at its 64-bit byte address, its values as small indices from there: NVIDIA's Vulkan computes an access
+        // chain's byte offset in 32 bits without VK_EXT_shader_64bit_indexing, and the scales pass 4 GiB at 357.9M rows,
+        // the rotations at 268.4M, per-splat matrices at 119.3M.
+        for(uint k=0;k<3;++k)s[k]=((Ptr<float,Access.Read>)(p.scales+i*12))[k];
+        for(uint k=0;k<4;++k)q[k]=((Ptr<float,Access.Read>)(p.rotations+i*16))[k];
         Parameters local=p;
-        if(p.matrices!=0) for(uint k=0;k<9;++k) local.linear[k]=((Ptr<float,Access.Read>)p.matrices)[9*i+k];
+        if(p.matrices!=0) for(uint k=0;k<9;++k) local.linear[k]=((Ptr<float,Access.Read>)(p.matrices+i*36))[k];
         affine(local,s,q,os,oq);
-        for(uint k=0;k<3;++k)((Ptr<float,Access.ReadWrite>)p.outScales)[i*3+k]=os[k];
-        for(uint k=0;k<4;++k)((Ptr<float,Access.ReadWrite>)p.outRotations)[i*4+k]=oq[k];
+        for(uint k=0;k<3;++k)((Ptr<float,Access.ReadWrite>)(p.outScales+i*12))[k]=os[k];
+        for(uint k=0;k<4;++k)((Ptr<float,Access.ReadWrite>)(p.outRotations+i*16))[k]=oq[k];
     }
 }
