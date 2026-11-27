@@ -256,6 +256,12 @@ def scene_graph_selection_markers() -> bool:
 def set_scene_graph_selection_markers(enabled: bool) -> None:
     """Show or hide Scene Graph selection markers"""
 
+def get_status_bar_preferences() -> dict: ...
+
+def set_status_bar_preferences(values: dict) -> None: ...
+
+def reset_status_bar_preferences() -> None: ...
+
 def get_progress_bar_style() -> str:
     """Return the status bar progress style (classic, miner, or tessle)"""
 

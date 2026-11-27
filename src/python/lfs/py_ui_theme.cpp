@@ -5,6 +5,7 @@
 #include "gui/utils/splat_export_request.hpp"
 #include "py_ui.hpp"
 #include "python/python_runtime.hpp"
+#include "rendering/rendering_manager.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/post_work_utils.hpp"
 #include "visualizer/preferences.hpp"
@@ -182,6 +183,34 @@ namespace lfs::python {
               "Return whether Scene Graph selection markers are visible");
         m.def("set_scene_graph_selection_markers", &lfs::vis::saveSceneGraphSelectionMarkersPreference,
               nb::arg("enabled"), "Show or hide Scene Graph selection markers");
+        m.def("get_status_bar_preferences", [] {
+            const auto state = lfs::vis::UserPreferences::instance().statusBar();
+            nb::dict values;
+            for (const auto& field : lfs::vis::STATUS_BAR_PREFERENCE_FIELDS)
+                values[field.key] = state.*field.member;
+            return values;
+        });
+        m.def("set_status_bar_preferences", [](const nb::dict& values) {
+            std::vector<std::pair<bool lfs::vis::StatusBarPreferences::*, bool>> changes;
+            for (const auto& field : lfs::vis::STATUS_BAR_PREFERENCE_FIELDS) {
+                if (values.contains(field.key))
+                    changes.emplace_back(field.member, nb::cast<bool>(values[field.key]));
+            }
+            invoke_on_viewer_thread([changes = std::move(changes)] {
+                auto state = lfs::vis::UserPreferences::instance().statusBar();
+                for (const auto& [member, value] : changes)
+                    state.*member = value;
+                lfs::vis::UserPreferences::instance().setStatusBar(state);
+                if (auto* rm = get_rendering_manager())
+                    rm->markDirty(lfs::vis::DirtyFlag::OVERLAY, lfs::vis::FrameReason::SettingsChange);
+            }); }, nb::arg("values"));
+        m.def("reset_status_bar_preferences", [] {
+            invoke_on_viewer_thread([] {
+                lfs::vis::UserPreferences::instance().setStatusBar({});
+                if (auto* rm = get_rendering_manager())
+                    rm->markDirty(lfs::vis::DirtyFlag::OVERLAY, lfs::vis::FrameReason::SettingsChange);
+            });
+        });
         m.def("get_progress_bar_style", &lfs::vis::loadProgressBarStylePreference,
               "Return the status bar progress style (classic, miner, or tessle)");
         m.def(

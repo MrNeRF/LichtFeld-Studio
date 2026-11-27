@@ -210,7 +210,7 @@ namespace lfs::vis::gui {
         int childSubmenuIndexForElement(Rml::Element* element) const;
         int grandchildSubmenuIndexForElement(Rml::Element* element) const;
         void rebuildToolbarButtons();
-        void rebuildPortalStatus();
+        void rebuildGalleryStatus();
         void dispatchToolbarAction(const std::string& action, const std::string& value);
         Rml::Element* toolbarButtonAtPoint(float x, float y) const;
         bool projectTitleAtPoint(float x, float y) const;
@@ -247,10 +247,6 @@ namespace lfs::vis::gui {
         bool has_navigation_tooltip_language_generation_ = false;
         int active_index_ = -1;
         std::string brand_logo_src_;
-        std::string portal_connection_label_;
-        std::string portal_connection_tooltip_;
-        std::string portal_connection_icon_;
-        std::string portal_connection_tone_;
         bool portal_transfer_animation_active_ = false;
         std::string gallery_progress_label_;
         std::string gallery_progress_detail_;
