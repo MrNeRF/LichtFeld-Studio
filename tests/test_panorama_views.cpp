@@ -614,6 +614,9 @@ namespace {
         using namespace lfs::training;
         lfs::test::licht::TemporaryDirectory temp;
         const auto photo = prior_panorama(temp.path / "images" / "source.png");
+        std::filesystem::create_directories(temp.path / "images");
+        const std::vector<uint8_t> rgb(128 * 64 * 3, 127);
+        ASSERT_TRUE(save_png(temp.path / "images" / "source.png", rgb.data(), 128, 64, 3, 8, 0));
         photo->set_depth_path(temp.path / "depth" / "source.png");
         std::filesystem::create_directories(photo->depth_path().parent_path());
         std::vector<uint16_t> depth(128 * 64);
@@ -701,8 +704,30 @@ namespace {
         depth[0] += 1;
         ASSERT_TRUE(save_png(photo->depth_path(), depth.data(), 128, 64, 1, 16, 0));
         const auto rejected = TrainerDepthAnchorTestAccess::fit(resumed, params, {photo}, strategy);
-        EXPECT_FALSE(rejected);
+        ASSERT_FALSE(rejected);
+        EXPECT_NE(rejected.error().detail().find("Cannot recover the initial point cloud"), std::string_view::npos);
         EXPECT_EQ(lfs::test::licht::read_file_bytes(sidecar), prepared);
+
+        const auto wrong_seed_path = temp.path / "wrong-init.ply";
+        const PointCloud wrong_seed(strategy->get_model().means().cpu(), Tensor::zeros({2000, 3}, Device::CPU));
+        ASSERT_TRUE(lfs::io::save_ply(wrong_seed, {.output_path = wrong_seed_path}));
+        auto wrong_seed_params = params;
+        wrong_seed_params.init_path = path_to_utf8(wrong_seed_path);
+        const auto mismatched = TrainerDepthAnchorTestAccess::fit(resumed, wrong_seed_params, {photo}, strategy);
+        ASSERT_FALSE(mismatched);
+        EXPECT_NE(mismatched.error().detail().find("differs from the checkpoint"), std::string_view::npos);
+        EXPECT_EQ(lfs::test::licht::read_file_bytes(sidecar), prepared);
+
+        // A checkpoint without a seed can initialize depth against the original cloud
+        // when its sidecar is missing or stale.
+        auto first_depth_params = params;
+        first_depth_params.init_path = path_to_utf8(temp.path / "init.ply");
+        TrainerDepthAnchorTestAccess::resume(resumed, std::nullopt);
+        const auto first_fit = TrainerDepthAnchorTestAccess::fit(resumed, first_depth_params, {photo}, strategy);
+        ASSERT_TRUE(first_fit) << first_fit.error().detail();
+        EXPECT_EQ(TrainerDepthAnchorTestAccess::snapshot_params(resumed).depth_anchor_seed_v1, saved_seed);
+        EXPECT_TRUE(readDepthAnchorSidecar(sidecar, computeAnchorFingerprint(means, {photo})));
+        EXPECT_FALSE(readDepthAnchorSidecar(sidecar, computeAnchorFingerprint(strategy->get_model().means(), {photo})));
     }
 
     // Fails if area resampling takes a fixed number of samples per face pixel: toward a pole one face pixel spans

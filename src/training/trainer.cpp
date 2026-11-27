@@ -2792,7 +2792,10 @@ namespace lfs::training {
                 .code = lfs::ErrorCode::FailedPrecondition,
                 .domain = lfs::ErrorDomain::Training,
                 .user_message = "Training failed.",
-                .detail = std::format("Cannot resume depth supervision with the original anchors: {}", detail),
+                .detail = std::format(
+                    "Cannot resume depth supervision: {} Restore the original depth maps and anchor sidecar, "
+                    "restore the initial geometry, or disable depth supervision before retrying.",
+                    detail),
                 .detection = LFS_SOURCE_SITE_CURRENT(),
             }));
         };
@@ -2825,7 +2828,7 @@ namespace lfs::training {
         const auto recover_seed = [&]() -> lfs::Result<void> {
             auto loaded = loadInitialPointCloud(params_, scene_->getTrainingDataOrigin());
             if (!loaded)
-                return unavailable(std::format("Cannot recover the initial point cloud: {}", loaded.error().user_message()));
+                return unavailable(std::format("Cannot recover the initial point cloud: {}", lfs::format_for_developer(loaded.error())));
             if (!*loaded || !(*loaded)->means.is_valid() || (*loaded)->means.numel() == 0)
                 return unavailable("The original training geometry is unavailable.");
             means = (*loaded)->means.to(lfs::core::DataType::Float32).contiguous();
@@ -2854,9 +2857,9 @@ namespace lfs::training {
             cameras.push_back(group.photograph);
         const auto sidecar = depthAnchorSidecarPath(cameras);
 
-        const bool legacy_resume = resumed && !seed;
-        if (legacy_resume) {
-            LOG_INFO("Depth anchors: recovering the initial point cloud for a checkpoint without anchor metadata");
+        const bool resume_without_seed = resumed && !seed;
+        if (resume_without_seed) {
+            LOG_INFO("Depth anchors: recovering the initial point cloud for a resume without a saved anchor seed");
             if (auto result = recover_seed(); !result)
                 return result;
         }
@@ -2880,11 +2883,11 @@ namespace lfs::training {
             LOG_INFO("Depth anchors: loaded {} cached anchors from {}", raw.size(), lfs::core::path_to_utf8(sidecar));
         } else {
             LOG_INFO("Depth anchors: cache miss after {:.1f} ms fingerprinting ({})", fingerprint_ms, cached.error());
-            if (legacy_resume)
-                return unavailable(std::format("Legacy checkpoint has no saved anchor seed and its sidecar could not be validated ({})", cached.error()));
-            if (resumed) {
-                if (fingerprint.version == 0)
-                    return unavailable("The depth files could not be fingerprinted.");
+            if (resumed && fingerprint.version == 0)
+                return unavailable("The depth files could not be fingerprinted.");
+            if (resume_without_seed) {
+                LOG_WARN("Depth anchors: no saved seed or matching sidecar; fitting against the recovered initial point cloud");
+            } else if (resumed) {
                 if (auto result = recover_seed(); !result)
                     return result;
             }
@@ -9613,6 +9616,7 @@ namespace lfs::training {
         }
         auto& cache_loader = lfs::io::CacheLoader::getInstance();
         std::optional<lfs::Error> terminal_error;
+        bool depth_anchor_setup_failed = false;
         const auto append_terminal_error = [&terminal_error](lfs::Error error) {
             if (terminal_error) {
                 terminal_error = std::move(*terminal_error).with_suppressed(std::move(error));
@@ -9721,8 +9725,11 @@ namespace lfs::training {
                 } else {
                     LOG_INFO("Depth maps available for {}/{} training cameras",
                              cameras_with_depth, train_dataset_->get_cameras().size());
+                    // Keep the restored project intact if anchor setup fails before the first step.
+                    depth_anchor_setup_failed = true;
                     if (auto result = fitDepthAnchors(cameras_with_depth); !result)
                         throw lfs::Exception(std::move(result).error());
+                    depth_anchor_setup_failed = false;
                 }
             }
             if (aux_pipeline_config.load_normals) {
@@ -10293,9 +10300,10 @@ namespace lfs::training {
         if (training_failed)
             pending_snapshot_finish_reason_ = lfs::io::project::TrainingFinishReason::Error;
         const bool authorize_terminal_save =
-            (user_stopped || terminal_error)
-                ? terminal_save_policy.on_stop_or_error
-                : terminal_save_policy.on_completion;
+            !depth_anchor_setup_failed &&
+            ((user_stopped || terminal_error)
+                 ? terminal_save_policy.on_stop_or_error
+                 : terminal_save_policy.on_completion);
         if (authorize_terminal_save &&
             terminal_project_path) {
             saving_model_.store(true, std::memory_order_release);
@@ -10381,7 +10389,9 @@ namespace lfs::training {
             saving_model_.store(false, std::memory_order_release);
         } else {
             const char* skip_reason =
-                authorize_terminal_save
+                depth_anchor_setup_failed
+                    ? "depth anchor setup failed before training"
+                : authorize_terminal_save
                     ? "no project path is bound"
                 : user_stopped
                     ? "saves on user stop are not authorized"
@@ -10432,10 +10442,10 @@ namespace lfs::training {
             if (progress_) {
                 progress_->complete(user_stopped, terminal_iteration);
             }
-            if (evaluator_) {
+            if (evaluator_ && !depth_anchor_setup_failed) {
                 evaluator_->save_report();
             }
-            if (pose_refinement_) {
+            if (pose_refinement_ && !depth_anchor_setup_failed) {
                 {
                     std::unique_lock render_lock(render_mutex_);
                     pose_refinement_->commit();
