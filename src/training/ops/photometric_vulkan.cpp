@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "lfs/training/ops/photometric_vulkan.hpp"
+#include "blur_ssim_portable.hpp"
 #include "vulkan/dispatch.hpp"
 #include <climits>
 #include <cmath>
@@ -36,6 +37,7 @@ namespace lfs::training {
             Tensor horizontal, full_map, full_cs, losses, normalizer, l1_gradient;
             Tensor error_storage, step_partials;
             StepScratchAllocator step_scratch;
+            BlurSsimPrograms blur_programs;
             bool borrowed_layout = false;
             PhotoPath kind = PhotoPath::L1;
             size_t required = 0, capacity = 0, partial_offset = 0, partial_stride = 0;
@@ -244,24 +246,20 @@ namespace lfs::training {
                     raw_grad = raw_grad.squeeze(0);
             }
         }
-        // Temporary blur planes are scoped to this evaluation. The command recorder keeps
-        // storage live through its last queued access and the allocator can then reuse it.
+        // The blur-tolerant SSIM through the portable program in ops/blur_ssim.slang. Its partials are scoped to this
+        // evaluation: the command recorder keeps storage live through its last queued access and the allocator can
+        // then reuse it.
         void evaluate_blur(PhotoSaved& saved, In corrected, In raw, In target, In mask,
                            const PhotoParams& options, Out loss, Out grad, Out raw_grad) {
             const auto a = corrected.contiguous(), y = target.contiguous();
             const auto r = decoupled(options.path) ? raw.contiguous() : a;
             const auto m = masked(options.path) ? mask.contiguous() : Tensor{};
             const auto shape = a.shape();
-            const auto dims = a.ndim() == 3 ? a.unsqueeze(0).shape() : shape;
-            const size_t batches = dims[0], channels = dims[1], h = dims[2], w = dims[3];
-            const size_t count = a.numel();
-            struct BlurParams {
-                uint64_t corrected, raw, photo, mask, blurred, sharp_partials, blur_partials, branch_gradient;
-                uint64_t sharp_map, cs_map, loss, grad, raw_grad;
-                int width, height, channels, batches, byte_photo, byte_mask, radius;
-                float sw, denominator, taps[6];
-            };
+            const bool batched = a.ndim() == 4;
+            const auto dims = batched ? shape : a.unsqueeze(0).shape();
             LFS_ASSERT_MSG(options.blur_sigma > 0 && options.blur_sigma <= 1.5f && dims.rank() == 4, "Invalid blur loss parameters");
+            const size_t batches = dims[0], h = dims[2], w = dims[3];
+            const size_t count = a.numel();
             auto& state = *static_cast<PhotoState*>(saved.backend.get());
             ensure_buffer(state.gradient, shape);
             grad = state.gradient;
@@ -275,43 +273,45 @@ namespace lfs::training {
             ensure_buffer(state.cs, maps);
             saved.ssim_map = state.map;
             saved.cs_map = state.cs;
-            auto storage = state.step_scratch ? state.step_scratch(count * 7 * sizeof(float)).storage
-                                              : Tensor::empty({count, size_t(7)}, Device::GPU);
-            auto scores = Tensor::empty(maps, Device::GPU);
-            const auto scratch = address(storage);
-            BlurParams p{address(a), address(r), address(y), address(m), scratch, scratch + count * 8, scratch + count * 16, scratch + count * 24,
-                         address(state.map), address(state.cs), address(scores), address(grad), address(raw_grad),
-                         int(w), int(h), int(channels), int(batches), y.dtype() == DataType::UInt8, m.is_valid() && m.dtype() != DataType::Float32,
-                         int(std::ceil(3.0 * options.blur_sigma)), options.ssim_weight};
-            double sum = 0, weights[6]{};
-            for (int i = 0; i <= p.radius; ++i) {
-                weights[i] = std::exp(-.5 * i * i / (double(options.blur_sigma) * options.blur_sigma));
-                sum += (i ? 2 : 1) * weights[i];
+            // Sharp and blurred partials (fp16 x 4), v and u (fp16 x 2), the forward's partial sums.
+            const size_t sizes[] = {count * 8, count * 8, count * 4, 2048 * sizeof(float)};
+            size_t offsets[4], bytes = 0;
+            for (size_t i = 0; i < 4; ++i) {
+                offsets[i] = bytes;
+                bytes = aligned(bytes + sizes[i]);
             }
-            for (int i = 0; i <= p.radius; ++i)
-                p.taps[i] = float(weights[i] / sum);
+            const auto storage = state.step_scratch ? state.step_scratch(bytes).storage
+                                                    : Tensor::empty({bytes}, Device::GPU, DataType::UInt8);
+            const auto view = [&](const size_t i) {
+                return Tensor::view_sharing_storage(storage, offsets[i], core::TensorShape({sizes[i]}), 0, DataType::UInt8,
+                                                    "training.photometric.blur");
+            };
+            const Tensor result = Tensor::empty({size_t{2}}, Device::GPU);
+            const Tensor loss_value = result.slice(0, 0, 1), mask_sum = result.slice(0, 1, 2);
+            blur_tolerant_ssim(state.blur_programs,
+                               {.corrected = batched ? a : a.unsqueeze(0),
+                                .raw = batched ? r : r.unsqueeze(0),
+                                .photo = batched ? y : y.unsqueeze(0),
+                                .mask = m},
+                               {.ssim_map = state.map,
+                                .cs_map = state.cs,
+                                .sharp = view(0),
+                                .blurred = view(1),
+                                .vu = view(2),
+                                .partials = view(3),
+                                .loss = loss_value,
+                                .mask_sum = m.is_valid() ? mask_sum : Tensor{},
+                                .grad = grad,
+                                .grad_raw = raw_grad},
+                               options.blur_sigma, options.ssim_weight, options.denominator);
             if (m.is_valid()) {
-                p.denominator = options.denominator > 0 ? options.denominator : (m.dtype() == DataType::Float32 ? m : (m != 0).to(DataType::Float32)).sum().item() * batches * channels + 1e-8f;
-                saved.mask_denominator = p.denominator;
-                saved.empty_mask = p.denominator <= 1e-8f;
+                // A passed denominator is the one the reduction used; otherwise this reads the one it formed.
+                saved.mask_denominator = options.denominator > 0 ? options.denominator : mask_sum.item();
+                saved.empty_mask = saved.mask_denominator <= 1e-8f;
             } else {
-                p.denominator = float(batches * channels * (h > 10 ? h - 10 : h) * (w > 10 ? w - 10 : w));
                 saved.empty_mask = false;
             }
-            uint32_t blocks = uint32_t(std::min<size_t>(((w + 15) / 16) * ((h + 15) / 16) * batches, 65535));
-            std::vector<vulkan::StorageRef> inputs{ref(a), ref(r), ref(y)};
-            if (m.is_valid())
-                inputs.push_back(ref(m));
-            auto scratch_ref = ref(storage);
-            vulkan::dispatch("blur_ssim", p, inputs, std::array{scratch_ref}, blocks, 0);
-            inputs.push_back(scratch_ref);
-            vulkan::dispatch("blur_ssim", p, inputs, std::array{scratch_ref, ref(state.map), ref(state.cs), ref(scores)}, blocks, 1);
-            vulkan::dispatch("blur_ssim", p, inputs, std::array{scratch_ref}, blocks, 2);
-            std::vector<vulkan::StorageRef> outputs{ref(grad)};
-            if (raw_grad.is_valid())
-                outputs.push_back(ref(raw_grad));
-            vulkan::dispatch("blur_ssim", p, inputs, outputs, blocks, 3);
-            loss = (scores.sum() / p.denominator).reshape({1});
+            loss = loss_value;
         }
         State create() { return std::make_unique<PhotoState>(); }
         void evaluate(PhotoSaved& saved, In corrected, In raw, In target, In mask, const PhotoParams& options,

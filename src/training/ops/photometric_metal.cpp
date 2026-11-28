@@ -3,6 +3,7 @@
 
 // Metal PhotometricOps; see ops/photometric_cuda.cpp for the reference behaviour.
 
+#include "blur_ssim_portable.hpp"
 #include "metal_families.hpp"
 #include "metal_kernels.hpp"
 
@@ -41,21 +42,30 @@ namespace lfs::training {
         // The workspace variants of ssim.cu's LossWorkspaceArena, with its byte
         // layout: fields 256-byte aligned in one UInt8 block, exact on variant
         // switches, a same-variant shape high-water otherwise.
+        // Blur and BlurMasked are the blur-tolerant SSIM's layouts (its own arena).
         enum class Kind : uint8_t { None,
                                     Fused,
                                     PureSSIM,
                                     Decoupled,
                                     MaskedFused,
-                                    MaskedDecoupled };
+                                    MaskedDecoupled,
+                                    Blur,
+                                    BlurMasked };
+        // Quad16 and Pair16 hold four and two fp16 values per element. Region holds the blurred branch's Quad16
+        // partials, and the two Float32 gradients the last pass writes over them once the branch pass has read them.
         enum class Slot : uint8_t { Map,
                                     Full16,
                                     Full32,
                                     Temp1024,
                                     Temp2048,
-                                    Scalar };
+                                    Scalar,
+                                    Quad16,
+                                    Pair16,
+                                    Region };
 
         struct Views {
             Tensor ssim_map, dm_mu, dm_sigma1, dm_sigma12, raw_dm_mu, dl_dmap, grad, temp, result, mask_sum;
+            Tensor sharp, blurred, vu, grad_raw; // the blur-tolerant SSIM's
         };
         struct Field {
             Tensor Views::*member;
@@ -75,6 +85,10 @@ namespace lfs::training {
                 return {{&V::ssim_map, Slot::Map}, {&V::dm_mu, Slot::Full16}, {&V::dm_sigma1, Slot::Full16}, {&V::dm_sigma12, Slot::Full16}, {&V::grad, Slot::Full32}, {&V::temp, Slot::Temp2048}, {&V::result, Slot::Scalar}, {&V::mask_sum, Slot::Scalar}};
             case Kind::MaskedDecoupled:
                 return {{&V::ssim_map, Slot::Map}, {&V::dm_mu, Slot::Full16}, {&V::raw_dm_mu, Slot::Full16}, {&V::dm_sigma1, Slot::Full16}, {&V::dm_sigma12, Slot::Full16}, {&V::grad, Slot::Full32}, {&V::temp, Slot::Temp2048}, {&V::result, Slot::Scalar}, {&V::mask_sum, Slot::Scalar}};
+            case Kind::Blur:
+                return {{&V::ssim_map, Slot::Map}, {&V::sharp, Slot::Quad16}, {&V::blurred, Slot::Region}, {&V::vu, Slot::Pair16}, {&V::temp, Slot::Temp1024}, {&V::result, Slot::Scalar}};
+            case Kind::BlurMasked:
+                return {{&V::ssim_map, Slot::Map}, {&V::sharp, Slot::Quad16}, {&V::blurred, Slot::Region}, {&V::vu, Slot::Pair16}, {&V::temp, Slot::Temp2048}, {&V::result, Slot::Scalar}, {&V::mask_sum, Slot::Scalar}};
             case Kind::None:
                 return {};
             }
@@ -83,9 +97,22 @@ namespace lfs::training {
 
         size_t align_up(const size_t bytes) { return (bytes + 255) & ~size_t{255}; }
 
+        size_t elements(const std::vector<size_t>& shape) {
+            size_t count = 1;
+            for (const size_t extent : shape)
+                count *= extent;
+            return count;
+        }
+
+        // The raw-render gradient's offset inside a Region: the corrected image's gradient comes first.
+        size_t region_raw_offset(const std::vector<size_t>& shape) { return align_up(elements(shape) * sizeof(float)); }
+
         std::pair<core::TensorShape, DataType> slot_shape(const Slot slot, const std::vector<size_t>& shape) {
             std::vector<size_t> map = shape;
             map[1] = 1;
+            std::vector<size_t> quad = shape, pair = shape;
+            quad.push_back(4);
+            pair.push_back(2);
             switch (slot) {
             case Slot::Map: return {core::TensorShape(map), DataType::Float32};
             case Slot::Full16: return {core::TensorShape(shape), DataType::Float16};
@@ -93,6 +120,10 @@ namespace lfs::training {
             case Slot::Temp1024: return {core::TensorShape({1024}), DataType::Float32};
             case Slot::Temp2048: return {core::TensorShape({2048}), DataType::Float32};
             case Slot::Scalar: return {core::TensorShape({1}), DataType::Float32};
+            case Slot::Quad16: return {core::TensorShape(quad), DataType::Float16};
+            case Slot::Pair16: return {core::TensorShape(pair), DataType::Float16};
+            case Slot::Region:
+                return {core::TensorShape({region_raw_offset(shape) + elements(shape) * sizeof(float)}), DataType::UInt8};
             }
             return {};
         }
@@ -130,8 +161,19 @@ namespace lfs::training {
                     auto [field_shape, dtype] = slot_shape(field.slot, next_shape);
                     offset = align_up(offset);
                     const size_t bytes = field_shape.elements() * core::dtype_size(dtype);
-                    views.*field.member = Tensor::view_sharing_storage(storage, offset, std::move(field_shape), 0,
-                                                                       dtype, "training.photometric.workspace");
+                    if (field.slot == Slot::Region) {
+                        auto [quad_shape, quad_dtype] = slot_shape(Slot::Quad16, next_shape);
+                        views.*field.member = Tensor::view_sharing_storage(storage, offset, std::move(quad_shape), 0,
+                                                                           quad_dtype, "training.photometric.workspace");
+                        views.grad = Tensor::view_sharing_storage(storage, offset, core::TensorShape(next_shape), 0,
+                                                                  DataType::Float32, "training.photometric.workspace");
+                        views.grad_raw = Tensor::view_sharing_storage(storage, offset + region_raw_offset(next_shape),
+                                                                      core::TensorShape(next_shape), 0,
+                                                                      DataType::Float32, "training.photometric.workspace");
+                    } else {
+                        views.*field.member = Tensor::view_sharing_storage(storage, offset, std::move(field_shape), 0,
+                                                                           dtype, "training.photometric.workspace");
+                    }
                     offset += bytes;
                 }
                 kind = next;
@@ -172,6 +214,9 @@ namespace lfs::training {
 
         struct MetalPhotoState : lfs::gpu_ops::BackendState {
             Arena arena;
+            // The blur-tolerant SSIM's own arena: photo sets that straddle the 1,200-pixel rule switch neither.
+            Arena blur;
+            BlurSsimPrograms blur_programs;
             Tensor cs_map; // outside the arena, as the CUDA workspaces keep it
             // Outside the arena too: the CUDA arena leaves the raw-render gradient to add_raw_gradient.
             Tensor grad_raw;
@@ -277,13 +322,19 @@ namespace lfs::training {
 
         void launch_with(const std::string_view function, const auto& params, const std::initializer_list<const Tensor*> uses,
                          const std::array<uint32_t, 3> groups, const std::array<uint32_t, 3> group,
-                         const Constants& constants) {
+                         const std::span<const std::pair<uint32_t, uint32_t>> constants) {
             mk::kernels().launch({.function = function,
                                   .params = std::as_bytes(std::span(&params, 1)),
                                   .uses = std::span(uses.begin(), uses.size()),
                                   .groups = groups,
                                   .group = group,
-                                  .constants = std::span(constants.values)});
+                                  .constants = constants});
+        }
+
+        void launch_with(const std::string_view function, const auto& params, const std::initializer_list<const Tensor*> uses,
+                         const std::array<uint32_t, 3> groups, const std::array<uint32_t, 3> group,
+                         const Constants& constants) {
+            launch_with(function, params, uses, groups, group, std::span<const std::pair<uint32_t, uint32_t>>(constants.values));
         }
 
         struct ForwardParams {
@@ -454,6 +505,55 @@ namespace lfs::training {
             squeeze_like(grad, corrected);
         }
 
+        // ---- Blur-tolerant SSIM (ssim.cu blur_tolerant_loss): the portable program in ops/blur_ssim.slang -------------
+        // Its passes write the blur arena's views. Gradients are views of the workspace, valid until the next evaluate,
+        // like the other paths' corrected-image gradient.
+        void evaluate_blur(PhotoSaved& saved, MetalPhotoState& state, const Tensor& corrected, const Tensor& raw,
+                           const Tensor& target, const Tensor& mask, const lfs::gpu_ops::PhotoParams& params,
+                           Tensor& loss, Tensor& grad_corrected, Tensor& grad_raw) {
+            const bool decoupled = params.path == PhotoPath::Decoupled || params.path == PhotoPath::MaskedDecoupled;
+            const bool masked = params.path == PhotoPath::MaskedFused || params.path == PhotoPath::MaskedDecoupled;
+            LFS_ASSERT_MSG(!decoupled || raw.is_valid(), "Decoupled photometric paths need a raw render (raw=invalid)");
+            LFS_ASSERT_MSG(!masked || mask.is_valid(), "Masked photometric paths need a mask (mask=invalid)");
+            LFS_ASSERT_MSG(std::isfinite(params.denominator) && params.denominator >= 0.0f,
+                           std::format("Loss denominator must be finite and non-negative (denominator={})",
+                                       params.denominator));
+            const Images images = prepare(corrected, decoupled ? raw : Tensor{}, target, masked ? mask : Tensor{});
+            Views& ws = state.blur.ensure(masked ? Kind::BlurMasked : Kind::Blur, dims(images.prediction));
+            ensure_like(state.cs_map, ws.ssim_map);
+            blur_tolerant_ssim(state.blur_programs,
+                               {.corrected = images.prediction,
+                                .raw = decoupled ? images.raw : images.prediction,
+                                .photo = images.target,
+                                .mask = masked ? images.mask : Tensor{}},
+                               {.ssim_map = ws.ssim_map,
+                                .cs_map = state.cs_map,
+                                .sharp = ws.sharp,
+                                .blurred = ws.blurred,
+                                .vu = ws.vu,
+                                .partials = ws.temp,
+                                .loss = ws.result,
+                                .mask_sum = masked ? ws.mask_sum : Tensor{},
+                                .grad = ws.grad,
+                                .grad_raw = decoupled ? ws.grad_raw : Tensor{}},
+                               params.blur_sigma, params.ssim_weight, params.denominator);
+
+            // A calibration fit scales its masked equations by the loss's denominator, as on Vulkan. A denominator the
+            // caller passes is the one the reduction used, so it needs no read that waits for the GPU.
+            if (params.calibration_fit && masked)
+                saved.mask_denominator = params.denominator > 0.0f ? params.denominator : ws.mask_sum.item();
+            loss = ws.result;
+            grad_corrected = ws.grad;
+            squeeze_like(grad_corrected, corrected);
+            if (decoupled) {
+                grad_raw = ws.grad_raw;
+                squeeze_like(grad_raw, corrected);
+            } else {
+                grad_raw = {};
+            }
+            publish_maps(saved, ws.ssim_map, state.cs_map);
+        }
+
         lfs::gpu_ops::State photo_create() { return std::make_unique<MetalPhotoState>(); }
 
         void photo_evaluate(PhotoSaved& saved, const Tensor& corrected, const Tensor& raw, const Tensor& target,
@@ -461,6 +561,10 @@ namespace lfs::training {
                             Tensor& grad_corrected, Tensor& grad_raw) {
             auto& state = state_of(saved);
             validate_weight(params.ssim_weight);
+            if (params.blur_sigma > 0.0f) {
+                evaluate_blur(saved, state, corrected, raw, target, mask, params, loss, grad_corrected, grad_raw);
+                return;
+            }
             const bool decoupled = params.path == PhotoPath::Decoupled || params.path == PhotoPath::MaskedDecoupled;
             const bool masked = params.path == PhotoPath::MaskedFused || params.path == PhotoPath::MaskedDecoupled;
             if (!decoupled && grad_raw.is_valid())
@@ -604,19 +708,22 @@ namespace lfs::training {
             const auto* state = static_cast<const MetalPhotoState*>(saved.backend.get());
             if (!state)
                 return {};
-            return {.required = state->arena.required(),
-                    .allocated = state->arena.capacity,
+            return {.required = state->arena.required() + state->blur.required(),
+                    .allocated = state->arena.capacity + state->blur.capacity,
                     .error_map = reserved_bytes(state->error_ssim_map)};
         }
 
         void photo_shrink_to_required(PhotoSaved& saved) {
-            if (saved.backend)
+            if (saved.backend) {
                 state_of(saved).arena.shrink_to_required();
+                state_of(saved).blur.shrink_to_required();
+            }
         }
 
         void photo_reset(PhotoSaved& saved) {
             if (saved.backend) {
                 state_of(saved).arena.reset();
+                state_of(saved).blur.reset();
                 state_of(saved).grad_raw = {};
             }
         }
