@@ -13,9 +13,11 @@
 #include <array>
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 namespace lfs::core::nn::models {
 
@@ -55,6 +57,14 @@ namespace lfs::core::nn::models {
         lfs::Result<LpipsTaps> forward_with_taps(const Tensor& pred, const Tensor& target,
                                                  std::optional<InputScaling> scaling = std::nullopt);
 
+        // Two predictions against one target: the scores forward(pred_a, target) and forward(pred_b, target) give,
+        // bit for bit. Where the model tiles on the generic ops the target goes through the network once per tile.
+        lfs::Result<std::array<float, 2>> forward_pair(const Tensor& pred_a, const Tensor& pred_b, const Tensor& target,
+                                                       std::optional<InputScaling> scaling = std::nullopt);
+        lfs::Result<std::array<float, 2>> forward_pair(const Tensor& pred_a, const Tensor& pred_b, const Tensor& target,
+                                                       const Tensor& mask,
+                                                       std::optional<InputScaling> scaling = std::nullopt);
+
         [[nodiscard]] DataType compute_dtype() const { return compute_; }
         [[nodiscard]] Device device() const { return device_; }
         [[nodiscard]] std::size_t weights_bytes() const;
@@ -84,12 +94,26 @@ namespace lfs::core::nn::models {
                                        const MaskWeights* mask);
         lfs::Result<float> run_tiled(const Tensor& pred, const Tensor& target,
                                      InputScaling scaling, const MaskWeights* mask);
+        lfs::Result<std::vector<float>> run_tiled(std::span<const Tensor* const> preds, const Tensor& target,
+                                                  InputScaling scaling, const MaskWeights* mask);
+        lfs::Result<std::array<float, 2>> run_pair(const Tensor& pred_a, const Tensor& pred_b, const Tensor& target,
+                                                   InputScaling scaling, const MaskWeights* mask);
+        lfs::Result<MaskWeights> mask_weights(const Tensor& mask, std::size_t height, std::size_t width) const;
+        [[nodiscard]] bool takes_fast_path() const;
+        [[nodiscard]] std::size_t crop_bytes_per_pixel() const;
         lfs::Result<std::array<Tensor, 5>> extract_normalized_features(
             const Tensor& input, InputScaling scaling);
         // Fast mode without taps: fused kernels writing ping-pong feature buffers,
         // no activation arena, no intermediate copies.
         lfs::Result<float> run_fast(const Tensor& pred, const Tensor& target,
                                     InputScaling scaling, const MaskWeights* mask);
+        lfs::Result<std::array<float, 2>> run_fast_pair(const Tensor& pred_a, const Tensor& pred_b, const Tensor& target,
+                                                        InputScaling scaling, const MaskWeights* mask);
+        struct FastTaps {
+            std::array<Tensor, 13> views;
+            const unsigned char* base = nullptr;
+        };
+        lfs::Result<FastTaps> fast_taps(cudaStream_t stream, bool cuda_backend, const Tensor& like);
         std::optional<lfs::Error> validate_pair(const Tensor& pred, const Tensor& target) const;
         void bind_weights_to_stream(cudaStream_t stream);
         const Tensor& w(std::string_view name) const;

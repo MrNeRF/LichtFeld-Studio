@@ -1199,6 +1199,9 @@ if(NOT LFS_HAS_CUDA)
         test_mcp_screen_tools.cpp
         test_viewport.cpp
         test_tensor_metal.cpp
+        test_lpips_pool_reduce.cpp
+        test_lpips_fast_path.cpp
+        test_lpips_pair.cpp
         test_camera_priors_portable.cpp
         test_undistort_portable.cpp
         test_pipelined_loader_backends.cpp
@@ -1750,6 +1753,9 @@ set(TEST_FILES
     test_romav1.cpp
     test_sam2.cpp
     test_lpips.cpp
+    test_lpips_pool_reduce.cpp
+    test_lpips_fast_path.cpp
+    test_lpips_pair.cpp
     test_video_masking.cpp
     test_ppisp_regularization.cpp
     test_ppisp_sidecar.cpp

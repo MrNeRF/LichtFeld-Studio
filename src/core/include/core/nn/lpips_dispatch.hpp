@@ -5,6 +5,8 @@
 
 #include "core/nn/ops.hpp"
 
+#include <cstddef>
+
 namespace lfs::core::nn {
     struct RGBConvParams {
         std::array<float, 3> shift, scale;
@@ -27,6 +29,8 @@ namespace lfs::core::nn {
                             const PoolReduceParams&);
         // Run exclusively on a worker queue to overlap independent CPU metrics.
         bool prefer_independent_queue = false;
+        // Bytes a crop pixel holds on the fast path, for its tile size; 0 keeps the exact path's count.
+        std::size_t fast_bytes_per_pixel = 0;
     };
 
 } // namespace lfs::core::nn
