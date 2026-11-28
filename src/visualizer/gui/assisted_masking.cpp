@@ -110,8 +110,10 @@ namespace lfs::vis::gui {
             if (!raw || w != width || h != height || channels != 3)
                 throw std::runtime_error(LOC("image_preview.sam_proposal_expired"));
             auto mask = Tensor::empty({size_t(height), size_t(width)}, Device::CPU, DataType::UInt8);
-            for (size_t i = 0; i < mask.numel(); ++i)
-                mask.ptr<uint8_t>()[i] = raw[i * 3];
+            auto* const data = mask.ptr<uint8_t>();
+            const auto count = mask.numel();
+            for (size_t i = 0; i < count; ++i)
+                data[i] = raw[i * 3];
             return mask;
         }
 
@@ -308,9 +310,11 @@ namespace lfs::vis::gui {
                             auto png = frame.png;
                             if (w.input.exclude) {
                                 auto mask = decode_mask(*png, source.width, source.height);
-                                for (size_t p = 0; p < mask.numel(); ++p)
-                                    mask.ptr<uint8_t>()[p] = mask.ptr<uint8_t>()[p] ? 0 : 255;
-                                png = encode_mask({mask.ptr<uint8_t>(), mask.numel()}, source.width, source.height);
+                                auto* const pixels = mask.ptr<uint8_t>();
+                                const auto count = mask.numel();
+                                for (size_t p = 0; p < count; ++p)
+                                    pixels[p] = pixels[p] ? 0 : 255;
+                                png = encode_mask({pixels, count}, source.width, source.height);
                             }
                             const auto path = preprocessing::video_mask_path(w.sequence->output, source.path.filename());
                             const bool existed = fs::exists(path);
