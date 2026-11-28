@@ -25,6 +25,11 @@ Ptr<float, Access.ReadWrite> float_row(uint64_t base, uint i, uint width) {
     return (Ptr<float, Access.ReadWrite>)(base + uint64_t(i) * width * 4u);
 }
 
+// Element i of an int64 buffer at its 64-bit byte address, as float_row.
+Ptr<int64_t, Access.ReadWrite> int64_at(uint64_t base, uint i) {
+    return (Ptr<int64_t, Access.ReadWrite>)(base + uint64_t(i) * 8u);
+}
+
 uint4 philox_round(uint4 counter, uint2 key) {
     const uint64_t p0 = uint64_t(0xD2511F53u) * counter.x;
     const uint64_t p1 = uint64_t(0xCD9E8D57u) * counter.z;
@@ -172,16 +177,15 @@ void main(uint3 id : SV_DispatchThreadID, uniform Parameters p) {
     }
     if (kOperation == 4u) {
         if (i >= p.count) return;
-        Ptr<float, Access.Read> cdf = (Ptr<float, Access.Read>)p.a;
-        Ptr<int64_t, Access.Read> alive = (Ptr<int64_t, Access.Read>)p.b;
-        Ptr<float, Access.Read> opacity = (Ptr<float, Access.Read>)p.c;
-        Ptr<int64_t, Access.ReadWrite> indices = (Ptr<int64_t, Access.ReadWrite>)p.e;
-        Ptr<float, Access.ReadWrite> output_opacity = (Ptr<float, Access.ReadWrite>)p.f;
+        // The cumulative weights (p.a), the alive rows (p.b) and the opacities (p.c) pass 4 GiB from 2^30 categories
+        // (2^29 alive rows), so every element is read at its own address, as the rows are.
+        Ptr<int64_t, Access.ReadWrite> index_out = int64_at(p.e, i);
+        Ptr<float, Access.ReadWrite> opacity_out = float_row(p.f, i, 1u);
         const uint domain_count = p.count2;
-        const float total = cdf[domain_count - 1u];
+        const float total = float_row(p.a, domain_count - 1u, 1u)[0];
         if (total <= 0.0f) {
-            indices[i] = 0;
-            output_opacity[i] = 0.0f;
+            index_out[0] = 0;
+            opacity_out[0] = 0.0f;
             Ptr<float, Access.ReadWrite> zero_scales = float_row(p.g, i, 3u);
             zero_scales[0] = 0.0f;
             zero_scales[1] = 0.0f;
@@ -194,12 +198,12 @@ void main(uint3 id : SV_DispatchThreadID, uniform Parameters p) {
         uint left = 0u, right = domain_count - 1u, selected = domain_count - 1u;
         while (left <= right) {
             const uint middle = left + (right - left) / 2u;
-            if (cdf[middle] * probability_scale >= u) { selected = middle; if (middle == 0u) break; right = middle - 1u; }
+            if (float_row(p.a, middle, 1u)[0] * probability_scale >= u) { selected = middle; if (middle == 0u) break; right = middle - 1u; }
             else left = middle + 1u;
         }
-        const int64_t global_index = p.mode != 0u ? alive[selected] : int64_t(selected);
-        indices[i] = global_index;
-        output_opacity[i] = opacity[global_index];
+        const int64_t global_index = p.mode != 0u ? int64_at(p.b, selected)[0] : int64_t(selected);
+        index_out[0] = global_index;
+        opacity_out[0] = float_row(p.c, uint(global_index), 1u)[0];
         Ptr<float, Access.ReadWrite> sampled = float_row(p.d, uint(global_index), 3u), sampled_out = float_row(p.g, i, 3u);
         for (uint axis = 0; axis < 3; ++axis) sampled_out[axis] = cuda_exp(sampled[axis]);
         return;
@@ -215,9 +219,7 @@ void main(uint3 id : SV_DispatchThreadID, uniform Parameters p) {
     }
     if (kOperation == 6u) {
         if (i >= p.count) return;
-        Ptr<float, Access.Read> weights = (Ptr<float, Access.Read>)p.a;
-        Ptr<int64_t, Access.Read> alive = (Ptr<int64_t, Access.Read>)p.b;
-        Ptr<float, Access.ReadWrite> output = (Ptr<float, Access.ReadWrite>)p.c;
-        output[i] = weights[alive[i]];
+        // The draw's alive gather, at the elements' own addresses like op 4.
+        float_row(p.c, i, 1u)[0] = float_row(p.a, uint(int64_at(p.b, i)[0]), 1u)[0];
     }
 }
