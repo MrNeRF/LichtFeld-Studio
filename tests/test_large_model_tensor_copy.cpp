@@ -79,10 +79,12 @@ namespace {
             GTEST_SKIP() << unavailable_; \
     } while (false)
 
-    // Elements at the start, from 2^32 - kProbe / 2 and at the end of [0, count) must equal expected(index).
+    // Elements at the start, from `middle` (2^32 - kProbe / 2 unless given) and at the end of [0, count) must equal
+    // expected(index).
     template <class T, class Expected>
-    void expect_elements(const Tensor& flat, const size_t count, Expected&& expected, const std::string& what) {
-        for (const size_t first : {size_t{0}, kTwoTo32 - kProbe / 2, count - kProbe}) {
+    void expect_elements(const Tensor& flat, const size_t count, Expected&& expected, const std::string& what,
+                         const size_t middle = kTwoTo32 - kProbe / 2) {
+        for (const size_t first : {size_t{0}, middle, count - kProbe}) {
             const auto got = lm::host_copy<T>(flat.slice(0, first, std::min(first + kProbe, count)));
             size_t wrong = 0, first_wrong = 0;
             for (size_t i = 0; i < got.size(); ++i) {
@@ -184,6 +186,45 @@ namespace {
         // The probe around 2^32 elements sits below the wrap of 16-byte elements; the one at the end is past it.
         gradient->zero_();
         expect_elements<float>(*gradient, count, [](size_t) { return 0.0f; }, "zero_ of an fp32 SH gradient");
+    }
+
+    // Fills of 2-, 4- and 8-byte elements over 4 GiB (fill_ of floats, Tensor::full in fp16 and int64, and fill_ of a
+    // float column through a strided view): the elements from 4 GiB past the tensor's start on must be written too.
+    // No index wraps below 2^32 elements; on NVIDIA's Vulkan, which computes an access chain's byte offset in 32 bits,
+    // these elements are right only when the fill forms their addresses in 64-bit math.
+    TEST_P(LargeModelTensorCopy, FillElementsPastFourGiB) {
+        constexpr size_t kFourGiB = size_t{1} << 32;
+        LFS_LARGE_MODEL_NEEDS(kFourGiB + kProbe * sizeof(int64_t));
+        {
+            constexpr size_t kCount = kFourGiB / sizeof(float) + kProbe;
+            auto floats = device_tensor({kCount}, DataType::Float32);
+            LFS_LARGE_MODEL_OR_SKIP(floats);
+            floats->fill_(0.5f);
+            expect_elements<float>(*floats, kCount, [](size_t) { return 0.5f; }, "fill_ of floats",
+                                   kFourGiB / sizeof(float) - kProbe / 2);
+        }
+        {
+            constexpr size_t kCount = kFourGiB / sizeof(uint16_t) + kProbe;
+            const Tensor halves = Tensor::full({kCount}, 0.5f, Device::GPU, DataType::Float16);
+            expect_elements<uint16_t>(halves, kCount, [](size_t) { return uint16_t{0x3800}; }, "Tensor::full of fp16",
+                                      kFourGiB / sizeof(uint16_t) - kProbe / 2);
+        }
+        {
+            constexpr size_t kCount = kFourGiB / sizeof(int64_t) + kProbe;
+            const Tensor longs = Tensor::full({kCount}, -3.0f, Device::GPU, DataType::Int64);
+            expect_elements<int64_t>(longs, kCount, [](size_t) { return int64_t{-3}; }, "Tensor::full of int64",
+                                     kFourGiB / sizeof(int64_t) - kProbe / 2);
+        }
+        {
+            constexpr size_t kRows = kFourGiB / (2 * sizeof(float)) + kProbe;
+            auto pairs = device_tensor({kRows, size_t{2}}, DataType::Float32);
+            LFS_LARGE_MODEL_OR_SKIP(pairs);
+            pairs->zero_();
+            pairs->slice(1, 1, 2).fill_(2.5f);
+            expect_elements<float>(
+                pairs->flatten(), 2 * kRows, [](size_t i) { return i % 2 == 1 ? 2.5f : 0.0f; }, "fill_ of a column",
+                kFourGiB / sizeof(float) - kProbe / 2);
+        }
     }
 
 #undef LFS_LARGE_MODEL_NEEDS

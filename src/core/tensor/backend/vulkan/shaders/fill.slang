@@ -59,12 +59,15 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform FillParameters p
     for (uint index = dispatchThreadId.x; index < parameters.count; index += stride)
     {
         const uint64_t offset = logicalOffset(index, parameters);
+        // Each element at its own 64-bit byte address: NVIDIA's Vulkan computes an access chain's byte offset in 32
+        // bits without VK_EXT_shader_64bit_indexing, whatever the index's type, so a fill indexed from the tensor's
+        // address goes wrong more than 4 GiB past it.
         if (kDType == 0 || kDType == 2 || kDType == 6)
-            ((Ptr<uint, Access.ReadWrite>)parameters.outputAddress)[offset] = uint(parameters.pattern);
+            ((Ptr<uint, Access.ReadWrite>)(parameters.outputAddress + offset * 4u))[0] = uint(parameters.pattern);
         else if (kDType == 1)
-            ((Ptr<uint16_t, Access.ReadWrite>)parameters.outputAddress)[offset] = uint16_t(parameters.pattern);
+            ((Ptr<uint16_t, Access.ReadWrite>)(parameters.outputAddress + offset * 2u))[0] = uint16_t(parameters.pattern);
         else if (kDType == 3)
-            ((Ptr<uint64_t, Access.ReadWrite>)parameters.outputAddress)[offset] = parameters.pattern;
+            ((Ptr<uint64_t, Access.ReadWrite>)(parameters.outputAddress + offset * 8u))[0] = parameters.pattern;
         else
             storeByte(parameters.outputAddress, offset, uint(parameters.pattern));
     }
