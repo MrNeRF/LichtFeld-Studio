@@ -376,6 +376,17 @@ namespace {
             image.ndim() == 3 && image.shape()[0] <= 4)
             return lfs::core::cuda::quantize_to_interleaved_bytes(image).to(lfs::core::Device::CPU);
 #endif
+        // Any other GPU image is quantized where it lives too and downloads as bytes, a quarter of the floats: the
+        // same layout and expression as the host path below, whose multiply and add round separately on every backend.
+        if (image.device() == lfs::core::Device::GPU && image.dtype() == lfs::core::DataType::Float32 &&
+            image.ndim() == 3) {
+            if (image.shape()[0] <= 4)
+                image = image.permute({1, 2, 0}); // [C,H,W] -> [H,W,C]
+            return (image.clamp(0, 1) * 255.0f + 0.5f)
+                .to(lfs::core::DataType::UInt8)
+                .contiguous()
+                .to(lfs::core::Device::CPU);
+        }
         auto normalized = normalize_image_for_save(std::move(image));
         return (normalized.clamp(0, 1) * 255.0f + 0.5f)
             .to(lfs::core::DataType::UInt8)
