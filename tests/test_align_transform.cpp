@@ -998,13 +998,14 @@ namespace lfs::vis::op {
         pair_rendering_ = std::make_unique<RenderingManager>();
         startPairAlignment(*pair_rendering_);
         ASSERT_FALSE(HasFatalFailure());
+        auto& scene = manager_->getScene();
+        scene.addSplat("third", lfs::test::licht::make_splat(1));
+        const auto third_id = scene.getNode("third")->id;
+        const auto original_second = manager_->getNodeTransform("mobile");
         ASSERT_EQ(action(PointPickState::UiAction::Apply), OperatorResult::FINISHED);
         const auto first = manager_->getNodeTransform("reference");
         const auto second = manager_->getNodeTransform("mobile");
 
-        auto& scene = manager_->getScene();
-        scene.addSplat("third", lfs::test::licht::make_splat(1));
-        const auto third_id = scene.getNode("third")->id;
         const auto third = manager_->getNodeTransform("third");
         const auto third_world = scene_coords::nodeVisualizerWorldTransform(scene, third_id);
         manager_->selectNodes({"mobile", "third"});
@@ -1020,10 +1021,17 @@ namespace lfs::vis::op {
         EXPECT_EQ(manager_->getNodeTransform("reference"), first);
         EXPECT_EQ(manager_->getNodeTransform("mobile"), second);
         const auto third_after = scene_coords::nodeVisualizerWorldTransform(scene, third_id);
-        EXPECT_NEAR(glm::length(glm::vec3(third_after[3] - third_world[3]) - offset), 0.0f, 1e-5f);
+        const auto expected = glm::translate(glm::mat4(1), offset) * third_world;
+        for (int column = 0; column < 4; ++column)
+            EXPECT_NEAR(glm::length(third_after[column] - expected[column]), 0.0f, 1e-5f);
+        ASSERT_EQ(undoHistory().undoCount(), 2u);
         ASSERT_TRUE(undoHistory().undo().success);
         EXPECT_EQ(manager_->getNodeTransform("third"), third);
         EXPECT_EQ(manager_->getNodeTransform("mobile"), second);
+        ASSERT_TRUE(undoHistory().undo().success);
+        EXPECT_EQ(manager_->getNodeTransform("reference"), first);
+        EXPECT_EQ(manager_->getNodeTransform("mobile"), original_second);
+        EXPECT_EQ(manager_->getNodeTransform("third"), third);
     }
 
     TEST_F(ModelAlignmentTest, DedicatedViewRestoresCamerasAndKeepsPreviewOutOfScene) {

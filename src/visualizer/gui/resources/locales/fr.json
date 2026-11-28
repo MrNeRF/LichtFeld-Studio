@@ -3223,7 +3223,7 @@
     "pair_match_left": "Choisissez le même détail sur le modèle de gauche.",
     "delete_pair": "Supprimer la paire sélectionnée",
     "composite_name": "Aperçu de l’alignement · deux modèles",
-    "swap_roles": "Permuter le modèle fixe et le modèle à déplacer",
+    "swap_roles": "Permuter le modèle fixe et le modèle mobile",
     "models": "Aligner les modèles (garder celui-ci fixe)",
     "link_cameras": "Lier les caméras",
     "separate": "Un modèle par vue, sans superposition.",

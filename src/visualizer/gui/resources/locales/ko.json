@@ -3223,7 +3223,7 @@
     "pair_match_left": "왼쪽 모델에서 같은 특징점을 선택하세요.",
     "delete_pair": "선택한 점 쌍 삭제",
     "composite_name": "정렬 미리보기 · 두 모델",
-    "swap_roles": "고정 모델과 이동할 모델을 서로 바꿉니다",
+    "swap_roles": "고정 모델과 이동 모델 맞바꾸기",
     "models": "모델 정렬 (이 모델 고정)",
     "link_cameras": "카메라 연결",
     "separate": "겹치지 않고 뷰마다 모델 하나를 표시합니다.",

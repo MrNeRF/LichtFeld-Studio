@@ -3237,7 +3237,7 @@
     "delete_pair": "Elimina la coppia selezionata",
     "composite_name": "Anteprima allineamento · entrambi i modelli",
     "swap_roles": "Scambia il modello fisso con quello da spostare",
-    "models": "Allinea modelli (mantieni fisso questo)",
+    "models": "Allinea modelli (questo resta fisso)",
     "link_cameras": "Collega camere",
     "separate": "Un modello per vista, senza sovrapposizione.",
     "wipe": "Trascina il divisore per confrontare i due modelli dalla stessa camera.",

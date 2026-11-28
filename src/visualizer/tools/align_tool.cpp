@@ -308,8 +308,8 @@ namespace lfs::vis::tools {
         const auto selected_point = state.getSelectedPoint();
         auto* const sm = tool_context_->getSceneManager();
         if (alignment) {
-            // Leave the role labels at the bottom of the panes readable on narrow layouts.
-            const float role_label_space = 28.0f * ui_scale;
+            // Role labels use RmlUi dp. Reserve space at the same UI scale.
+            const float role_label_space = 32.0f * getThemeDpiScale();
             const auto& point_state = op::ModelAlignmentOperator::active()->pointState();
             const bool pending_right = op::ModelAlignmentOperator::active()->pendingPairOnRight();
             if (!alignment->preview) {

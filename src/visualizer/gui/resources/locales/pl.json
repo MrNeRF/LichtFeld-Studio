@@ -3231,7 +3231,7 @@
     "wipe_camera": "Porównanie suwakiem używa jednej wspólnej kamery.",
     "composite_left": "Pokaż oba wyrównane modele w lewym widoku.",
     "composite_right": "Pokaż oba wyrównane modele w prawym widoku.",
-    "reference_name": "Nieruchomy model odniesienia: {}",
+    "reference_name": "Model nieruchomy: {}",
     "mobile_name": "Przesuwany model: {}",
     "cancel_session": "Anuluj wyrównanie i przywróć poprzednie widoki.",
     "pair_ready": "Otwórz podgląd wyrównania lub dodaj kolejną parę.",
