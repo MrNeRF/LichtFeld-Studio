@@ -255,7 +255,11 @@ namespace lfs::training {
             p.stride = pack(params.y0, params.y1);
             p.padding = pack(params.x0, params.x1);
             p.inverse_count = params.inverse_count;
-            p.g = params.weights ? vk::address(storage_ref(*params.weights)) : 0;
+            // dispatch() sets g to each chunk's first element, so the weights' address rides in dilation (its low
+            // half) and flags (its high half), which this operation does not otherwise read.
+            const uint64_t weights = params.weights ? vk::address(storage_ref(*params.weights)) : 0;
+            p.dilation = static_cast<uint32_t>(weights);
+            p.flags = static_cast<uint32_t>(weights >> 32);
             p.out_width = params.weights_width;
             p.out_height = params.weights_y0;
             p.out_channels = params.weights_x0;
