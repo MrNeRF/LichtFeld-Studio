@@ -3215,7 +3215,7 @@
     "pair_edit_help": "Sleep een punt om het te verplaatsen. {0}: geselecteerd paar verwijderen. {1}: laatste wijziging ongedaan maken. {2}: afsluiten zonder toepassen.",
     "history_unavailable": "Beëindig de modeluitlijning voordat u de scènegeschiedenis wijzigt.",
     "apply_preview": "Pas de uitlijning toe en sluit af.",
-    "swap_unavailable": "Wissel de rollen voordat je punten kiest. Het nieuwe te verplaatsen model moet bewerkbaar zijn.",
+    "swap_unavailable": "Wissel het vaste en het te verplaatsen model om voordat je punten kiest. Het nieuwe te verplaatsen model moet bewerkbaar zijn.",
     "unlink_cameras": "Navigeer onafhankelijk per weergave; behoud de huidige camera’s.",
     "link_cameras_help": "Gebruik de actieve camera voor beide weergaven; navigeer samen.",
     "edit_points": "Verlaat het voorbeeld om overeenkomstige punten te bewerken.",

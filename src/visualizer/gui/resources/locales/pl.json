@@ -3215,7 +3215,7 @@
     "pair_edit_help": "Przeciągnij punkt, aby go przesunąć. {0}: usuń wybraną parę. {1}: cofnij ostatnią zmianę. {2}: wyjdź bez stosowania.",
     "history_unavailable": "Zakończ wyrównywanie modeli przed zmianą historii sceny.",
     "apply_preview": "Zastosuj wyrównanie i zakończ.",
-    "swap_unavailable": "Zamień role przed wybraniem punktów. Nowy model ruchomy musi być edytowalny.",
+    "swap_unavailable": "Zamień model nieruchomy z ruchomym przed wybraniem punktów. Nowy model ruchomy musi być edytowalny.",
     "unlink_cameras": "Nawiguj niezależnie w każdym widoku; zachowaj obecne kamery.",
     "link_cameras_help": "Użyj aktywnej kamery w obu widokach; nawiguj wspólnie.",
     "edit_points": "Wyjdź z podglądu, aby edytować odpowiadające sobie punkty.",

@@ -3215,7 +3215,7 @@
     "pair_edit_help": "拖动点以移动。{0}：删除选中的点对。{1}：撤销上次编辑。{2}：退出且不应用。",
     "history_unavailable": "更改场景历史前，请先结束模型对齐。",
     "apply_preview": "应用对齐并退出。",
-    "swap_unavailable": "请在选点前交换角色。新的移动模型必须可编辑。",
+    "swap_unavailable": "请在选点前交换固定模型和移动模型。新的移动模型必须可编辑。",
     "unlink_cameras": "保留当前相机，分别浏览两个视图。",
     "link_cameras_help": "将活动相机用于两个视图，同步浏览。",
     "edit_points": "退出预览以编辑对应点。",

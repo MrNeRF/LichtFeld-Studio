@@ -3215,7 +3215,7 @@
     "pair_edit_help": "Faites glisser un point pour le déplacer. {0} : supprimer la paire sélectionnée. {1} : annuler la dernière modification. {2} : quitter sans appliquer.",
     "history_unavailable": "Terminez l’alignement des modèles avant de modifier l’historique de la scène.",
     "apply_preview": "Appliquer l’alignement et quitter.",
-    "swap_unavailable": "Inverser les rôles avant de choisir des points. Le nouveau modèle mobile doit être modifiable.",
+    "swap_unavailable": "Intervertir le modèle fixe et le modèle mobile avant de choisir des points. Le nouveau modèle mobile doit être modifiable.",
     "unlink_cameras": "Naviguer indépendamment dans chaque vue en conservant les caméras actuelles.",
     "link_cameras_help": "Utiliser la caméra active pour les deux vues ; naviguer ensemble.",
     "edit_points": "Quitter l’aperçu pour modifier les points correspondants.",
