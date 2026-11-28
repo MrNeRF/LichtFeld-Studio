@@ -32,8 +32,9 @@ class _ModelStub:
 
 
 class _SceneSelectionStub:
-    def __init__(self, selection_mask=None):
+    def __init__(self, selection_mask=None, *, hidden_prefix=None):
         self.selection_mask = selection_mask
+        self.hidden_prefix = hidden_prefix
         self.selection_history = []
         self._preview_before = None
         self._preview_active = False
@@ -45,8 +46,17 @@ class _SceneSelectionStub:
     def is_valid(self):
         return True
 
+    @property
+    def visible_selection_mask(self):
+        if self.selection_mask is None or self.hidden_prefix is None:
+            return self.selection_mask
+        return self.selection_mask[int(self.hidden_prefix.numel):]
+
     def set_selection_mask(self, mask):
-        self.selection_mask = (mask.reshape([-1]) != 0).contiguous()
+        visible = (mask.reshape([-1]) != 0).contiguous()
+        self.selection_mask = (
+            visible if self.hidden_prefix is None else type(visible).cat([self.hidden_prefix, visible], 0)
+        )
 
     def preview_selection_mask(self, mask):
         if not self._preview_active:
@@ -1473,6 +1483,24 @@ def test_histogram_shift_click_adds_to_a_selection_made_outside_the_panel(histog
 
     numpy.testing.assert_array_equal(scene.selection_mask.cpu().numpy(), numpy.array([False, True, True], dtype=bool))
     assert panel._selected_histogram_bins == {2, 5}
+
+
+def test_histogram_keeps_highlight_with_hidden_model_before_visible_model(histogram_panel_module, lf, numpy, monkeypatch):
+    panel, scene = _three_bin_panel(histogram_panel_module, lf, numpy, monkeypatch)
+    scene.hidden_prefix = lf.Tensor.from_numpy(numpy.array([True, False], dtype=bool))
+
+    _click_bin(panel, 0)
+    _settle_on_update(panel, histogram_panel_module, lf, monkeypatch, selection_generation=5)
+    assert panel._selected_histogram_bins == {0}
+
+    scene.selection_mask = lf.Tensor.from_numpy(numpy.array([True, False, False, True, False], dtype=bool))
+    _settle_on_update(panel, histogram_panel_module, lf, monkeypatch, selection_generation=6)
+    assert panel._selected_histogram_bins == set()
+
+    _click_bin(panel, 5, shift=True)
+    _settle_on_update(panel, histogram_panel_module, lf, monkeypatch, selection_generation=7)
+    assert panel._selected_histogram_bins == {2, 5}
+    numpy.testing.assert_array_equal(scene.selection_mask.cpu().numpy(), [True, False, False, True, True])
 
 
 def test_histogram_ctrl_click_removes_a_bin_like_selection_tools(histogram_panel_module, lf, numpy, monkeypatch):

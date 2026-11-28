@@ -2752,7 +2752,7 @@ class HistogramPanel(Panel):
         if self._dragging_mark or self._dragging_compare_mark or not self._has_any_mark():
             return
         scene = lf.get_scene()
-        scene_mask = getattr(scene, "selection_mask", None) if scene is not None and scene.is_valid() else None
+        scene_mask = scene.visible_selection_mask if scene is not None and scene.is_valid() else None
         if scene_mask is not None and self._scene_selection_matches_panel(scene_mask, self._active_mark_source):
             return
         self._reset_mark_state(clear_scene=False)
@@ -2786,7 +2786,7 @@ class HistogramPanel(Panel):
         if scene is None or not scene.is_valid():
             return self._zero_mask_like(reference)
 
-        scene_mask = self._normalize_selection_mask(getattr(scene, "selection_mask", None), reference)
+        scene_mask = self._normalize_selection_mask(scene.visible_selection_mask, reference)
         if scene_mask is None:
             return self._zero_mask_like(reference)
         return scene_mask & domain_mask
