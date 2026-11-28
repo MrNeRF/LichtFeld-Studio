@@ -1370,6 +1370,13 @@ namespace lfs::python {
         return PyTensor(*mask, false);
     }
 
+    std::optional<PyTensor> PyScene::visible_selection_mask() const {
+        auto mask = scene_->getVisibleSelectionMask();
+        if (!mask || !mask->is_valid())
+            return std::nullopt;
+        return PyTensor(*mask, false);
+    }
+
     uint8_t PyScene::add_selection_group(const std::string& name, std::tuple<float, float, float> color) {
         uint8_t created_id = 0;
         if (auto* const scene_manager = get_scene_manager()) {
@@ -2144,6 +2151,7 @@ Returns:
             .def("set_cropbox_data", &PyScene::set_cropbox_data, nb::arg("cropbox_id"), nb::arg("data"), "Set CropBox data for a cropbox node")
             // Selection
             .def_prop_ro("selection_mask", &PyScene::selection_mask, "Current selection mask tensor [N] uint8 (None if no selection)")
+            .def_prop_ro("visible_selection_mask", &PyScene::visible_selection_mask, "Selection mask in combined_model() row order (None if unavailable)")
             .def("set_selection", &PyScene::set_selection, nb::arg("indices"), "Set selection from index tensor")
             .def("set_selection_mask", &PyScene::set_selection_mask, nb::arg("mask"), "Set selection from boolean mask tensor [N]")
             .def("preview_selection_mask", &PyScene::preview_selection_mask, nb::arg("mask"), "Preview a selection mask without pushing an undo step")

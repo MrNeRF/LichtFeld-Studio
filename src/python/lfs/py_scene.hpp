@@ -616,6 +616,7 @@ namespace lfs::python {
 
         // Selection (auto-invalidate + redraw for UI update)
         std::optional<PyTensor> selection_mask() const;
+        std::optional<PyTensor> visible_selection_mask() const;
         void set_selection(const std::vector<size_t>& indices);
         void set_selection_mask(const PyTensor& mask);
         void preview_selection_mask(const PyTensor& mask);

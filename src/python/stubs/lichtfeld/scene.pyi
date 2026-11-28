@@ -776,6 +776,10 @@ class Scene:
     def selection_mask(self) -> lichtfeld.Tensor | None:
         """Current selection mask tensor [N] uint8 (None if no selection)"""
 
+    @property
+    def visible_selection_mask(self) -> lichtfeld.Tensor | None:
+        """Selection mask in combined_model() row order (None if unavailable)"""
+
     def set_selection(self, indices: Sequence[int]) -> None:
         """Set selection from index tensor"""
 
