@@ -1355,12 +1355,7 @@ namespace lfs::io {
                 const auto slot = canonical_component / 4u;
                 const auto component = canonical_component % 4u;
                 const size_t dst_offset =
-                    static_cast<size_t>(lfs::core::sh_swizzled_index(
-                        static_cast<std::uint32_t>(output_row),
-                        slot,
-                        layout_coeffs_rest)) *
-                        4u +
-                    component;
+                    lfs::core::sh_swizzled_index(output_row, slot, layout_coeffs_rest) * 4u + component;
                 output[dst_offset] =
                     read_unaligned_float32(vertex_data + base + offset);
             }
@@ -1729,11 +1724,7 @@ namespace lfs::io {
                                 const auto slot = canonical_component / 4u;
                                 const auto component = canonical_component % 4u;
                                 const size_t destination =
-                                    static_cast<size_t>(lfs::core::sh_swizzled_index(
-                                        static_cast<std::uint32_t>(row_index), slot,
-                                        layout_coeffs_rest)) *
-                                        4u +
-                                    component;
+                                    lfs::core::sh_swizzled_index(row_index, slot, layout_coeffs_rest) * 4u + component;
                                 host.shN_swizzled.ptr[destination] = value;
                             }
                         }

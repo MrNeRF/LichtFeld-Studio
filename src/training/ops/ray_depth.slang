@@ -11,6 +11,16 @@ struct Parameters {
 [[vk::push_constant]] ConstantBuffer<Parameters> p;
 static const float unobserved = 1e30;
 float3 viewPosition() { return float3(p.camera[0], p.camera[1], p.camera[2]); }
+// A Gaussian's row at its 64-bit byte address, not as an index from the buffer's pointer: NVIDIA's Vulkan computes an
+// access chain's byte offset in 32 bits without VK_EXT_shader_64bit_indexing, and the 6-float state passes 4 GiB at
+// 179.0M Gaussians, the rotations at 268.4M and the 3-float rows at 357.9M. The addresses and the bytes are the ones
+// the indices gave, so every backend computes the same values.
+Ptr<float, Access.ReadWrite> row(Ptr<float, Access.ReadWrite> base, uint i, uint width) {
+    return (Ptr<float, Access.ReadWrite>)(uint64_t(base) + uint64_t(i) * width * 4u);
+}
+Ptr<float, Access.Read> readRow(Ptr<float, Access.Read> base, uint i, uint width) {
+    return (Ptr<float, Access.Read>)(uint64_t(base) + uint64_t(i) * width * 4u);
+}
 
 [shader("compute")]
 [numthreads(256,1,1)]
@@ -18,12 +28,15 @@ void propose(uint3 id : SV_DispatchThreadID) {
     uint i = id.x;
     if (i >= p.count) return;
     p.proposals[i] = unobserved;
+    const Ptr<float, Access.ReadWrite> state = row(p.state, i, 6u);
+    const Ptr<float, Access.ReadWrite> mean = row(p.means, i, 3u), scale = row(p.scales, i, 3u);
+    const Ptr<float, Access.Read> gradient = readRow(p.gradient, i, 3u);
     float3 g, x, scales, anchor;
     [unroll] for (uint d = 0; d < 3; ++d) {
-        x[d] = p.means[i*3+d];
-        scales[d] = p.scales[i*3+d];
-        g[d] = p.gradient[i*3+d];
-        anchor[d] = p.state[i*6+d];
+        x[d] = mean[d];
+        scales[d] = scale[d];
+        g[d] = gradient[d];
+        anchor[d] = state[d];
     }
     float mask = 1;
     if (i < p.frozenCount && p.frozen[i] != 0) mask *= p.frozenScale;
@@ -33,11 +46,11 @@ void propose(uint3 id : SV_DispatchThreadID) {
         bound *= clamp(exp((scales.x + scales.y + scales.z) / 3) / p.medianExtent, 1., 300.);
     if (!any(g != 0) || !(bound > 0)) return;
     float3 camera = viewPosition();
-    float prevV = p.state[i*6+5];
+    float prevV = state[5];
     if (prevV < 0) {
         [unroll] for (uint d = 0; d < 3; ++d) {
-            p.state[i*6+d] = camera[d];
-            p.state[i*6+3+d] = 0;
+            state[d] = camera[d];
+            state[3+d] = 0;
         }
         return;
     }
@@ -47,16 +60,17 @@ void propose(uint3 id : SV_DispatchThreadID) {
     r *= rsqrt(d2);
     float rb = dot(r,b), gRay = dot(b,g);
     float across = max(dot(b,b)-rb*rb, 0.);
-    float spread = p.state[i*6+3];
-    p.state[i*6+3] = spread == 0 && across > 0 ? across : spread + (across - spread) / 32.;
-    float m = 0.9f * p.state[i*6+4] + (1.f-0.9f)*gRay;
+    float spread = state[3];
+    state[3] = spread == 0 && across > 0 ? across : spread + (across - spread) / 32.;
+    float m = 0.9f * state[4] + (1.f-0.9f)*gRay;
     float v = prevV == 0 ? gRay*gRay : 0.999f*prevV + (1.f-0.999f)*gRay*gRay;
-    p.state[i*6+4] = m;
-    p.state[i*6+5] = v;
+    state[4] = m;
+    state[5] = v;
     p.proposals[i] = 0;
     if (!(v > 0)) return;
     float4 q;
-    [unroll] for(uint j=0;j<4;++j) q[j] = p.rotations[i*4+j];
+    const Ptr<float, Access.Read> rotation = readRow(p.rotations, i, 4u);
+    [unroll] for(uint j=0;j<4;++j) q[j] = rotation[j];
     float qq = dot(q,q), s = qq > 0 ? 2/qq : 0;
     float3 axes[3] = {
         float3(1-s*(q.z*q.z+q.w*q.w), s*(q.y*q.z+q.x*q.w), s*(q.y*q.w-q.x*q.z)),
@@ -82,10 +96,12 @@ void commit(uint3 id : SV_DispatchThreadID) {
     float dt = p.proposals[i];
     if (dt == unobserved) return;
     float3 camera = viewPosition(), anchor, x;
+    const Ptr<float, Access.ReadWrite> state = row(p.state, i, 6u);
+    const Ptr<float, Access.ReadWrite> mean = row(p.means, i, 3u), scale = row(p.scales, i, 3u);
     [unroll] for(uint d=0;d<3;++d) {
-        x[d] = p.means[i*3+d];
-        anchor[d] = p.state[i*6+d];
-        p.state[i*6+d] = anchor[d] + (camera[d]-anchor[d])/32.;
+        x[d] = mean[d];
+        anchor[d] = state[d];
+        state[d] = anchor[d] + (camera[d]-anchor[d])/32.;
     }
     // Preserve small displacements when exp(dt) rounds to one.
     float e = abs(dt) < 1e-3f ? dt*(1+dt*(0.5f+dt/6)) : exp(dt)-1;
@@ -93,7 +109,7 @@ void commit(uint3 id : SV_DispatchThreadID) {
     float halfFar = p.farLimit*0.5f;
     if (dt > 0 && dot(moved-camera,moved-camera) > halfFar*halfFar) return;
     [unroll] for(uint d=0;d<3;++d) {
-        p.means[i*3+d] = moved[d];
-        p.scales[i*3+d] += dt;
+        mean[d] = moved[d];
+        scale[d] += dt;
     }
 }

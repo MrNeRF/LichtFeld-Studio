@@ -1535,8 +1535,17 @@ namespace lfs::core {
         // flat view. Duplicate targets keep the last value on Vulkan and
         // Metal; CUDA keeps any one of them.
         if (gpu_scatter) {
-            LFS_ASSERT_MSG(numel() <= static_cast<size_t>(std::numeric_limits<int32_t>::max()),
-                           std::format("index_put_ addresses its destination in int32 (numel={})", numel()));
+            // The indices are int32. A flat position counts elements, so the whole tensor must fit. A row index counts
+            // rows: where the backend reports that its index_copy addresses the destination row in 64 bits, only the
+            // rows must fit; otherwise the element bound stays.
+            const bool rows_addressed_in_64_bits =
+                is_row_assignment && internal::backend_ops_for(*this).index_copy_rows_in_64_bits();
+            if (rows_addressed_in_64_bits)
+                LFS_ASSERT_MSG(shape_[0] <= static_cast<size_t>(std::numeric_limits<int32_t>::max()),
+                               std::format("index_put_ addresses its destination rows in int32 (rows={})", shape_[0]));
+            else
+                LFS_ASSERT_MSG(numel() <= static_cast<size_t>(std::numeric_limits<int32_t>::max()),
+                               std::format("index_put_ addresses its destination in int32 (numel={})", numel()));
             Tensor idx_int32 = idx_same_device;
             Tensor destination = *this;
             Tensor source = vals_same_device;

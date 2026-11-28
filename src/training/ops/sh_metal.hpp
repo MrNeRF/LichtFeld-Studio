@@ -20,4 +20,7 @@ namespace lfs::training::metal {
     void copy_rows(uint64_t source, uint64_t destination, size_t width, size_t rows, size_t source_pitch,
                    size_t destination_pitch, std::initializer_list<const core::Tensor*> uses);
 
+    // The largest piece, in bytes, of one byte fill or row copy dispatch (0 restores the default of 2^31); for tests.
+    void set_byte_piece_items_for_testing(size_t items) noexcept;
+
 } // namespace lfs::training::metal

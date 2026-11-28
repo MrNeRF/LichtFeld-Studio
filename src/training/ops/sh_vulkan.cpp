@@ -167,14 +167,14 @@ namespace lfs::training {
         void encode_q16(In swizzled, Out codes, Out bounds, const size_t primitives,
                         const uint32_t rest, const size_t code_offset, const size_t bounds_offset) {
             const auto src = ref(swizzled), dst = ref(codes), bnd = ref(bounds);
-            LFS_ASSERT_MSG(code_offset <= UINT32_MAX / sizeof(uint16_t) &&
-                               bounds_offset <= UINT32_MAX / sizeof(float),
-                           "Vulkan SH encode offset exceeds 32-bit byte indexing");
+            // The offsets are added to the 64-bit buffer addresses here, as on Metal and CUDA, and the shader
+            // indexes only these rows' cells from there, so they need no 32-bit limit; the row count does.
+            LFS_ASSERT_MSG(primitives <= UINT32_MAX, "Vulkan SH encode row count exceeds 32-bit indexing");
             StorageRef code_storage = dst;
             StorageRef bounds_storage = bnd;
             code_storage.byte_offset += code_offset * sizeof(uint16_t);
             bounds_storage.byte_offset += bounds_offset * sizeof(float);
-            Push push{vk::address(src), vk::address(code_storage), 0, 0,
+            Push push{vk::wide_address(src), vk::wide_address(code_storage), 0, 0,
                       vk::address(bounds_storage), static_cast<uint32_t>(primitives),
                       static_cast<uint32_t>(primitives), static_cast<uint32_t>(primitives), 0, 0, 0};
             const Specialization spec{1, 3, 0, 0, rest, rest, 0};
@@ -186,7 +186,7 @@ namespace lfs::training {
         void decode_q16(In codes, In bounds, Out swizzled, const size_t primitives,
                         const uint32_t rest) {
             const auto src = ref(codes), bnd = ref(bounds), dst = ref(swizzled);
-            Push push{vk::address(src), vk::address(dst), 0, vk::address(bnd), 0,
+            Push push{vk::wide_address(src), vk::wide_address(dst), 0, vk::address(bnd), 0,
                       static_cast<uint32_t>(primitives), static_cast<uint32_t>(primitives),
                       static_cast<uint32_t>(primitives), 0, 0, 0};
             const Specialization spec{3, 1, 0, 0, rest, rest, 1};
@@ -234,7 +234,7 @@ namespace lfs::training {
             const uint32_t fmt = params.storage == ShStorage::Float32       ? 1u
                                  : params.storage == ShStorage::IeeeFloat16 ? 2u
                                                                             : 3u;
-            Push push{vk::address(src), vk::address(dst), 0, needs_bounds ? vk::address(bnd) : 0, 0,
+            Push push{vk::wide_address(src), vk::wide_address(dst), 0, needs_bounds ? vk::address(bnd) : 0, 0,
                       params.layout_rest, params.destination_rest, static_cast<uint32_t>(params.primitives),
                       static_cast<uint32_t>(params.canonical_float_offset),
                       static_cast<uint32_t>(params.float_count), 0};
@@ -248,7 +248,7 @@ namespace lfs::training {
 
         void zero_rows(Out values, In indices, const uint32_t rest) {
             const auto dst = ref(values), idx = ref(indices);
-            Push push{0, vk::address(dst), vk::address(idx), 0, 0, 0, 0,
+            Push push{0, vk::wide_address(dst), vk::address(idx), 0, 0, 0, 0,
                       static_cast<uint32_t>(indices.numel()), 0, 0, 0};
             const std::array reads{idx};
             const std::array writes{dst};
@@ -259,7 +259,7 @@ namespace lfs::training {
         void gather_swizzled(In source, In indices, Out destination, const ShRowsParams& params) {
             const auto src = ref(source), idx = ref(indices), dst = ref(destination);
             const uint32_t fmt = source.dtype() == core::DataType::UInt8 ? 4u : 1u;
-            Push push{vk::address(src), vk::address(dst), vk::address(idx), 0, 0,
+            Push push{vk::wide_address(src), vk::wide_address(dst), vk::address(idx), 0, 0,
                       static_cast<uint32_t>(params.source_rows), static_cast<uint32_t>(destination.shape()[0]),
                       static_cast<uint32_t>(params.count), 0,
                       static_cast<uint32_t>(params.destination_offset), 0};
@@ -283,9 +283,9 @@ namespace lfs::training {
             const auto offsets_ref = ref(offsets), count_ref = ref(run_count);
             const StorageRef order_ref = canonical_order.is_valid() ? ref(canonical_order) : StorageRef{};
             ReencodeParams host{
-                .codes = vk::address(code_ref),
+                .codes = vk::wide_address(code_ref),
                 .bounds = vk::address(bounds_ref),
-                .canonical = vk::address(canonical_ref),
+                .canonical = vk::wide_address(canonical_ref),
                 .destinations = vk::address(dest_ref),
                 .unique_blocks = vk::address(unique_ref),
                 .offsets = vk::address(offsets_ref),
@@ -325,7 +325,7 @@ namespace lfs::training {
 
         void gather_canonical(In source, In indices, Out canonical, const ShRowsParams& params) {
             const auto src = ref(source), idx = ref(indices), dst = ref(canonical);
-            Push push{vk::address(src), vk::address(dst), vk::address(idx), 0, 0,
+            Push push{vk::wide_address(src), vk::wide_address(dst), vk::address(idx), 0, 0,
                       static_cast<uint32_t>(params.source_rows), static_cast<uint32_t>(params.count),
                       static_cast<uint32_t>(params.count), 0, 0, 0};
             const Specialization spec{1, 0, 2, 0, params.source_rest, params.destination_rest, 7};
@@ -336,7 +336,7 @@ namespace lfs::training {
 
         void append_canonical(In canonical, Out destination, const ShRowsParams& params) {
             const auto src = ref(canonical), dst = ref(destination);
-            Push push{vk::address(src), vk::address(dst), 0, 0, 0,
+            Push push{vk::wide_address(src), vk::wide_address(dst), 0, 0, 0,
                       static_cast<uint32_t>(params.count), static_cast<uint32_t>(params.destination_offset + params.count),
                       static_cast<uint32_t>(params.count), 0, static_cast<uint32_t>(params.destination_offset), 0};
             const Specialization spec{0, 1, 0, 0, params.source_rest, params.destination_rest, 8};
@@ -347,7 +347,7 @@ namespace lfs::training {
 
         void scatter_canonical(In canonical, In indices, Out destination, const ShRowsParams& params) {
             const auto src = ref(canonical), idx = ref(indices), dst = ref(destination);
-            Push push{vk::address(src), vk::address(dst), vk::address(idx), 0, 0,
+            Push push{vk::wide_address(src), vk::wide_address(dst), vk::address(idx), 0, 0,
                       static_cast<uint32_t>(params.count), static_cast<uint32_t>(params.count),
                       static_cast<uint32_t>(params.count), 0, 0, 0};
             const Specialization spec{0, 1, 1, 0, params.source_rest, params.destination_rest, 9};
@@ -356,14 +356,22 @@ namespace lfs::training {
             launch(push, spec, reads, writes, groups(params.count * params.source_rest * 3));
         }
 
+        // The byte fill and copy (operations 10 and 11) count bytes in 32 bits and index from the addresses they are
+        // given, so a range goes in pieces of at most 2^31 bytes, each from its own 64-bit address. That keeps the
+        // shader's index and its grid-stride step below 2^32, and every access within 4 GiB of its pointer, which
+        // NVIDIA's Vulkan needs without VK_EXT_shader_64bit_indexing.
+        constexpr size_t kBytePiece = size_t{1} << 31;
+
         void fill_bytes(Out storage, const size_t byte_count, const uint8_t value) {
             if (byte_count == 0)
                 return;
             const auto dst = ref(storage);
-            Push push{0, vk::address(dst), 0, 0, 0, 0, 0,
-                      vk::checked_u32(byte_count, "SH byte fill exceeds 32-bit indexing"), value, 0, 0};
             const std::array writes{dst};
-            launch(push, {0, 1, 0, 0, 0, 0, 10}, std::span<const StorageRef>{}, writes, groups(byte_count));
+            for (size_t done = 0; done < byte_count; done += kBytePiece) {
+                const size_t bytes = std::min(kBytePiece, byte_count - done);
+                Push push{0, vk::wide_address(dst) + done, 0, 0, 0, 0, 0, static_cast<uint32_t>(bytes), value, 0, 0};
+                launch(push, {0, 1, 0, 0, 0, 0, 10}, std::span<const StorageRef>{}, writes, groups(bytes));
+            }
         }
 
         Tensor concatenate_into_arena(const std::span<const Tensor> parts, char* data,
@@ -377,12 +385,15 @@ namespace lfs::training {
                                    part.device() == core::Device::GPU && part.dtype() == dtype,
                                "SH arena concatenate requires contiguous Vulkan parts of one dtype");
                 const auto src = ref(part);
-                Push push{vk::address(src), vk::address(dst), 0, 0, 0,
-                          0, 0, vk::checked_u32(part.bytes(), "SH arena copy exceeds 32-bit indexing"),
-                          0, vk::checked_u32(offset, "SH arena offset exceeds 32-bit indexing"), 0};
                 const std::array reads{src};
                 const std::array writes{dst};
-                launch(push, {0, 1, 0, 0, 0, 0, 11}, reads, writes, groups(part.bytes()));
+                // The part's place in the arena goes into the destination address, not the shader's 32-bit index.
+                for (size_t done = 0; done < part.bytes(); done += kBytePiece) {
+                    const size_t bytes = std::min(kBytePiece, part.bytes() - done);
+                    Push push{vk::wide_address(src) + done, vk::wide_address(dst) + offset + done, 0, 0, 0,
+                              0, 0, static_cast<uint32_t>(bytes), 0, 0, 0};
+                    launch(push, {0, 1, 0, 0, 0, 0, 11}, reads, writes, groups(bytes));
+                }
                 offset += part.bytes();
             }
             LFS_ASSERT_MSG(offset == result.bytes(), "SH arena concatenate byte count mismatch");

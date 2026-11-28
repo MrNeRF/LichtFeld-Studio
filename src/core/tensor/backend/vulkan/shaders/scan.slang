@@ -32,6 +32,19 @@ uint tileSlot(uint element)
     return element + element / 32;
 }
 
+// Element `index` of a buffer at its own 64-bit byte address: NVIDIA's Vulkan computes an access chain's byte offset in
+// 32 bits without VK_EXT_shader_64bit_indexing, whatever the index's type, so a scan indexed from the data's address
+// goes wrong more than 4 GiB past it. Both element types are 4 bytes.
+Ptr<float, Access.ReadWrite> floatAt(uint64_t address, uint64_t index)
+{
+    return (Ptr<float, Access.ReadWrite>)(address + index * 4u);
+}
+
+Ptr<int, Access.ReadWrite> intAt(uint64_t address, uint64_t index)
+{
+    return (Ptr<int, Access.ReadWrite>)(address + index * 4u);
+}
+
 uint64_t lineBase(uint line, Parameters parameters)
 {
     const uint outerIndex = line / parameters.inner;
@@ -75,8 +88,6 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupId : SV_Group
 {
     const uint3 numWorkgroups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
     const uint thread = groupThreadId.x;
-    Ptr<float, Access.ReadWrite> floats = (Ptr<float, Access.ReadWrite>)parameters.dataAddress;
-    Ptr<int, Access.ReadWrite> ints = (Ptr<int, Access.ReadWrite>)parameters.dataAddress;
 
     if (kMode == 0)
     {
@@ -91,13 +102,15 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupId : SV_Group
                 const uint64_t index = base + uint64_t(element) * parameters.inner;
                 if (kDType == 0)
                 {
-                    runningFloat += floats[index];
-                    floats[index] = runningFloat;
+                    Ptr<float, Access.ReadWrite> value = floatAt(parameters.dataAddress, index);
+                    runningFloat += value[0];
+                    value[0] = runningFloat;
                 }
                 else
                 {
-                    runningInt += ints[index];
-                    ints[index] = runningInt;
+                    Ptr<int, Access.ReadWrite> value = intAt(parameters.dataAddress, index);
+                    runningInt += value[0];
+                    value[0] = runningInt;
                 }
             }
         }
@@ -122,7 +135,8 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupId : SV_Group
             if (element < tileCount)
             {
                 const uint64_t index = base + uint64_t(tileStart + element) * parameters.inner;
-                bits = kDType == 0 ? asuint(floats[index]) : asuint(ints[index]);
+                bits = kDType == 0 ? asuint(floatAt(parameters.dataAddress, index)[0])
+                                   : asuint(intAt(parameters.dataAddress, index)[0]);
             }
             sharedTile[tileSlot(element)] = bits;
         }
@@ -140,12 +154,12 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupId : SV_Group
             if (kMode == 2)
             {
                 if (thread == LFS_LOCAL_SIZE_X - 1)
-                    ((Ptr<float, Access.ReadWrite>)parameters.totalsAddress)[task] = sharedFloat[thread];
+                    floatAt(parameters.totalsAddress, task)[0] = sharedFloat[thread];
             }
             else
             {
                 const float earlier = kMode == 3 && tile > 0
-                                          ? ((Ptr<float, Access.Read>)parameters.totalsAddress)[task - 1]
+                                          ? floatAt(parameters.totalsAddress, task - 1)[0]
                                           : 0.0f;
                 const float offset = earlier + before;
                 for (uint item = 0; item < kItems; ++item)
@@ -165,12 +179,12 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupId : SV_Group
             if (kMode == 2)
             {
                 if (thread == LFS_LOCAL_SIZE_X - 1)
-                    ((Ptr<int, Access.ReadWrite>)parameters.totalsAddress)[task] = sharedInt[thread];
+                    intAt(parameters.totalsAddress, task)[0] = sharedInt[thread];
             }
             else
             {
                 const int earlier = kMode == 3 && tile > 0
-                                        ? ((Ptr<int, Access.Read>)parameters.totalsAddress)[task - 1]
+                                        ? intAt(parameters.totalsAddress, task - 1)[0]
                                         : 0;
                 const int offset = earlier + before;
                 for (uint item = 0; item < kItems; ++item)
@@ -188,9 +202,9 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupId : SV_Group
                 const uint64_t index = base + uint64_t(tileStart + element) * parameters.inner;
                 const uint bits = sharedTile[tileSlot(element)];
                 if (kDType == 0)
-                    floats[index] = asfloat(bits);
+                    floatAt(parameters.dataAddress, index)[0] = asfloat(bits);
                 else
-                    ints[index] = asint(bits);
+                    intAt(parameters.dataAddress, index)[0] = asint(bits);
             }
         }
         GroupMemoryBarrierWithGroupSync();

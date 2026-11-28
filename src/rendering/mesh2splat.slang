@@ -41,8 +41,12 @@ struct VertexOutput {
     nointerpolation float4 quaternion : TEXCOORD5;
 };
 
+// Vertices (84 bytes each) and generated splats (96 bytes each) at their 64-bit byte address, not as an index from the
+// buffer's pointer: NVIDIA's Vulkan computes an access chain's byte offset in 32 bits without
+// VK_EXT_shader_64bit_indexing, and the output passes 4 GiB at 44.7M splats, the vertices at 51.1M. The addresses and
+// the bytes are the ones the indices gave, so every backend computes the same values.
 float vertexAttribute(uint index, uint component) {
-    return p.vertices[index * 21u + component];
+    return ((Ptr<float, Access.Read>)(uint64_t(p.vertices) + uint64_t(index) * 84u))[component];
 }
 
 float3 vertexPosition(uint index) {
@@ -254,12 +258,12 @@ float4 mesh2splatFragment(VertexOutput input) : SV_Target {
     float3 albedo = (outColor * p.materialFactor).rgb;
     float3 color = pow(clamp(albedo, 0.0, 1.0), float3(1.0 / 2.2));
 
-    uint at = index * 6u;
-    p.gaussians[at] = float4(input.position, 1.0);
-    p.gaussians[at + 1u] = float4(color, outColor.a);
-    p.gaussians[at + 2u] = float4(input.scale, 0.0);
-    p.gaussians[at + 3u] = float4(outNormal, 0.0);
-    p.gaussians[at + 4u] = input.quaternion;
-    p.gaussians[at + 5u] = float4(metallic, roughness, 0.0, 1.0);
+    const Ptr<float4, Access.ReadWrite> splat = (Ptr<float4, Access.ReadWrite>)(uint64_t(p.gaussians) + uint64_t(index) * 96u);
+    splat[0] = float4(input.position, 1.0);
+    splat[1] = float4(color, outColor.a);
+    splat[2] = float4(input.scale, 0.0);
+    splat[3] = float4(outNormal, 0.0);
+    splat[4] = input.quaternion;
+    splat[5] = float4(metallic, roughness, 0.0, 1.0);
     return float4(0.0);
 }

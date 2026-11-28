@@ -74,18 +74,23 @@ float3 cap_covariance(float3 covariance, float opacity) {
     const float2 b = float2(a.y, -a.x);
     return float3(c1 * a.x * a.x + c2 * b.x * b.x, c1 * a.x * a.y + c2 * b.x * b.y, c1 * a.y * a.y + c2 * b.y * b.y);
 }
+// A splat's row at its 64-bit byte address, not as an index from the buffer's pointer: NVIDIA's Vulkan computes an
+// access chain's byte offset in 32 bits without VK_EXT_shader_64bit_indexing, and the rotations pass 4 GiB at 268.4M
+// splats, the 3-float rows at 357.9M. The addresses and the bytes are the ones the indices gave, so every backend
+// computes the same values.
 float3 load3(Ptr<float, Access.Read> data, uint index) {
-    return float3(data[index * 3u], data[index * 3u + 1u], data[index * 3u + 2u]);
+    const Ptr<float, Access.Read> row = (Ptr<float, Access.Read>)(uint64_t(data) + uint64_t(index) * 12u);
+    return float3(row[0], row[1], row[2]);
 }
 float3 load_half3(Ptr<float, Access.Read> data, uint index) {
-    const Ptr<half, Access.Read> h = (Ptr<half, Access.Read>)data;
-    return float3(float(h[index * 3u]), float(h[index * 3u + 1u]), float(h[index * 3u + 2u]));
+    const Ptr<half, Access.Read> row = (Ptr<half, Access.Read>)(uint64_t(data) + uint64_t(index) * 6u);
+    return float3(float(row[0]), float(row[1]), float(row[2]));
 }
 float4 load_rotation(Ptr<float4, Access.Read> data, uint index, bool half_attributes) {
     if (!half_attributes)
-        return data[index];
-    const Ptr<half, Access.Read> h = (Ptr<half, Access.Read>)data;
-    return float4(float(h[index * 4u]), float(h[index * 4u + 1u]), float(h[index * 4u + 2u]), float(h[index * 4u + 3u]));
+        return ((Ptr<float4, Access.Read>)(uint64_t(data) + uint64_t(index) * 16u))[0];
+    const Ptr<half, Access.Read> row = (Ptr<half, Access.Read>)(uint64_t(data) + uint64_t(index) * 8u);
+    return float4(float(row[0]), float(row[1]), float(row[2]), float(row[3]));
 }
 // Queries deliberately use center geometry, including zero-opacity splats for
 // brush/rectangle/polygon, as in the shared editor's selection_mask contract.

@@ -25,6 +25,9 @@ namespace lfs::training {
     namespace {
         using namespace lfs::core::internal;
         using namespace lfs::gpu_ops;
+        // refine.slang reads and writes the 3- and 4-float rows (means, rotations, scales, sh0) through floatRow, at
+        // 64-bit byte addresses, so those bindings are wide; every other binding holds one value a Gaussian or less,
+        // indexed from its start, and stays guarded.
         constexpr uint32_t kSplit = 0, kFill = 1, kCounts = 2, kSanitize = 3, kDivide = 4, kClip = 5, kOversize = 6, kDead = 7, kRotation = 8, kMedianHistogram = 9, kMedianSelect = 10;
         struct Push {
             uint64_t a, b, c, d, e, f, g, h, i, j, k, l;
@@ -110,15 +113,15 @@ namespace lfs::training {
                 return;
             LFS_ASSERT_MSG(n <= static_cast<size_t>(INT_MAX), "Refine split exceeds INT_MAX");
             Push p{};
-            p.a = vk::address(ref(parents.means));
-            p.b = vk::address(ref(parents.rotations));
-            p.c = vk::address(ref(parents.scales));
-            p.d = vk::address(ref(parents.sh0));
+            p.a = vk::wide_address(ref(parents.means));
+            p.b = vk::wide_address(ref(parents.rotations));
+            p.c = vk::wide_address(ref(parents.scales));
+            p.d = vk::wide_address(ref(parents.sh0));
             p.e = vk::address(ref(parents.opacity));
-            p.f = vk::address(ref(children.means));
-            p.g = vk::address(ref(children.rotations));
-            p.h = vk::address(ref(children.scales));
-            p.i = vk::address(ref(children.sh0));
+            p.f = vk::wide_address(ref(children.means));
+            p.g = vk::wide_address(ref(children.rotations));
+            p.h = vk::wide_address(ref(children.scales));
+            p.i = vk::wide_address(ref(children.sh0));
             p.j = vk::address(ref(children.opacity));
             p.k = vk::address(ref(indices));
             p.limit = scale;
@@ -136,15 +139,15 @@ namespace lfs::training {
                 return;
             Push p{};
             p.a = vk::address(ref(indices));
-            p.b = vk::address(ref(source.means));
-            p.c = vk::address(ref(source.rotations));
-            p.d = vk::address(ref(source.scales));
-            p.e = vk::address(ref(source.sh0));
+            p.b = vk::wide_address(ref(source.means));
+            p.c = vk::wide_address(ref(source.rotations));
+            p.d = vk::wide_address(ref(source.scales));
+            p.e = vk::wide_address(ref(source.sh0));
             p.f = vk::address(ref(source.opacity));
-            p.g = vk::address(ref(dst.means));
-            p.h = vk::address(ref(dst.rotations));
-            p.i = vk::address(ref(dst.scales));
-            p.j = vk::address(ref(dst.sh0));
+            p.g = vk::wide_address(ref(dst.means));
+            p.h = vk::wide_address(ref(dst.rotations));
+            p.i = vk::wide_address(ref(dst.scales));
+            p.j = vk::wide_address(ref(dst.sh0));
             p.k = vk::address(ref(dst.opacity));
             p.l = free_mask.is_valid() ? vk::address(ref(free_mask)) : 0;
             p.count = n32(n);
@@ -208,7 +211,7 @@ namespace lfs::training {
                 return;
             Push p{};
             p.a = frozen.is_valid() ? vk::address(ref(frozen)) : 0;
-            p.b = vk::address(ref(scales));
+            p.b = vk::wide_address(ref(scales));
             p.c = vk::address(ref(shares));
             p.count = n32(n);
             p.count_a = opt_count(frozen);
@@ -242,7 +245,7 @@ namespace lfs::training {
                 return;
             Push p{};
             p.a = vk::address(ref(opacity));
-            p.b = vk::address(ref(rotations));
+            p.b = vk::wide_address(ref(rotations));
             p.c = vk::address(ref(mask));
             p.count = n32(n);
             p.minimum_opacity = minimum;
@@ -255,7 +258,7 @@ namespace lfs::training {
             if (!n)
                 return;
             Push p{};
-            p.b = vk::address(ref(rotations));
+            p.b = vk::wide_address(ref(rotations));
             p.c = vk::address(ref(mask));
             p.count = n32(n);
             const std::array reads{ref(rotations)};

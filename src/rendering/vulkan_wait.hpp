@@ -10,6 +10,7 @@
 #include "core/export.hpp"
 #include "core/vulkan_queue_sync.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -19,6 +20,7 @@
 #include <stop_token>
 #include <string_view>
 #include <utility>
+#include <vector>
 #include <vulkan/vulkan.h>
 
 namespace lfs::rendering {
@@ -277,5 +279,16 @@ namespace lfs::rendering {
     vulkan_result_to_error(VkResult result,
                            std::string_view operation,
                            core::SourceSite site) noexcept;
+
+    // One vkCmdCopyBuffer region as pieces of at most 2^31 bytes, each at its own offsets: through MoltenVK a region
+    // past 4 GiB does not arrive whole. A region below 2^31 bytes is its one piece.
+    [[nodiscard]] inline std::vector<VkBufferCopy> buffer_copy_pieces(const VkBufferCopy& region) {
+        constexpr VkDeviceSize kPiece = VkDeviceSize{1} << 31;
+        std::vector<VkBufferCopy> pieces;
+        pieces.reserve(1 + region.size / kPiece);
+        for (VkDeviceSize done = 0; done < region.size; done += kPiece)
+            pieces.push_back({region.srcOffset + done, region.dstOffset + done, std::min(kPiece, region.size - done)});
+        return pieces;
+    }
 
 } // namespace lfs::rendering

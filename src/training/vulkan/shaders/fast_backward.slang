@@ -39,7 +39,12 @@ void atomicFloat(uint64_t address, uint index, float value) {
 float3 image3(uint64_t address, uint pixel, uint pixels) {
     return address == 0 ? float3(0) : float3(loadFloat(address, pixel), loadFloat(address, pixels + pixel), loadFloat(address, 2 * pixels + pixel));
 }
-float screen(BackPush b, uint work, uint field) { return loadFloat(b.screenGradient, work * 16 + field); }
+// A work item's 16-float screen-gradient row starts at a 64-bit byte offset: work ids are dense (one per
+// Gaussian), so work * 16 in 32 bits wraps past 268.4M Gaussians. Fields are small indices from the row's address,
+// which also keeps every access within 4 GiB of its pointer, as NVIDIA's Vulkan needs without
+// VK_EXT_shader_64bit_indexing (the buffer passes 4 GiB at 67.1M rows).
+uint64_t screenRow(BackPush b, uint work) { return b.screenGradient + uint64_t(work) * 64; }
+float screen(BackPush b, uint work, uint field) { return loadFloat(screenRow(b, work), field); }
 float3 screen3(BackPush b, uint work, uint field) { return float3(screen(b, work, field), screen(b, work, field + 1), screen(b, work, field + 2)); }
 #include "fast_projection_backward.slangh"
 groupshared Projected stagedBackward[128];
@@ -133,7 +138,7 @@ void storeField(BackPush b, uint slot, int field, float value) {
             atomicFloat(b.impactSum, original, value);
     } else if ((fastStage & (1u << 24)) == 0) {
         if (field < 13)
-            atomicFloat(b.screenGradient, work * 16 + uint(field), clampGradient(value));
+            atomicFloat(screenRow(b, work), uint(field), clampGradient(value));
         else if (field < 15 && b.densify != 0 && b.densification != 0)
             atomicFloat(b.densification, (uint(field) - 13) * b.forward.count + original, value);
         else if (field == 15 && b.scores != 0)
@@ -301,7 +306,7 @@ result:
         for (uint row = gid.x * 32 + lane / 4; row < p.count; row += groups.x * 32) {
             uint work = loadUint(p.originalToWork, row);
             if (work != 0xffffffffu)
-                ((Ptr<float4, Access.ReadWrite>)b.screenGradient)[uint64_t(work) * 4 + lane % 4] = float4(0);
+                ((Ptr<float4, Access.ReadWrite>)screenRow(b, work))[lane % 4] = float4(0);
         }
         return;
     }
@@ -469,7 +474,7 @@ result:
                     float value = accum[0];
                     if (wl < 16 && value != 0) {
                         if (field < 13)
-                            atomicFloat(b.screenGradient, work * 16 + field, clampGradient(value));
+                            atomicFloat(screenRow(b, work), field, clampGradient(value));
                         else if (field < 15 && b.densify != 0 && b.densification != 0)
                             atomicFloat(b.densification, (field - 13) * p.count + original, value);
                         else if (field == 15 && b.scores != 0)
@@ -491,7 +496,7 @@ result:
                 }
                 if (!nativeWarp && lane % 32 == 0) {
                     [unroll] for (uint f = 0; f < 13; ++f) if (accum[f] != 0)
-                        atomicFloat(b.screenGradient, work * 16 + f, clampGradient(accum[f]));
+                        atomicFloat(screenRow(b, work), f, clampGradient(accum[f]));
                     if (b.densify != 0 && b.densification != 0) {
                         atomicFloat(b.densification, original, accum[13]);
                         atomicFloat(b.densification, p.count + original, accum[14]);

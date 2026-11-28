@@ -38,10 +38,12 @@ void main(uint3 id : SV_DispatchThreadID, uniform Parameters p) {
         destination[i] = int64_t(source[i]);
         return;
     }
-    Ptr<float, Access.Read> means = (Ptr<float, Access.Read>)p.means;
+    // The mean's row at its 64-bit byte address: NVIDIA's Vulkan computes an access chain's byte offset in 32 bits
+    // without VK_EXT_shader_64bit_indexing, and the means pass 4 GiB at 357.9M Gaussians.
+    Ptr<float, Access.Read> mean = (Ptr<float, Access.Read>)(p.means + uint64_t(i) * 12u);
     Ptr<uint, Access.ReadWrite> codes = (Ptr<uint, Access.ReadWrite>)p.codes;
     Ptr<uint, Access.ReadWrite> indices = (Ptr<uint, Access.ReadWrite>)p.indices;
-    float3 q = (float3(means[i * 3], means[i * 3 + 1], means[i * 3 + 2]) - float3(p.centre_x, p.centre_y, p.centre_z)) *
+    float3 q = (float3(mean[0], mean[1], mean[2]) - float3(p.centre_x, p.centre_y, p.centre_z)) *
                p.inv_radius;
     const float r = sqrt(dot(q, q));
     if (r > 1.0)

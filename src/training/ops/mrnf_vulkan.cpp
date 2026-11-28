@@ -27,6 +27,9 @@ namespace lfs::training {
     namespace {
         using namespace lfs::core::internal;
         using namespace lfs::gpu_ops;
+        // mrnf.slang reads and writes the 3-float rows (means, scales) through floatRow and the [4, N] statistics
+        // through planeAt, at 64-bit byte addresses, so those bindings are wide; every other binding holds one or two
+        // values a Gaussian, indexed from its start, and stays guarded.
         constexpr uint32_t kNoise = 0, kDecay = 1, kFoldError = 3, kPrune = 11, kParent = 12, kGumbel = 13, kGatherIndices = 14;
         constexpr uint32_t kFoldView = 15;
         constexpr uint32_t kMeanView = 16;
@@ -125,7 +128,7 @@ namespace lfs::training {
             if (!n)
                 return;
             Push p{};
-            p.a = vk::address(ref(means));
+            p.a = vk::wide_address(ref(means));
             p.b = vk::address(ref(opacity));
             p.c = vk::address(ref(visibility));
             p.d = frozen.is_valid() ? vk::address(ref(frozen)) : 0;
@@ -146,7 +149,7 @@ namespace lfs::training {
                 return;
             Push p{};
             p.a = vk::address(ref(opacity));
-            p.b = vk::address(ref(scales));
+            p.b = vk::wide_address(ref(scales));
             p.c = frozen.is_valid() ? vk::address(ref(frozen)) : 0;
             p.count = n32(n);
             p.count_a = opt_count(frozen);
@@ -268,7 +271,7 @@ namespace lfs::training {
             if (!n)
                 return;
             Push p{};
-            p.a = vk::address(ref(means));
+            p.a = vk::wide_address(ref(means));
             p.b = vk::address(ref(scale));
             p.c = vk::address(ref(mask));
             p.count = n32(n);
@@ -308,7 +311,7 @@ namespace lfs::training {
             Push p{};
             p.count = n32(error.numel());
             p.a = vk::address(ref(error));
-            p.b = vk::address(ref(info));
+            p.b = vk::wide_address(ref(info));
             p.c = views.is_valid() ? vk::address(ref(views)) : 0;
             std::vector<StorageRef> reads{ref(error), ref(info)};
             if (views.is_valid())
@@ -322,7 +325,7 @@ namespace lfs::training {
             Push p{};
             p.count = n32(error.numel());
             p.a = vk::address(ref(error));
-            p.b = vk::address(ref(info));
+            p.b = vk::wide_address(ref(info));
             const std::array reads{ref(error), ref(info)};
             const std::array writes{ref(error)};
             launch(p, kMeanView, reads, writes, groups(p.count));
@@ -355,7 +358,7 @@ namespace lfs::training {
             p.a = vk::address(ref(peak));
             p.b = vk::address(ref(renders));
             p.c = vk::address(ref(opacity));
-            p.d = vk::address(ref(scales));
+            p.d = vk::wide_address(ref(scales));
             p.e = vk::address(ref(factor));
             p.x = grace;
             p.y = keep;

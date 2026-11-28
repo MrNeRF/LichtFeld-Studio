@@ -130,7 +130,9 @@ namespace lfs::training::vulkan {
         b.alpha_gradient = address(gradient.alpha);
         b.depth_gradient = address(gradient.depth);
         b.normal_gradient = address(gradient.normal);
-        b.screen_gradient = address(screen_gradient);
+        // From 64-bit row addresses in the kernels (screenRow; storeFloat, store3 and load3; shRowAddress), so these
+        // may pass 4 GiB; the statistics, scores and impact buffers are indexed from their start and stay guarded.
+        b.screen_gradient = wide_address(screen_gradient);
         b.densification = address(stats);
         b.error = address(error);
         b.edge = address(edge);
@@ -150,12 +152,12 @@ namespace lfs::training::vulkan {
         b.densify = static_cast<uint32_t>(blend_type);
         // Without blend statistics, None counts visibility and screen gradients.
         const bool count_visible = b.densification != 0 && b.error == 0 && type == DensificationType::None;
-        b.mean_gradient = address(gradients[0]);
-        b.scale_gradient = address(gradients[1]);
-        b.rotation_gradient = address(gradients[2]);
-        b.opacity_gradient = address(gradients[3]);
-        b.dc_gradient = address(gradients[4]);
-        b.sh_gradient = address(gradients[5]);
+        b.mean_gradient = wide_address(gradients[0]);
+        b.scale_gradient = wide_address(gradients[1]);
+        b.rotation_gradient = wide_address(gradients[2]);
+        b.opacity_gradient = wide_address(gradients[3]);
+        b.dc_gradient = wide_address(gradients[4]);
+        b.sh_gradient = wide_address(gradients[5]);
         b.slots = slots;
         const auto& scale = adam.groups[static_cast<size_t>(AdamSlot::Scaling)];
         const auto& opacity = adam.groups[static_cast<size_t>(AdamSlot::Opacity)];

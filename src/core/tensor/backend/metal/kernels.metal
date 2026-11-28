@@ -2854,12 +2854,14 @@ static void sort_axes(thread float3& a, thread float3& b, thread float& la, thre
 kernel void affine_splat_geometry(constant AffineSplatParams& p [[buffer(0)]], uint i [[thread_position_in_grid]]) {
     if (i >= p.count)
         return;
+    // Row offsets in 64 bits: in 32, 9 floats a row wrap at 477.2M rows, 4 at 1.07G and 3 at 1.43G.
+    const ulong r = i;
     float linear[9];
-    for(int k=0;k<9;++k) linear[k]=p.matrices ? p.matrices[9*i+k] : p.linear[k];
-    device float* const out_scale = p.out_scales + 3 * i;
-    device float* const out_rotation = p.out_rotations + 4 * i;
-    const float3 log_scale(p.scales[3 * i], p.scales[3 * i + 1], p.scales[3 * i + 2]);
-    float4 q(p.rotations[4 * i], p.rotations[4 * i + 1], p.rotations[4 * i + 2], p.rotations[4 * i + 3]);
+    for(int k=0;k<9;++k) linear[k]=p.matrices ? p.matrices[9*r+k] : p.linear[k];
+    device float* const out_scale = p.out_scales + 3 * r;
+    device float* const out_rotation = p.out_rotations + 4 * r;
+    const float3 log_scale(p.scales[3 * r], p.scales[3 * r + 1], p.scales[3 * r + 2]);
+    float4 q(p.rotations[4 * r], p.rotations[4 * r + 1], p.rotations[4 * r + 2], p.rotations[4 * r + 3]);
     const float qm = max(max(abs(q.x), abs(q.y)), max(abs(q.z), abs(q.w)));
     q = qm > 0 ? normalize(q / qm) : float4(1, 0, 0, 0);
     const float w = q.x, x = q.y, y = q.z, z = q.w;
@@ -3070,7 +3072,7 @@ struct ShParams {
     uint source_offset, destination_offset, padding;
 };
 
-static uint sh_offset(uint row, uint cell, uint rest, bool q16) {
+static ulong sh_offset(ulong row, uint cell, uint rest, bool q16) {
     if (q16)
         return (row / 32 * (rest * 3) + cell) * 32 + row % 32;
     return ((row / 32 * ((rest * 3 + 3) / 4) + cell / 4) * 32 + row % 32) * 4 + cell % 4;
@@ -3084,7 +3086,7 @@ static float sh_read(constant ShParams& p, uint row, uint c) {
     const uint width = kShSource == 1 || kShSource == 2 ? (kShSourceRest * 3 + 3) / 4 * 4 : kShSourceRest * 3;
     if (row >= p.source_rows || c >= width)
         return 0;
-    const uint offset = kShSource == 0 ? row * kShSourceRest * 3 + c : sh_offset(row, c, kShSourceRest, kShSource == 3);
+    const ulong offset = kShSource == 0 ? ulong(row) * (kShSourceRest * 3) + c : sh_offset(row, c, kShSourceRest, kShSource == 3);
     if (kShSource == 3) {
         const float lo = p.source_bounds[row / 256 * 2], hi = p.source_bounds[row / 256 * 2 + 1];
         const uint code = ((device const ushort*)p.source)[offset];
@@ -3102,18 +3104,19 @@ kernel void sh_codec(constant ShParams& p [[buffer(0)]], uint index [[thread_pos
     // A range that ends the destination also zeroes the tail lanes of its last tile.
     if (kScatter == 0 && p.destination_offset + p.count == p.destination_rows && kShDestination != 0)
         rows += (32 - p.destination_rows % 32) % 32;
-    for (uint i = index; i < (rows + 31) / 32 * 32 * width; i += threads) {
+    const ulong total = ulong((rows + 31) / 32 * 32) * width;
+    for (ulong i = index; i < total; i += threads) {
         // Destinations are enumerated in memory order.
-        const uint row = kShDestination == 0 ? i / width : i / (width * 32) * 32 + i / 4 % 32;
-        const uint c = kShDestination == 0 ? i % width : i / 128 % (width / 4) * 4 + i % 4;
+        const uint row = uint(kShDestination == 0 ? i / width : i / (width * 32) * 32 + i / 4 % 32);
+        const uint c = uint(kShDestination == 0 ? i % width : i / 128 % (width / 4) * 4 + i % 4);
         if (row >= rows)
             continue;
         const uint source_row = kShIndices != 0 && kScatter == 0 && row < p.count ? sh_index(p, row) : p.source_offset + row;
         const uint destination_row = kScatter != 0 ? sh_index(p, row) : p.destination_offset + row;
         const float value =
             row < p.count && !(c >= kShDestinationRest * 3 && kShSource != 1) ? sh_read(p, source_row, c) : 0;
-        const uint offset = kShDestination == 0 ? destination_row * width + c
-                                                : sh_offset(destination_row, c, kShDestinationRest, false);
+        const ulong offset = kShDestination == 0 ? ulong(destination_row) * width + c
+                                                 : sh_offset(destination_row, c, kShDestinationRest, false);
         if (kShDestination == 2)
             ((device half*)p.destination)[offset] = half(value);
         else
@@ -3354,14 +3357,16 @@ static ulong rad_sh_index(constant RadPageParams& p, uint i, uint slot) {
     return ((ulong(p.page) * p.page_splats + i) / 32 * p.slots + slot) * 32 + i % 32;
 }
 
+// A resident row's SH offsets are 64-bit: in 32 bits, at SH 3, the Q16 cells wrap at 95.4M rows and the float4
+// slots of f32 and f16 at 89.5M.
 static float rad_resident_sh(constant RadSources& s, uint i, uint c) {
-    const uint splat = s.offset + i;
+    const ulong splat = ulong(s.offset) + i;
     if (s.quant_sh != 0) {
         const float lo = s.sh_bounds[splat / 256 * 2], hi = s.sh_bounds[splat / 256 * 2 + 1];
-        const uint cell = splat / 32 * (s.rest * 3 * 32) + c * 32 + splat % 32;
+        const ulong cell = splat / 32 * (s.rest * 3 * 32) + c * 32 + splat % 32;
         return lo + (hi - lo) * (float(((device const ushort*)s.shN)[cell]) * (1.0f / 65535.0f));
     }
-    const uint index = ((splat / 32 * ((s.rest * 3 + 3) / 4) + c / 4) * 32 + splat % 32) * 4 + c % 4;
+    const ulong index = ((splat / 32 * ((s.rest * 3 + 3) / 4) + c / 4) * 32 + splat % 32) * 4 + c % 4;
     return s.half_sh != 0 ? rad_half_to_float(((device const ushort*)s.shN)[index])
                           : ((device const float*)s.shN)[index];
 }
@@ -3392,7 +3397,8 @@ kernel void rad_page(constant RadPageParams& p [[buffer(0)]], uint i [[thread_po
             return;
         }
         const bool live = i < s.count;
-        const uint row = s.offset + i;
+        // 64-bit as the SH above: 4 floats a row wrap at 1.07G rows in 32 bits, 3 at 1.43G.
+        const ulong row = ulong(s.offset) + i;
         for (uint c = 0; c < 3; ++c)
             p.means[dst * 3 + c] = live ? as_type<uint>(s.means[row * 3 + c]) : 0;
         const float3 rgb = live ? float3(s.sh0[row * 3], s.sh0[row * 3 + 1], s.sh0[row * 3 + 2]) : 0;
@@ -3684,17 +3690,19 @@ template <bool TransposeB, int Tile>
 static void gemm_tile(device float* lhs, device float* rhs, device float* output, device const float* bias,
                       constant GemmParams& params, uint2 group) {
     const int m = int(params.m), n = int(params.n), k = int(params.k);
-    // Extents list the innermost dimension first.
-    Matrix a(lhs, dextents<int32_t, 2>(k, m));
-    Matrix b(rhs, TransposeB ? dextents<int32_t, 2>(k, n) : dextents<int32_t, 2>(n, k));
-    Matrix c(output, dextents<int32_t, 2>(n, m));
     constexpr auto descriptor =
         mpp::tensor_ops::matmul2d_descriptor(Tile, Tile, static_cast<int>(dynamic_extent), false, TransposeB);
     mpp::tensor_ops::matmul2d<descriptor, execution_simdgroups<4>> matmul;
     const int row = int(group.y) * Tile, column = int(group.x) * Tile;
-    auto a_tile = a.slice(0, row);
-    auto b_tile = TransposeB ? b.slice(0, column) : b.slice(column, 0);
-    auto c_tile = c.slice(column, row);
+    // The views index in int32, so slicing whole matrices wraps past 2^31 elements. Each tile's rows start from a
+    // 64-bit offset instead, as do the columns of a transposed B; the views are the same, so are the results.
+    // Extents list the innermost dimension first.
+    Matrix a_tile(lhs + ulong(row) * uint(k), dextents<int32_t, 2>(k, m - row));
+    Matrix b(TransposeB ? rhs + ulong(column) * uint(k) : rhs,
+             TransposeB ? dextents<int32_t, 2>(k, n - column) : dextents<int32_t, 2>(n, k));
+    auto b_tile = b.slice(TransposeB ? 0 : column, 0);
+    Matrix c_rows(output + ulong(row) * uint(n), dextents<int32_t, 2>(n, m - row));
+    auto c_tile = c_rows.slice(column, 0);
     if (kBiasRelu == 0) {
         matmul.run(a_tile, b_tile, c_tile);
         return;

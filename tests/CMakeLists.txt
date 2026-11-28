@@ -1218,7 +1218,8 @@ if(NOT LFS_HAS_CUDA)
             test_tensor_vulkan_index.cpp
             test_tensor_vulkan_matrix_nn.cpp
             test_tensor_vulkan_random.cpp
-            test_tensor_vulkan_buffer.cpp)
+            test_tensor_vulkan_buffer.cpp
+            test_tensor_vulkan_address_guard.cpp)
     endif()
     if(LFS_BUILD_TRAINER)
         list(APPEND TEST_SOURCES
@@ -1238,6 +1239,23 @@ if(NOT LFS_HAS_CUDA)
             test_training_ops_metal_gsplat.cpp
             test_training_ops_metal_losses.cpp
             test_training_ops_metal_adam_sh.cpp
+            test_sh_rest_past_32bit_wrap.cpp
+            test_large_model_sh_codec.cpp
+            test_large_model_sh_storage.cpp
+            test_large_model_fast_raster.cpp
+            test_large_model_counts.cpp
+            test_large_model_sh_slots.cpp
+            test_large_model_refine.cpp
+            test_large_model_sh_bytes.cpp
+            test_large_model_tensor_copy.cpp
+            test_large_model_export_kernels.cpp
+            test_large_model_formats.cpp
+            test_large_model_roundtrip.cpp
+            test_large_model_adam_slots.cpp
+            test_large_model_backward.cpp
+            test_large_model_ply_import.cpp
+            test_large_model_mcmc.cpp
+            test_large_model_rad_pages.cpp
             test_training_ops_metal_fast.cpp
             test_roi_masks.cpp
             test_roi_polygon_weight_map.cpp
@@ -1638,6 +1656,23 @@ set(TEST_FILES
     test_raster_tile_keys.cu
     test_sh_swizzle_layout.cpp
     test_shn_bda_index_math.cpp
+    test_sh_rest_past_32bit_wrap.cpp
+    test_large_model_sh_codec.cpp
+    test_large_model_sh_storage.cpp
+    test_large_model_fast_raster.cpp
+    test_large_model_counts.cpp
+    test_large_model_sh_slots.cpp
+    test_large_model_refine.cpp
+    test_large_model_sh_bytes.cpp
+    test_large_model_tensor_copy.cpp
+    test_large_model_export_kernels.cpp
+    test_large_model_formats.cpp
+    test_large_model_roundtrip.cpp
+    test_large_model_adam_slots.cpp
+    test_large_model_backward.cpp
+    test_large_model_ply_import.cpp
+    test_large_model_mcmc.cpp
+    test_large_model_rad_pages.cpp
     test_python_io.cpp
     test_extended_unary_ops_vs_torch.cpp
     test_scene_validity.cpp
@@ -1855,6 +1890,7 @@ if(LFS_TENSOR_VULKAN)
         test_tensor_vulkan_matrix_nn.cpp
         test_tensor_vulkan_random.cpp
         test_tensor_vulkan_buffer.cpp
+        test_tensor_vulkan_address_guard.cpp
         test_tensor_vulkan_cuda_bridge.cpp
         test_tensor_backend_parity.cpp
         test_tensor_backend_semantics.cpp

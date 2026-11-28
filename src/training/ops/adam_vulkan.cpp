@@ -129,8 +129,15 @@ namespace lfs::training {
             return storage;
         }
 
-        uint64_t address(const Tensor& tensor) {
-            return tensor.is_valid() ? vk::address(ref(tensor)) : 0;
+        uint64_t address(const Tensor& tensor, const core::SourceSite site = LFS_SOURCE_SITE_CURRENT()) {
+            return tensor.is_valid() ? vk::address(ref(tensor), site) : 0;
+        }
+
+        // adam.slang reads and writes parameters, gradients and moment codes at 64-bit byte addresses (loadFloatAt,
+        // loadUS and storeUS, the SH slots), and the mean-step scales from a row address, so those bindings may pass
+        // 4 GiB; the block bounds, flags, indices and masks are indexed from their start and stay guarded.
+        uint64_t wide_address(const Tensor& tensor) {
+            return tensor.is_valid() && tensor.numel() != 0 ? vk::wide_address(ref(tensor)) : 0;
         }
 
         void launch(Params params, const std::span<const StorageRef> reads,
@@ -186,10 +193,10 @@ namespace lfs::training {
                 LFS_ASSERT_MSG(step->primitives > 0 && step->attributes > 0 && step->attributes <= 16,
                                "Vulkan Adam rows require 1..16 attributes and positive rows");
                 Params p{};
-                p.parameter = address(step->parameter);
-                p.packed = address(step->packed);
+                p.parameter = wide_address(step->parameter);
+                p.packed = wide_address(step->packed);
                 p.bounds = address(step->bounds);
-                p.gradient = address(step->gradient);
+                p.gradient = wide_address(step->gradient);
                 p.frozen = optional<bool>(masks.frozen);
                 p.crop = optional<bool>(masks.crop_damping);
 
@@ -214,7 +221,7 @@ namespace lfs::training {
                 p.screen_limit = modifiers.screen_share_limit;
                 p.screen_penalty = modifiers.screen_share_penalty;
                 p.entry_count = (step->apply_screen_share ? 2u : 0u) | (step->apply_mean_step ? 1u : 0u);
-                p.mean_scales = optional<float>(masks.mean_step_scales);
+                p.mean_scales = wide_address(masks.mean_step_scales);
                 p.mean_far = optional<bool>(masks.mean_step_far);
                 p.mean_scale_count = optional_count(masks.mean_step_scales);
                 p.mean_far_count = optional_count(masks.mean_step_far);
@@ -246,10 +253,10 @@ namespace lfs::training {
             LFS_ASSERT_MSG(step.value_bits == 0 || step.value_bits == 16,
                            "Vulkan SH Adam value_bits must be 0 or 16");
             Params p{};
-            p.parameter = address(parameter);
-            p.packed = address(packed);
+            p.parameter = wide_address(parameter);
+            p.packed = wide_address(packed);
             p.bounds = address(bounds);
-            p.gradient = address(gradient);
+            p.gradient = wide_address(gradient);
             p.value_bounds = optional<float>(value_bounds);
             p.frozen = optional<bool>(masks.frozen);
             p.crop = optional<bool>(masks.crop_damping);
@@ -291,7 +298,7 @@ namespace lfs::training {
                                (codec.bits == 8 || codec.bits == 16),
                            "Vulkan Adam encode_zero parameters are invalid");
             Params p{};
-            p.packed = address(packed);
+            p.packed = wide_address(packed);
             p.bounds = address(bounds);
             p.indices = address(indices);
             p.primitives = static_cast<uint32_t>(codec.primitives);

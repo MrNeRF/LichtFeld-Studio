@@ -10,6 +10,10 @@ float sigmoid(float x) { return 1.0f / (1.0f + exp(-x)); }
 uint longestAxis(float3 v) {
     float m=max(v.x,max(v.y,v.z)); return m==v.x ? 0u : (m==v.y ? 1u : 2u);
 }
+// Row i of `width` floats at its 64-bit byte address, its values as small indices from there: NVIDIA's Vulkan computes
+// an access chain's byte offset in 32 bits without VK_EXT_shader_64bit_indexing, and a per-Gaussian buffer of 3 floats
+// (means, scales, sh0) passes 4 GiB at 357.9M Gaussians, one of 4 (rotations) at 268.4M.
+Ptr<float,Access.ReadWrite> floatRow(uint64_t base,uint i,uint width){return (Ptr<float,Access.ReadWrite>)(base+uint64_t(i)*width*4u);}
 float logOnePlus(float x) {
     precise float y = 1.0f + x;
     return y == 1.0f ? x : log(y) * (x / (y - 1.0f));
@@ -72,20 +76,15 @@ void main(uint3 groupId:SV_GroupID,uint lane:SV_GroupIndex,uniform Parameters p)
     }
     if(operation==0) {
         if(index>=p.count)return;
-        Ptr<float,Access.ReadWrite> means=(Ptr<float,Access.ReadWrite>)p.a;
-        Ptr<float,Access.Read> rotations=(Ptr<float,Access.Read>)p.b;
-        Ptr<float,Access.ReadWrite> scales=(Ptr<float,Access.ReadWrite>)p.c;
-        Ptr<float,Access.Read> sh0=(Ptr<float,Access.Read>)p.d;
         Ptr<float,Access.ReadWrite> opacity=(Ptr<float,Access.ReadWrite>)p.e;
-        Ptr<float,Access.ReadWrite> childMeans=(Ptr<float,Access.ReadWrite>)p.f;
-        Ptr<float,Access.ReadWrite> childRotations=(Ptr<float,Access.ReadWrite>)p.g;
-        Ptr<float,Access.ReadWrite> childScales=(Ptr<float,Access.ReadWrite>)p.h;
-        Ptr<float,Access.ReadWrite> childSh0=(Ptr<float,Access.ReadWrite>)p.i;
         Ptr<float,Access.ReadWrite> childOpacity=(Ptr<float,Access.ReadWrite>)p.j;
         uint src=uint(((Ptr<int64_t,Access.Read>)p.k)[index]);
-        float3 pos=float3(means[src*3],means[src*3+1],means[src*3+2]);
-        float4 q=float4(rotations[src*4],rotations[src*4+1],rotations[src*4+2],rotations[src*4+3]);
-        float3 s=float3(scales[src*3],scales[src*3+1],scales[src*3+2]);
+        Ptr<float,Access.ReadWrite> means=floatRow(p.a,src,3u), rotations=floatRow(p.b,src,4u), scales=floatRow(p.c,src,3u), sh0=floatRow(p.d,src,3u);
+        Ptr<float,Access.ReadWrite> childMeans=floatRow(p.f,index,3u), childRotations=floatRow(p.g,index,4u);
+        Ptr<float,Access.ReadWrite> childScales=floatRow(p.h,index,3u), childSh0=floatRow(p.i,index,3u);
+        float3 pos=float3(means[0],means[1],means[2]);
+        float4 q=float4(rotations[0],rotations[1],rotations[2],rotations[3]);
+        float3 s=float3(scales[0],scales[1],scales[2]);
         // Trained quaternions drift from unit norm; projection normalizes them.
         float inverseNorm=min(rsqrt(dot(q,q)),1e12f);
         float w=q.x*inverseNorm,x=q.y*inverseNorm,y=q.z*inverseNorm,z=q.w*inverseNorm;
@@ -112,17 +111,18 @@ void main(uint3 groupId:SV_GroupID,uint lane:SV_GroupIndex,uniform Parameters p)
             newOpacity = log(probability / (1.0f - probability));
         }
         float3 offset=cols[axis]*(0.5f*exp(s[axis]));
-        for(uint j=0;j<3;++j){means[src*3+j]=pos[j]+offset[j]; childMeans[index*3+j]=pos[j]-offset[j]; scales[src*3+j]=ns[j]; childScales[index*3+j]=ns[j]; childSh0[index*3+j]=sh0[src*3+j];}
-        for(uint j=0;j<4;++j)childRotations[index*4+j]=q[j];
+        for(uint j=0;j<3;++j){means[j]=pos[j]+offset[j]; childMeans[j]=pos[j]-offset[j]; scales[j]=ns[j]; childScales[j]=ns[j]; childSh0[j]=sh0[j];}
+        for(uint j=0;j<4;++j)childRotations[j]=q[j];
         opacity[src]=newOpacity; childOpacity[index]=newOpacity; return;
     }
     if(operation==1) {
         if(index>=p.count)return;
         int64_t t=((Ptr<int64_t,Access.Read>)p.a)[index]; if(t<0 || uint64_t(t)>=p.rows)return;
-        uint dst=uint(t); Ptr<float,Access.Read> means=(Ptr<float,Access.Read>)p.b, rotations=(Ptr<float,Access.Read>)p.c, scales=(Ptr<float,Access.Read>)p.d, sh=(Ptr<float,Access.Read>)p.e, opacity=(Ptr<float,Access.Read>)p.f;
-        Ptr<float,Access.ReadWrite> dm=(Ptr<float,Access.ReadWrite>)p.g, dr=(Ptr<float,Access.ReadWrite>)p.h, ds=(Ptr<float,Access.ReadWrite>)p.i, dh=(Ptr<float,Access.ReadWrite>)p.j, dop=(Ptr<float,Access.ReadWrite>)p.k;
-        for(uint j=0;j<3;++j){dm[dst*3+j]=means[index*3+j];ds[dst*3+j]=scales[index*3+j];dh[dst*3+j]=sh[index*3+j];}
-        for(uint j=0;j<4;++j)dr[dst*4+j]=rotations[index*4+j];
+        uint dst=uint(t); Ptr<float,Access.Read> opacity=(Ptr<float,Access.Read>)p.f;
+        Ptr<float,Access.ReadWrite> means=floatRow(p.b,index,3u), rotations=floatRow(p.c,index,4u), scales=floatRow(p.d,index,3u), sh=floatRow(p.e,index,3u);
+        Ptr<float,Access.ReadWrite> dm=floatRow(p.g,dst,3u), dr=floatRow(p.h,dst,4u), ds=floatRow(p.i,dst,3u), dh=floatRow(p.j,dst,3u), dop=(Ptr<float,Access.ReadWrite>)p.k;
+        for(uint j=0;j<3;++j){dm[j]=means[j];ds[j]=scales[j];dh[j]=sh[j];}
+        for(uint j=0;j<4;++j)dr[j]=rotations[j];
         dop[dst]=opacity[index]; if(p.l!=0)((Ptr<uint8_t,Access.ReadWrite>)p.l)[dst]=0; return;
     }
     if(operation==2) {
@@ -141,15 +141,15 @@ void main(uint3 groupId:SV_GroupID,uint lane:SV_GroupIndex,uniform Parameters p)
     if(operation==5) {
         if(index>=p.count)return; Ptr<uint8_t,Access.Read> frozen=(Ptr<uint8_t,Access.Read>)p.a;
         if(p.countA!=0 && index<p.countA && frozen[index]!=0)return;
-        Ptr<float,Access.ReadWrite> scales=(Ptr<float,Access.ReadWrite>)p.b; Ptr<float,Access.Read> shares=(Ptr<float,Access.Read>)p.c; float share=shares[index];
-        if(!(share>p.limit))return; float delta=min(log(share/p.limit),log(1.5f)); uint axis=longestAxis(float3(scales[index*3],scales[index*3+1],scales[index*3+2]));scales[index*3+axis]-=delta;return;
+        Ptr<float,Access.ReadWrite> scales=floatRow(p.b,index,3u); Ptr<float,Access.Read> shares=(Ptr<float,Access.Read>)p.c; float share=shares[index];
+        if(!(share>p.limit))return; float delta=min(log(share/p.limit),log(1.5f)); uint axis=longestAxis(float3(scales[0],scales[1],scales[2]));scales[axis]-=delta;return;
     }
     if(operation==6) {
         if(index>=p.count)return; Ptr<uint8_t,Access.Read> frozen=(Ptr<uint8_t,Access.Read>)p.a; Ptr<float,Access.Read> error=(Ptr<float,Access.Read>)p.b, shares=(Ptr<float,Access.Read>)p.c; Ptr<float,Access.ReadWrite> score=(Ptr<float,Access.ReadWrite>)p.d;
         score[index]=p.countA!=0 && index<p.countA && frozen[index]!=0 ? 0.0f : (!(p.limit>0.0f) || !(shares[index]>p.limit) || !(error[index]>0.0f) ? 0.0f : sqrt(error[index])*shares[index]/p.limit);return;
     }
     if(operation==7 || operation==8) {
-        if(index>=p.count)return; Ptr<float,Access.Read> q=(Ptr<float,Access.Read>)p.b; float norm=0.0f;for(uint j=0;j<4;++j)norm+=q[index*4+j]*q[index*4+j];
+        if(index>=p.count)return; Ptr<float,Access.ReadWrite> q=floatRow(p.b,index,4u); float norm=0.0f;for(uint j=0;j<4;++j)norm+=q[j]*q[j];
         ((Ptr<uint8_t,Access.ReadWrite>)p.c)[index]=(norm<1e-8f || (operation==7 && ((Ptr<float,Access.Read>)p.a)[index]<=p.minimumOpacity))?1:0;
     }
 }

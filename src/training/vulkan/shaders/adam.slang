@@ -84,14 +84,20 @@ float qDecode(uint code, float lo, float hi, uint bits) {
     float qmax = bits == 16 ? 65535.0f : 255.0f;
     return fma(hi - lo, float(code) * (1.0f / qmax), lo);
 }
+// Moment codes, values and gradients are read and written at their 64-bit byte address, not as an index from their
+// buffer's start: NVIDIA's Vulkan computes an access chain's byte offset in 32 bits without
+// VK_EXT_shader_64bit_indexing. At SH degree 3 the SH gradient passes 4 GiB at 22.4M rows, the 8-bit SH moments and an
+// f16 SH store at 44.7M, a Q16 store at 47.7M; a row step's 3-float parameter and gradient at 357.9M rows, its
+// 4-float ones at 268.4M.
+float loadFloatAt(uint64_t address, uint64_t index) { return ((Ptr<float, Access.Read>)(address + index * 4))[0]; }
 float2 loadUS(Params p, uint64_t cell, float4 mm) {
     uint u, s;
     if (p.bits == 16) {
-        Ptr<uint16_t, Access.Read> packed = (Ptr<uint16_t, Access.Read>)p.packed;
-        u = packed[cell * 2]; s = packed[cell * 2 + 1];
+        Ptr<uint16_t, Access.Read> packed = (Ptr<uint16_t, Access.Read>)(p.packed + cell * 4);
+        u = packed[0]; s = packed[1];
     } else {
-        Ptr<uint8_t, Access.Read> packed = (Ptr<uint8_t, Access.Read>)p.packed;
-        u = packed[cell * 2]; s = packed[cell * 2 + 1];
+        Ptr<uint8_t, Access.Read> packed = (Ptr<uint8_t, Access.Read>)(p.packed + cell * 2);
+        u = packed[0]; s = packed[1];
     }
     return float2(qDecode(u, mm.x, mm.y, p.bits), qDecode(s, mm.z, mm.w, p.bits));
 }
@@ -128,39 +134,42 @@ float2 encodeUS(float m, float v) {
 void storeUS(Params p, uint64_t cell, float2 us, float4 mm) {
     uint u = qCode(us.x, mm.x, mm.y, p.bits), s = qCode(us.y, mm.z, mm.w, p.bits);
     if (p.bits == 16) {
-        Ptr<uint16_t, Access.ReadWrite> packed = (Ptr<uint16_t, Access.ReadWrite>)p.packed;
-        packed[cell * 2] = uint16_t(u); packed[cell * 2 + 1] = uint16_t(s);
+        Ptr<uint16_t, Access.ReadWrite> packed = (Ptr<uint16_t, Access.ReadWrite>)(p.packed + cell * 4);
+        packed[0] = uint16_t(u); packed[1] = uint16_t(s);
     } else {
-        Ptr<uint8_t, Access.ReadWrite> packed = (Ptr<uint8_t, Access.ReadWrite>)p.packed;
-        packed[cell * 2] = uint8_t(u); packed[cell * 2 + 1] = uint8_t(s);
+        Ptr<uint8_t, Access.ReadWrite> packed = (Ptr<uint8_t, Access.ReadWrite>)(p.packed + cell * 2);
+        packed[0] = uint8_t(u); packed[1] = uint8_t(s);
     }
 }
-uint shSlot(uint row, uint k, uint slots) { return (row / 32 * slots + k) * 32 + row % 32; }
-uint shQ16Index(Params p, uint row, uint k, uint c) {
+// A row's float4 slot 0 in swizzled storage; slot k is k * 32 past it. 64-bit: with 12 slots (degree 3) a 32-bit
+// slot index wraps past 357.9M rows. Offsets within a row stay below 12 * 32, so the loops add them in 32 bits.
+uint64_t shSlotStart(uint row, uint slots) { return uint64_t(row / 32) * (slots * 32) + row % 32; }
+uint64_t shSlot(uint row, uint k, uint slots) { return shSlotStart(row, slots) + k * 32; }
+uint64_t shQ16Index(Params p, uint row, uint k, uint c) {
     uint cell = k * 4 + c;
-    return ((row / 32 * p.valueCells + cell) * 32 + row % 32);
+    return ((uint64_t(row / 32) * p.valueCells + cell) * 32 + row % 32);
 }
-float loadShValue(Params p, uint row, uint slot, uint k, uint c, float2 bounds) {
+float loadShValue(Params p, uint row, uint64_t slot, uint k, uint c, float2 bounds) {
     if (p.valueBits == 16 && p.valueBounds != 0 && p.valueCells > 0) {
         uint cell = k * 4 + c;
         if (cell >= p.valueCells) return 0.0f;
-        uint code = ((Ptr<uint16_t, Access.Read>)p.parameter)[shQ16Index(p, row, k, c)];
+        uint code = ((Ptr<uint16_t, Access.Read>)(p.parameter + shQ16Index(p, row, k, c) * 2))[0];
         return fma(bounds.y - bounds.x, float(code) * (1.0f / 65535.0f), bounds.x);
     }
     if (p.valueBits == 16)
-        return f16tof32(((Ptr<uint16_t, Access.Read>)p.parameter)[slot * 4 + c]);
-    return ((Ptr<float, Access.Read>)p.parameter)[slot * 4 + c];
+        return f16tof32(((Ptr<uint16_t, Access.Read>)(p.parameter + (slot * 4 + c) * 2))[0]);
+    return loadFloatAt(p.parameter, slot * 4 + c);
 }
-void storeShValue(Params p, uint row, uint slot, uint k, uint c, float value, float2 bounds) {
+void storeShValue(Params p, uint row, uint64_t slot, uint k, uint c, float value, float2 bounds) {
     if (p.valueBits == 16 && p.valueBounds != 0 && p.valueCells > 0) {
         uint cell = k * 4 + c;
         if (cell >= p.valueCells) return;
         uint code = qCode(value, bounds.x, bounds.y, 16);
-        ((Ptr<uint16_t, Access.ReadWrite>)p.parameter)[shQ16Index(p, row, k, c)] = uint16_t(code);
+        ((Ptr<uint16_t, Access.ReadWrite>)(p.parameter + shQ16Index(p, row, k, c) * 2))[0] = uint16_t(code);
     } else if (p.valueBits == 16) {
-        ((Ptr<uint16_t, Access.ReadWrite>)p.parameter)[slot * 4 + c] = uint16_t(f32tof16(value));
+        ((Ptr<uint16_t, Access.ReadWrite>)(p.parameter + (slot * 4 + c) * 2))[0] = uint16_t(f32tof16(value));
     } else {
-        ((Ptr<float, Access.ReadWrite>)p.parameter)[slot * 4 + c] = value;
+        ((Ptr<float, Access.ReadWrite>)(p.parameter + (slot * 4 + c) * 4))[0] = value;
     }
 }
 float rowScale(Params p, uint row, bool sh) {
@@ -196,8 +205,9 @@ void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uniform Push pu
         if (valid && (p.entryCount & 1u) != 0u && p.meanScales != 0 && p.meanFar != 0 &&
             row < p.meanFarCount && uint64_t(row) * 3 + 2 < p.meanScaleCount && p.meanMedian > 0.0f &&
             ((Ptr<uint8_t, Access.Read>)p.meanFar)[row] != 0) {
-            Ptr<float, Access.Read> scales = (Ptr<float, Access.Read>)p.meanScales;
-            float extent = exp((scales[row * 3] + scales[row * 3 + 1] + scales[row * 3 + 2]) * (1.0f / 3.0f));
+            // The row's scales at its 64-bit byte address (see loadFloatAt).
+            Ptr<float, Access.Read> scales = (Ptr<float, Access.Read>)(p.meanScales + uint64_t(row) * 12);
+            float extent = exp((scales[0] + scales[1] + scales[2]) * (1.0f / 3.0f));
             step *= qMin(qMax(extent / p.meanMedian, 1.0f), 300.0f);
         }
         if (valid && p.frozenMask != 0 && row < p.frozenCount && ((Ptr<uint8_t, Access.Read>)p.frozenMask)[row] != 0 && p.frozenScale == 0.0f) apply = false;
@@ -206,14 +216,15 @@ void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uniform Push pu
             uint64_t cell = uint64_t(row) * attrs + a;
             float2 mv = decodeMV(loadUS(p, cell, oldmm));
             m[a]=mv.x; v[a]=mv.y;
-            float g=((Ptr<float, Access.Read>)p.gradient)[cell];
+            float g=loadFloatAt(p.gradient, cell);
             float h=0.0f;
             if (p.screenShare != 0 && row < p.primitives && (p.entryCount & 2) != 0)
                 h = hinge(p,row,mv.y);
             if (apply) {
                 m[a] = fma(p.beta1, mv.x, (1.0f-p.beta1)*(g+h));
                 v[a] = fma(p.beta2, mv.y, roundedMul(roundedMul(1.0f-p.beta2,g),g));
-                ((Ptr<float, Access.ReadWrite>)p.parameter)[cell] = adamUpdate(((Ptr<float, Access.Read>)p.parameter)[cell], step, m[a], v[a], p.bc2, p.eps);
+                Ptr<float, Access.ReadWrite> parameter = (Ptr<float, Access.ReadWrite>)(p.parameter + cell * 4);
+                parameter[0] = adamUpdate(parameter[0], step, m[a], v[a], p.bc2, p.eps);
             }
             float2 us=encodeUS(m[a],v[a]); usU[a]=us.x; usS[a]=us.y;
             umin=qMin(umin,us.x); umax=qMax(umax,us.x); smin=qMin(smin,us.y); smax=qMax(smax,us.y);
@@ -250,7 +261,7 @@ void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uniform Push pu
         uint n=p.layout==0?p.attributes:p.slots*4;
         bool selected=((Ptr<uint,Access.Read>)p.scratch)[row]!=0;
         for(uint a=0;a<n;++a) {
-            uint64_t cell=p.layout==0?uint64_t(row)*n+a:uint64_t(shSlot(row,a/4,p.slots)*4+a%4);
+            uint64_t cell=p.layout==0?uint64_t(row)*n+a:shSlot(row,a/4,p.slots)*4+a%4;
             if(selected) storeUS(p,cell,float2(0),newMomentBounds);
             else if (any(oldmm != newMomentBounds)) storeUS(p,cell,loadUS(p,cell,oldmm),newMomentBounds);
         }
@@ -268,12 +279,13 @@ void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uniform Push pu
     if(valid&&p.frozenMask!=0&&row<p.frozenCount&&((Ptr<uint8_t,Access.Read>)p.frozenMask)[row]!=0&&p.frozenScale==0) apply=false;
     if(valid&&p.cropMask!=0&&row<p.cropCount&&((Ptr<uint8_t,Access.Read>)p.cropMask)[row]!=0&&p.cropScale==0) apply=false;
     float step=rowScale(p,row,true);
+    const uint64_t slot0=shSlotStart(row,slots);
     float umin=1e30f,umax=-1e30f,smin=1e30f,smax=-1e30f,vmin=1e30f,vmax=-1e30f;
     if(valid) for(uint k=0;k<slots;++k) for(uint c=0;c<4;++c) {
-        uint slot=shSlot(row,k,slots); uint64_t cell=uint64_t(slot)*4+c;
+        uint64_t slot=slot0+k*32; uint64_t cell=slot*4+c;
         float2 mv=decodeMV(loadUS(p,cell,oldmm));
         float value=loadShValue(p,row,slot,k,c,oldvb);
-        float g=k<activeSlots?((Ptr<float,Access.Read>)p.gradient)[cell]:0.0f;
+        float g=k<activeSlots?loadFloatAt(p.gradient,cell):0.0f;
         float m=mv.x,v=mv.y;
         if(apply) {
             m=fma(p.beta1,mv.x,(1.0f-p.beta1)*g);
@@ -293,8 +305,8 @@ void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uniform Push pu
     }
     GroupMemoryBarrierWithGroupSync();
     if(valid) for(uint k=0;k<slots;++k) for(uint c=0;c<4;++c){
-        uint slot=shSlot(row,k,slots);uint64_t cell=uint64_t(slot)*4+c;float2 mv=decodeMV(loadUS(p,cell,oldmm));
-        float value=loadShValue(p,row,slot,k,c,oldvb);float g=k<activeSlots?((Ptr<float,Access.Read>)p.gradient)[cell]:0.0f;
+        uint64_t slot=slot0+k*32;uint64_t cell=slot*4+c;float2 mv=decodeMV(loadUS(p,cell,oldmm));
+        float value=loadShValue(p,row,slot,k,c,oldvb);float g=k<activeSlots?loadFloatAt(p.gradient,cell):0.0f;
         if (apply) {
             mv.x = fma(p.beta1, mv.x, (1 - p.beta1) * g);
             mv.y = fma(p.beta2, mv.y, roundedMul(roundedMul(1 - p.beta2, g), g));

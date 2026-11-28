@@ -25,7 +25,12 @@ namespace lfs::core::internal {
                        caps.vulkan_memory_model_device_scope;
             }
 
-            uint64_t address(const Tensor& tensor) const override { return vk::address(storage_ref(tensor)); }
+            // Not guarded. This one entry point binds every export kernel's buffers, and the ones that can pass 4 GiB
+            // below 400M points are read and written at 64-bit addresses: the SH (export_kmeans_common.slangh), the
+            // decimation's per-point rows, cost cache and neighbour lists (export_decimate*.slang) and the Morton
+            // pass's positions. The rest hold 8 bytes a point or less. A guard here would refuse the large exports
+            // those kernels now handle.
+            uint64_t address(const Tensor& tensor) const override { return vk::wide_address(storage_ref(tensor)); }
 
             void launch(const char* const module, const uint32_t phase, const std::span<const std::byte> params,
                         const std::span<const StorageRef> reads, const std::span<const StorageRef> writes,

@@ -126,6 +126,7 @@ namespace lfs::core::internal {
         void adaptive_avg_pool2d(StorageRef input, StorageRef output, const PoolProgram& program, ExecContext context) override;
         void inference(StorageRef input, StorageRef output, const InferenceProgram& program, ExecContext context) override;
         bool nn_kernels() const override;
+        bool index_copy_rows_in_64_bits() const override { return false; }
         void nn_linear(StorageRef a, StorageRef w, std::optional<StorageRef> bias, std::optional<StorageRef> scale, std::optional<StorageRef> residual, StorageRef output, const LinearProgram& program, ExecContext context) override;
         void nn_attention(StorageRef q, StorageRef k, StorageRef v, std::optional<StorageRef> mask, StorageRef output, const AttentionProgram& program, ExecContext context) override;
         void nn_norm(StorageRef input, StorageRef weight, std::optional<StorageRef> bias, StorageRef output, const NormProgram& program, ExecContext context) override;

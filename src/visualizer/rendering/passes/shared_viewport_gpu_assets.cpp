@@ -990,12 +990,13 @@ namespace lfs::vis {
             destroyMesh(gpu);
             return false;
         }
-        VkBufferCopy vertex_copy{};
-        vertex_copy.size = static_cast<VkDeviceSize>(vbytes);
-        VkBufferCopy index_copy{};
-        index_copy.size = static_cast<VkDeviceSize>(ibytes);
-        vkCmdCopyBuffer(upload_commands, vertex_staging, gpu.vertex_buffer, 1, &vertex_copy);
-        vkCmdCopyBuffer(upload_commands, index_staging, gpu.index_buffer, 1, &index_copy);
+        using lfs::rendering::buffer_copy_pieces;
+        const auto vertex_copy = buffer_copy_pieces(VkBufferCopy{0, 0, static_cast<VkDeviceSize>(vbytes)});
+        const auto index_copy = buffer_copy_pieces(VkBufferCopy{0, 0, static_cast<VkDeviceSize>(ibytes)});
+        vkCmdCopyBuffer(upload_commands, vertex_staging, gpu.vertex_buffer, static_cast<uint32_t>(vertex_copy.size()),
+                        vertex_copy.data());
+        vkCmdCopyBuffer(upload_commands, index_staging, gpu.index_buffer, static_cast<uint32_t>(index_copy.size()),
+                        index_copy.data());
         std::array<VkBufferMemoryBarrier2, 2> barriers{};
         for (auto& barrier : barriers) {
             barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;

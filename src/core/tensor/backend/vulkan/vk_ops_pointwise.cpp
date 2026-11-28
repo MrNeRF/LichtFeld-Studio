@@ -27,6 +27,8 @@
 namespace lfs::core::internal {
     namespace {
         using vk::address;
+        using vk::wide_address;
+        using vk::storage_piece;
         using vk::checked_u32;
         using vk::dispatch_groups;
         using vk::kLocalSize;
@@ -198,7 +200,7 @@ namespace lfs::core::internal {
                 return;
             }
             FillPush push{
-                .output_address = address(output),
+                .output_address = wide_address(output),
                 .pattern = fill_pattern(output.dtype, value),
                 .count = checked_u32(layout.element_count,
                                      "Vulkan fill count exceeds uint32"),
@@ -372,14 +374,20 @@ namespace lfs::core::internal {
         std::vector<StorageRef> reads{input, metadata};
         reads.insert(reads.end(), rhs_storages.begin(), rhs_storages.end());
         const std::array writes{output};
+        // The table hands the kernel each tensor operand's address, and every piece below indexes it by the element's
+        // global index: so each operand is guarded over the whole count from its address, the input and the output
+        // over each piece's own elements.
+        for (const StorageRef& rhs : rhs_storages)
+            if (rhs.backend == GpuBackend::Vulkan && rhs.meta != nullptr)
+                (void)address(storage_piece(rhs, 0, count * sizeof(float)));
         const uint64_t chunk_elements =
             static_cast<uint64_t>(context->caps().max_workgroup_count[0]) * kLocalSize;
         for (size_t offset = 0; offset < count; offset += chunk_elements) {
             const size_t chunk = std::min<size_t>(count - offset, chunk_elements);
             const PointwisePush push{
-                .lhs_address = address(input) + offset * sizeof(float),
+                .lhs_address = address(storage_piece(input, offset * sizeof(float), chunk * sizeof(float))),
                 .rhs_address = address(metadata),
-                .output_address = address(output) + offset * sizeof(float),
+                .output_address = address(storage_piece(output, offset * sizeof(float), chunk * sizeof(float))),
                 .count = checked_u32(chunk, "Vulkan fused pointwise count exceeds uint32"),
                 .scalar_kind = static_cast<uint32_t>(chain.num_ops),
                 .flags = checked_u32(offset, "Vulkan fused pointwise offset exceeds uint32"),

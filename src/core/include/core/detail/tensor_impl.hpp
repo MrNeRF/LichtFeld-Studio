@@ -2525,13 +2525,29 @@ namespace lfs::core {
                            "storage_ref requires GPU storage");
             LFS_ASSERT_MSG(tensor.data_ != nullptr || tensor.numel() == 0,
                            "storage_ref found null storage for a non-empty tensor");
+            const size_t element_bytes = dtype_size(tensor.dtype_);
+            const size_t byte_offset = tensor.storage_offset_ * element_bytes;
+            // The elements span from the offset to the last one: numel elements when contiguous, otherwise one past
+            // the element at the largest offset (strides are not negative). An empty tensor spans nothing.
+            size_t span = 0;
+            if (const size_t count = tensor.numel(); count != 0) {
+                if (tensor.is_contiguous_) {
+                    span = count * element_bytes;
+                } else {
+                    size_t last = 0;
+                    for (size_t dim = 0; dim < tensor.shape_.rank(); ++dim)
+                        last += (tensor.shape_[dim] - 1) * tensor.strides_[dim];
+                    span = (last + 1) * element_bytes;
+                }
+            }
             return StorageRef{
                 .backend = tensor.storage_meta_ ? tensor.storage_meta_->backend
                                                 : GpuBackend::CUDA,
                 .data = tensor.data_,
-                .byte_offset = tensor.storage_offset_ * dtype_size(tensor.dtype_),
+                .byte_offset = byte_offset,
                 .dtype = tensor.dtype_,
                 .meta = tensor.storage_meta_.get(),
+                .byte_end = span != 0 ? byte_offset + span : 0,
             };
         }
 

@@ -10,9 +10,12 @@
 #include "core/rad_dequant_math.hpp"
 #include "core/sh_layout.hpp"
 #include "core/sh_value_quant.hpp"
+#include "core/splat_data.hpp"
+#include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/backend/facade_trace.hpp"
 #include "core/tensor/backend/gpu_backend_ops.hpp"
+#include "core/tensor/backend/metal/metal_testing.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_environment.hpp"
 #include "core/tensor_execution.hpp"
@@ -29,6 +32,7 @@
 #include "core/tensor_splat.hpp"
 #include "core/tensor_upload.hpp"
 
+#include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -36,6 +40,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <functional>
@@ -2696,6 +2701,149 @@ namespace {
             EXPECT_EQ(mismatches, 0u) << "region " << region;
         }
         EXPECT_LT(rounded, 64u);
+    }
+
+    // Generic fills and copies dispatch one thread per element of up to 16 bytes, and a kernel's grid position is 32
+    // bits wide, so past 2^31 elements they go in pieces, each from its own 64-bit offset. With the piece lowered to 7
+    // elements, fills and copies of 16-, 4- and 1-byte elements, at aligned and unaligned offsets, still write every
+    // byte exactly as one dispatch did.
+    TEST_F(TensorMetal, FillsAndCopiesInPiecesWriteEveryByte) {
+        GpuBackendScope scope(GpuBackend::Metal);
+        struct Restore {
+            ~Restore() { internal::set_metal_copy_piece_elements_for_testing(0); }
+        } restore;
+        internal::set_metal_copy_piece_elements_for_testing(7);
+        // 1,000 floats move as 250 16-byte elements, 1,001 as 4-byte ones, 1,003 bytes one by one.
+        for (const auto& [count, dtype] : {std::pair{size_t{1000}, DataType::Float32},
+                                           std::pair{size_t{1001}, DataType::Float32},
+                                           std::pair{size_t{1003}, DataType::UInt8}}) {
+            SCOPED_TRACE(std::to_string(count) + (dtype == DataType::UInt8 ? " bytes" : " floats"));
+            const Tensor cpu = random_tensor(count, 0.0f, 200.0f, 3).to(dtype);
+            const Tensor metal = to_metal(cpu);
+            expect_close(metal.clone(), cpu, 0.0f, 0.0f);
+            expect_close(Tensor::zeros({count}, Device::GPU, dtype), Tensor::zeros({count}, Device::CPU, dtype), 0.0f, 0.0f);
+            expect_close(Tensor::full({count}, 7.0f, Device::GPU, dtype), Tensor::full({count}, 7.0f, Device::CPU, dtype),
+                         0.0f, 0.0f);
+            // One element in: 4-byte aligned for floats but not 16, unaligned for bytes.
+            Tensor shifted = Tensor::zeros({count}, Device::GPU, dtype);
+            shifted.slice(0, 1, count).copy_from(metal.slice(0, 0, count - 1));
+            Tensor expected = Tensor::zeros({count}, Device::CPU, dtype);
+            expected.slice(0, 1, count).copy_from(cpu.slice(0, 0, count - 1));
+            expect_close(shifted, expected, 0.0f, 0.0f);
+        }
+    }
+
+    // The host's float4 slot index of a primitive is 64-bit: at SH 3 a primitive has 12 slots of 32 lanes, so the
+    // index passes 2^32 at 357.9M primitives. Row 400M is checked without any memory.
+    TEST(ShLayout, SwizzledIndexStaysExactPastTheThirtyTwoBitWrap) {
+        constexpr std::size_t row = 400'000'000;
+        constexpr std::size_t expected = row / 32 * (12 * 32) + 11 * 32 + row % 32;
+        static_assert(expected > std::numeric_limits<std::uint32_t>::max());
+        EXPECT_EQ(lfs::core::sh_swizzled_index(row, 11, 15), expected);
+        EXPECT_EQ(lfs::core::sh_swizzled_index(row + 31, 0), (row + 31) / 32 * (12 * 32) + (row + 31) % 32);
+    }
+
+    // A GPU SH rotation goes in chunks of INT32_MAX / (15 * 3 * 7) = 6,817,408 rows at SH 3. The views of the third
+    // chunk start 2.45e9 bytes into the coefficients, which the expression launcher refused before. Runs on Metal and,
+    // where available, on Vulkan. Opt-in, about 8 GB per backend.
+    TEST_F(TensorMetal, ShRotationReachesRowsPastTwoGigabytesOfCoefficients) {
+        if (std::getenv("LFS_TEST_LARGE_SH") == nullptr)
+            GTEST_SKIP() << "Set LFS_TEST_LARGE_SH=1 for this 8 GB test";
+        constexpr size_t third_chunk = 2 * 6'817'408, n = third_chunk + 4096;
+        const std::array<size_t, 6> probes{0, 6'817'407, 6'817'408, third_chunk, third_chunk + 1, n - 1};
+        constexpr size_t probed = probes.size();
+        std::vector<float> values(probed * 45), rotations(probed * 4, 0.0f);
+        std::mt19937 random(4202);
+        std::uniform_real_distribution<float> coefficient(-0.4f, 0.4f);
+        for (float& value : values)
+            value = coefficient(random);
+        for (size_t p = 0; p < probed; ++p)
+            rotations[4 * p] = 1.0f;
+        const glm::mat4 rotation = glm::rotate(glm::mat4(1.0f), 0.7f, glm::normalize(glm::vec3(0.3f, -0.5f, 0.8f)));
+
+        // The probed rows alone, rotated on the CPU.
+        SplatData reference(3, Tensor::zeros({probed, 3}, Device::CPU), Tensor::zeros({probed, 1, 3}, Device::CPU),
+                            Tensor::from_vector(values, {probed, 15, 3}, Device::CPU),
+                            Tensor::zeros({probed, 3}, Device::CPU), Tensor::from_vector(rotations, {probed, 4}, Device::CPU),
+                            Tensor::zeros({probed, 1}, Device::CPU), 1.0f);
+        transform(reference, rotation);
+        const auto expected = reference.shN_canonical().cpu().contiguous();
+
+        for (const GpuBackend backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+            if (!gpu_backend_available(backend))
+                continue;
+            SCOPED_TRACE(gpu_backend_name(backend));
+            GpuBackendScope scope(backend);
+            auto coefficients = Tensor::zeros({n, 15, 3}, Device::GPU);
+            for (size_t p = 0; p < probed; ++p)
+                coefficients.slice(0, probes[p], probes[p] + 1)
+                    .copy_from(Tensor::from_vector(std::vector<float>(values.begin() + p * 45, values.begin() + (p + 1) * 45),
+                                                   {1, 15, 3}, Device::CPU)
+                                   .to(Device::GPU));
+            const auto identity = Tensor::cat({Tensor::ones({n, 1}, Device::GPU), Tensor::zeros({n, 3}, Device::GPU)}, 1);
+            SplatData model(3, Tensor::zeros({n, 3}, Device::GPU), Tensor::zeros({n, 1, 3}, Device::GPU), coefficients,
+                            Tensor::zeros({n, 3}, Device::GPU), identity, Tensor::zeros({n, 1}, Device::GPU), 1.0f);
+            try {
+                transform(model, rotation);
+            } catch (const std::exception& error) {
+                ADD_FAILURE() << "the rotation threw: " << error.what();
+                continue;
+            }
+            const auto actual = model.shN_canonical();
+            for (size_t p = 0; p < probed; ++p) {
+                const auto row = actual.slice(0, probes[p], probes[p] + 1).cpu().contiguous();
+                for (size_t v = 0; v < 45; ++v)
+                    ASSERT_NEAR(row.ptr<float>()[v], expected.ptr<float>()[p * 45 + v], 2e-6)
+                        << "row " << probes[p] << " value " << v;
+            }
+        }
+    }
+
+    // A GEMM whose output passes 2^31 floats: C[i][j] = i for A[i] = (i, 0, 0, 0) and B all ones. Rows past 65,408 sit
+    // more than 2^31 elements into C, past what the tiles' int32 views could reach from the matrix start. Opt-in, 8.6 GB.
+    TEST_F(TensorMetal, GemmRowsPastInt32ElementsAreExact) {
+        if (std::getenv("LFS_TEST_LARGE_SH") == nullptr)
+            GTEST_SKIP() << "Set LFS_TEST_LARGE_SH=1 for this 8.6 GB test";
+        GpuBackendScope scope(GpuBackend::Metal);
+        constexpr size_t m = 65600, n = 32832, k = 4;
+        std::vector<float> a(m * k, 0.0f);
+        for (size_t i = 0; i < m; ++i)
+            a[i * k] = static_cast<float>(i);
+        const Tensor product = Tensor::from_vector(a, {m, k}, Device::CPU).to(Device::GPU).mm(Tensor::ones({k, n}, Device::GPU));
+        for (const size_t first : {size_t{0}, size_t{65300}}) {
+            const auto rows = product.slice(0, first, first + 300).contiguous().cpu().to_vector();
+            for (size_t r = 0; r < 300; ++r)
+                for (size_t j = 0; j < n; j += 997)
+                    ASSERT_EQ(rows[r * n + j], static_cast<float>(first + r)) << "row " << first + r << " column " << j;
+        }
+    }
+
+    // MRNF's ray-depth state is [N, 6]: past 357,913,941 rows its elements pass INT32_MAX, while its rows do not.
+    // Row assignment there must reach the last rows. Opt-in, 8.6 GB.
+    TEST_F(TensorMetal, IndexPutRowsPastInt32ElementsReachTheLastRows) {
+        if (std::getenv("LFS_TEST_LARGE_SH") == nullptr)
+            GTEST_SKIP() << "Set LFS_TEST_LARGE_SH=1 for this 8.6 GB test";
+        GpuBackendScope scope(GpuBackend::Metal);
+        constexpr size_t n = 357'913'942 + 1024, width = 6;
+        auto state = Tensor::zeros({n, width}, Device::GPU);
+        const std::vector<int> rows{0, 357'913'940, 357'913'941, 357'913'942, static_cast<int>(n - 1)};
+        std::vector<float> values(rows.size() * width);
+        for (size_t i = 0; i < values.size(); ++i)
+            values[i] = static_cast<float>(i + 1);
+        state.index_put_(Tensor::from_vector(rows, {rows.size()}, Device::CPU).to(Device::GPU),
+                         Tensor::from_vector(values, {rows.size(), width}, Device::CPU).to(Device::GPU));
+        for (size_t r = 0; r < rows.size(); ++r) {
+            const size_t row = static_cast<size_t>(rows[r]);
+            const auto written = state.slice(0, row, row + 1).cpu().to_vector();
+            for (size_t c = 0; c < width; ++c)
+                EXPECT_EQ(written[c], values[r * width + c]) << "row " << row << " column " << c;
+        }
+        // Rows next to the written ones stay zero.
+        for (const size_t row : {size_t{1}, size_t{357'913'939}, size_t{357'913'943}, n - 2}) {
+            const auto untouched = state.slice(0, row, row + 1).cpu().to_vector();
+            for (size_t c = 0; c < width; ++c)
+                EXPECT_EQ(untouched[c], 0.0f) << "row " << row << " column " << c;
+        }
     }
 
 } // namespace

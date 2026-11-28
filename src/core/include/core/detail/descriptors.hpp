@@ -124,6 +124,10 @@ namespace lfs::core {
             DataType dtype;
             const StorageMeta* meta;
             uint32_t flags = 0;
+            // One past the last byte of the referenced elements, in bytes from the storage's start like byte_offset;
+            // 0 when not known. storage_ref(tensor) sets it, so a ref whose byte_offset is moved by hand still knows
+            // how far its elements reach from the new offset. Only Vulkan's binding guard reads it (vk_ops_common.hpp).
+            size_t byte_end = 0;
         };
 
         struct ShCodecProgram {

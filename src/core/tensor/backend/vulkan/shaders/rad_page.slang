@@ -16,8 +16,11 @@ struct Sources {
     uint64_t means, sh0, shN, rotation, scaling, opacity, shBounds;
     uint offset, count, rest, halfSH, quantSH, padding;
 };
-uint word(uint64_t base, uint i) { return ((Ptr<uint, Access.Read>)base)[i]; }
-void put(uint64_t base, uint64_t i, uint value) { ((Ptr<uint, Access.ReadWrite>)base)[i] = value; }
+// Words at their 64-bit byte address, not as an index from their buffer's start: NVIDIA's Vulkan computes an access
+// chain's byte offset in 32 bits without VK_EXT_shader_64bit_indexing, and the resident model's 3-float rows (means,
+// sh0, log scales) pass 4 GiB at 357.9M splats, its rotations at 268.4M.
+uint word(uint64_t base, uint i) { return ((Ptr<uint, Access.Read>)(base + uint64_t(i) * 4))[0]; }
+void put(uint64_t base, uint64_t i, uint value) { ((Ptr<uint, Access.ReadWrite>)(base + i * 4))[0] = value; }
 uint byteAt(uint64_t base, uint i) { return (word(base,i/4) >> ((i%4)*8)) & 255; }
 uint halfAt(uint64_t base, uint i) { return byteAt(base,i) | (byteAt(base,i+1)<<8); }
 float scalar(uint64_t base,uint i) { return asfloat(word(base,i)); }
@@ -49,15 +52,24 @@ uint quantByte(float v,float m) { return uint(int(clamp(round(v/m*127.0),-127.0,
 uint64_t shIndex(Parameters p,uint i,uint s) {
     return ((uint64_t(p.page)*p.pageSplats+i)/32*p.slots+s)*32+i%32;
 }
+// The resident model's SH is addressed in 64 bits. As 32-bit indices the float index into the float4 store wrapped
+// past 89.5M splats at SH degree 3, the Q16 cell past 95.4M, and the byte indices of the u16 reads (cell * 2,
+// index * 2) past 47.7M (Q16) and 44.7M (f16). Each word is read at its address in integer math, because NVIDIA's
+// Vulkan computes an access chain's byte offset in 32 bits without VK_EXT_shader_64bit_indexing (the store passes
+// 4 GiB at 22.4M to 47.7M splats).
+uint residentWord(uint64_t base, uint64_t i) { return ((Ptr<uint, Access.Read>)(base + i * 4))[0]; }
+uint residentHalf(uint64_t base, uint64_t byteIndex) {
+    return (residentWord(base, byteIndex / 4) >> uint((byteIndex % 4) * 8)) & 0xffffu;
+}
 float residentSH(Sources s,uint i,uint c) {
     uint splat=s.offset+i;
-    uint index=((splat/32*((s.rest*3+3)/4)+c/4)*32+splat%32)*4+c%4;
+    uint64_t index=((uint64_t(splat/32)*((s.rest*3+3)/4)+c/4)*32+splat%32)*4+c%4;
     if(s.quantSH!=0) {
         float lo=scalar(s.shBounds,(splat/256)*2), hi=scalar(s.shBounds,(splat/256)*2+1);
-        uint cell=(splat/32)*(s.rest*3*32)+c*32+splat%32;
-        return lo+(hi-lo)*(float(halfAt(s.shN,cell*2))*(1.0/65535.0));
+        uint64_t cell=uint64_t(splat/32)*(s.rest*3*32)+c*32+splat%32;
+        return lo+(hi-lo)*(float(residentHalf(s.shN,cell*2))*(1.0/65535.0));
     }
-    return s.halfSH!=0 ? halfToFloat(halfAt(s.shN,index*2)) : scalar(s.shN,index);
+    return s.halfSH!=0 ? halfToFloat(residentHalf(s.shN,index*2)) : asfloat(residentWord(s.shN,index));
 }
 [numthreads(LFS_LOCAL_SIZE_X,1,1)]
 void main(uint3 id:SV_DispatchThreadID, uniform Parameters p) {

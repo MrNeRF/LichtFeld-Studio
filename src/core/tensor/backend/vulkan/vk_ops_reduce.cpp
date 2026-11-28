@@ -24,6 +24,7 @@
 namespace lfs::core::internal {
     namespace {
         using vk::address;
+        using vk::wide_address;
         using vk::checked_u32;
         using vk::dispatch_groups;
         using vk::kLocalSize;
@@ -702,12 +703,12 @@ namespace lfs::core::internal {
             totals.dtype = data.dtype;
         }
         const ScanPush push{
-            .data_address = address(data),
+            .data_address = wide_address(data),
             .outer = checked_u32(outer, "Vulkan cumsum outer size exceeds uint32"),
             .dim = checked_u32(size, "Vulkan cumsum size exceeds uint32"),
             .inner = checked_u32(inner, "Vulkan cumsum inner size exceeds uint32"),
             .lines = checked_u32(lines, "Vulkan cumsum line count exceeds uint32"),
-            .totals_address = mode == 2 ? address(totals) : 0,
+            .totals_address = mode == 2 ? wide_address(totals) : 0,
         };
         const auto dispatch = [&](const uint32_t pass, const uint32_t groups,
                                   const std::span<const StorageRef> reads,

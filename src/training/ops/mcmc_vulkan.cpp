@@ -31,6 +31,9 @@ namespace lfs::training {
         using namespace lfs::gpu_ops;
 
         constexpr uint32_t kRelocationMax = 51;
+        // mcmc.slang reads and writes the 3- and 4-float rows (means, sh0, scales, quaternions) through float_row, at
+        // 64-bit byte addresses, so those bindings are wide; every other binding holds one value a Gaussian or less,
+        // indexed from its start, and stays guarded.
 
         struct McmcPush {
             uint64_t a, b, c, d, e, f, g, h;
@@ -151,7 +154,7 @@ namespace lfs::training {
                 return;
             const auto context = acquire_vulkan_context();
             const Tensor coefficients = coefficient_table();
-            const McmcPush push{.a = vk::address(storage_ref(opacity)), .b = vk::address(storage_ref(scales)), .c = vk::address(storage_ref(ratios)), .d = vk::address(storage_ref(new_opacity)), .e = vk::address(storage_ref(new_scales)), .f = vk::address(storage_ref(coefficients)), .count = vk::checked_u32(count, "MCMC relocation count exceeds uint32"), .first = min_opacity};
+            const McmcPush push{.a = vk::address(storage_ref(opacity)), .b = vk::wide_address(storage_ref(scales)), .c = vk::address(storage_ref(ratios)), .d = vk::address(storage_ref(new_opacity)), .e = vk::wide_address(storage_ref(new_scales)), .f = vk::address(storage_ref(coefficients)), .count = vk::checked_u32(count, "MCMC relocation count exceeds uint32"), .first = min_opacity};
             const std::array reads{storage_ref(opacity), storage_ref(scales), storage_ref(ratios), storage_ref(coefficients)};
             const std::array writes{storage_ref(new_opacity), storage_ref(new_scales)};
             dispatch(context, 0, push, reads, writes, count, std::make_shared<Tensor>(coefficients));
@@ -164,7 +167,7 @@ namespace lfs::training {
                 return;
             const auto context = acquire_vulkan_context();
             const StorageRef frozen_ref = frozen.is_valid() ? storage_ref(frozen) : StorageRef{};
-            const McmcPush push{.a = vk::address(storage_ref(opacity)), .b = vk::address(storage_ref(scales)), .c = vk::address(storage_ref(quats)), .d = frozen.is_valid() ? vk::address(frozen_ref) : 0, .e = vk::address(storage_ref(means)), .seed = seed, .count = vk::checked_u32(count, "MCMC noise count exceeds uint32"), .count2 = frozen.is_valid() ? vk::checked_u32(frozen.numel(), "MCMC frozen-mask count exceeds uint32") : 0u, .first = lr};
+            const McmcPush push{.a = vk::address(storage_ref(opacity)), .b = vk::wide_address(storage_ref(scales)), .c = vk::wide_address(storage_ref(quats)), .d = frozen.is_valid() ? vk::address(frozen_ref) : 0, .e = vk::wide_address(storage_ref(means)), .seed = seed, .count = vk::checked_u32(count, "MCMC noise count exceeds uint32"), .count2 = frozen.is_valid() ? vk::checked_u32(frozen.numel(), "MCMC frozen-mask count exceeds uint32") : 0u, .first = lr};
             std::vector<StorageRef> reads{storage_ref(opacity), storage_ref(scales), storage_ref(quats)};
             if (frozen.is_valid())
                 reads.push_back(frozen_ref);
@@ -177,7 +180,7 @@ namespace lfs::training {
             if (count == 0)
                 return;
             const auto context = acquire_vulkan_context();
-            const McmcPush push{.a = vk::address(storage_ref(source)), .b = vk::address(storage_ref(destination)), .c = vk::address(storage_ref(rows.means)), .d = vk::address(storage_ref(rows.sh0)), .e = vk::address(storage_ref(rows.raw_scales)), .f = vk::address(storage_ref(rows.raw_quats)), .g = vk::address(storage_ref(rows.raw_opacity)), .count = vk::checked_u32(count, "MCMC row-copy count exceeds uint32"), .count2 = vk::checked_u32(row_count, "MCMC row count exceeds uint32")};
+            const McmcPush push{.a = vk::address(storage_ref(source)), .b = vk::address(storage_ref(destination)), .c = vk::wide_address(storage_ref(rows.means)), .d = vk::wide_address(storage_ref(rows.sh0)), .e = vk::wide_address(storage_ref(rows.raw_scales)), .f = vk::wide_address(storage_ref(rows.raw_quats)), .g = vk::address(storage_ref(rows.raw_opacity)), .count = vk::checked_u32(count, "MCMC row-copy count exceeds uint32"), .count2 = vk::checked_u32(row_count, "MCMC row count exceeds uint32")};
             const std::array reads{storage_ref(source), storage_ref(destination), storage_ref(rows.means),
                                    storage_ref(rows.sh0), storage_ref(rows.raw_scales), storage_ref(rows.raw_quats),
                                    storage_ref(rows.raw_opacity)};
@@ -192,7 +195,7 @@ namespace lfs::training {
             if (count == 0)
                 return;
             const auto context = acquire_vulkan_context();
-            const McmcPush push{.a = vk::address(storage_ref(indices)), .b = vk::address(storage_ref(scales)), .c = vk::address(storage_ref(opacity)), .d = vk::address(storage_ref(scales_out)), .e = vk::address(storage_ref(opacity_out)), .count = vk::checked_u32(count, "MCMC update count exceeds uint32"), .count2 = vk::checked_u32(scales_out.size(0), "MCMC row count exceeds uint32")};
+            const McmcPush push{.a = vk::address(storage_ref(indices)), .b = vk::wide_address(storage_ref(scales)), .c = vk::address(storage_ref(opacity)), .d = vk::wide_address(storage_ref(scales_out)), .e = vk::address(storage_ref(opacity_out)), .count = vk::checked_u32(count, "MCMC update count exceeds uint32"), .count2 = vk::checked_u32(scales_out.size(0), "MCMC row count exceeds uint32")};
             const std::array reads{storage_ref(indices), storage_ref(scales), storage_ref(opacity)};
             const std::array writes{storage_ref(scales_out), storage_ref(opacity_out)};
             dispatch(context, 2, push, reads, writes, count);
@@ -210,7 +213,7 @@ namespace lfs::training {
             Tensor sample_weights;
             if (domain == SampleDomain::AliveIndices) {
                 sample_weights = Tensor::empty({domain_count}, Device::GPU, DataType::Float32);
-                const McmcPush gather_push{.a = vk::address(storage_ref(weights)), .b = vk::address(storage_ref(alive)), .c = vk::address(storage_ref(sample_weights)), .count = vk::checked_u32(domain_count, "MCMC alive count exceeds uint32")};
+                const McmcPush gather_push{.a = vk::wide_address(storage_ref(weights)), .b = vk::wide_address(storage_ref(alive)), .c = vk::wide_address(storage_ref(sample_weights)), .count = vk::checked_u32(domain_count, "MCMC alive count exceeds uint32")};
                 const std::array gather_reads{storage_ref(weights), storage_ref(alive)};
                 const std::array gather_writes{storage_ref(sample_weights)};
                 dispatch(context, 6, gather_push, gather_reads, gather_writes, domain_count);
@@ -218,7 +221,7 @@ namespace lfs::training {
                 sample_weights = weights.contiguous();
             }
             cdf = sample_weights.cumsum(0);
-            const McmcPush push{.a = vk::address(storage_ref(cdf)), .b = domain == SampleDomain::AliveIndices ? vk::address(storage_ref(alive)) : 0, .c = vk::address(storage_ref(opacity)), .d = vk::address(storage_ref(scales)), .e = vk::address(storage_ref(indices)), .f = vk::address(storage_ref(sampled_opacity)), .g = vk::address(storage_ref(sampled_scales)), .seed = seed, .count = vk::checked_u32(samples, "MCMC sample count exceeds uint32"), .count2 = vk::checked_u32(domain_count, "MCMC domain count exceeds uint32"), .mode = domain == SampleDomain::AliveIndices ? 1u : 0u};
+            const McmcPush push{.a = vk::wide_address(storage_ref(cdf)), .b = domain == SampleDomain::AliveIndices ? vk::wide_address(storage_ref(alive)) : 0, .c = vk::wide_address(storage_ref(opacity)), .d = vk::wide_address(storage_ref(scales)), .e = vk::wide_address(storage_ref(indices)), .f = vk::wide_address(storage_ref(sampled_opacity)), .g = vk::wide_address(storage_ref(sampled_scales)), .seed = seed, .count = vk::checked_u32(samples, "MCMC sample count exceeds uint32"), .count2 = vk::checked_u32(domain_count, "MCMC domain count exceeds uint32"), .mode = domain == SampleDomain::AliveIndices ? 1u : 0u};
             std::vector<StorageRef> reads{storage_ref(cdf), storage_ref(opacity), storage_ref(scales)};
             if (domain == SampleDomain::AliveIndices)
                 reads.push_back(storage_ref(alive));

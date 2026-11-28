@@ -40,8 +40,12 @@ void mirrorCentroid(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID) {
     for (uint64_t i = uint64_t(group.x) * 256 + t; i < p.count; i += uint64_t(p.blocks) * 256) {
         if (p.selected[i] == 0) continue;
         ++count;
+        // The mean's row at its 64-bit byte address, not as an index from the means' pointer: NVIDIA's Vulkan computes
+        // an access chain's byte offset in 32 bits without VK_EXT_shader_64bit_indexing, even with a 64-bit index, and
+        // the 3-float rows pass 4 GiB at 357.9M splats. The address and the bytes are the ones the index gave.
+        const Ptr<float> mean = (Ptr<float>)(uint64_t(p.means) + i * 12);
         for (uint axis = 0; axis < 3; ++axis)
-            sum[axis] = addPair(sum[axis], float2(p.means[i * 3 + axis], 0));
+            sum[axis] = addPair(sum[axis], float2(mean[axis], 0));
     }
     for (uint axis = 0; axis < 3; ++axis) {
         hi[axis][t] = sum[axis].x;

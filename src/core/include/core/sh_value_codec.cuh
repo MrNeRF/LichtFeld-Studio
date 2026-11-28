@@ -42,15 +42,16 @@ namespace lfs::core::sh_value {
 #endif
 
     // Cell-linear swizzle index for q16 values (pad-dropped layout).
-    // Layout [ceil(N/R), n_cells, R] of uint16, R=32.
-    __device__ __host__ __forceinline__ unsigned int shAtU16(
+    // Layout [ceil(N/R), n_cells, R] of uint16, R=32. 64-bit: with 45 cells
+    // (degree 3) a 32-bit index wraps past 95.4M primitives.
+    __device__ __host__ __forceinline__ std::uint64_t shAtU16(
         unsigned int primitive_idx,
         unsigned int cell,
         unsigned int n_cells) {
         constexpr unsigned int R = 32u;
         const unsigned int block = primitive_idx / R;
         const unsigned int lane = primitive_idx % R;
-        return block * (n_cells * R) + cell * R + lane;
+        return static_cast<std::uint64_t>(block) * (n_cells * R) + cell * R + lane;
     }
 
 } // namespace lfs::core::sh_value

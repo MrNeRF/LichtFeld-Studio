@@ -50,6 +50,15 @@ struct Parameters {
 
 [[vk::push_constant]] ConstantBuffer<Parameters> p;
 
+// A point's 3-float row at its 64-bit byte address, not as an index from the buffer's pointer: NVIDIA's Vulkan computes
+// an access chain's byte offset in 32 bits without VK_EXT_shader_64bit_indexing, and the positions and colours pass
+// 4 GiB at 357.9M points. The address and the bytes are the ones the index gave, so every backend computes the same
+// values.
+float3 pointRow(Ptr<float, Access.ReadWrite> data, uint index) {
+    const Ptr<float, Access.ReadWrite> row = (Ptr<float, Access.ReadWrite>)(uint64_t(data) + uint64_t(index) * 12u);
+    return float3(row[0], row[1], row[2]);
+}
+
 #ifdef LFS_GPU_VULKAN
 #define POINT p.point[0]
 #else
@@ -87,7 +96,7 @@ PointVertex pointVertex(uint vertexId : SV_VertexID, uint instanceId : SV_Instan
     if ((flags & 512u) != 0u && p.deleted[source] != 0u)
         return rejectedPoint();
 
-    float3 world = float3(p.positions[source * 3u], p.positions[source * 3u + 1u], p.positions[source * 3u + 2u]);
+    float3 world = pointRow(p.positions, source);
     if (POINT.counts.x != 0u) {
         int node = (flags & 16u) != 0u ? p.transformIndices[source] : 0;
         node = clamp(node, 0, int(POINT.counts.x) - 1);
@@ -143,7 +152,7 @@ PointVertex pointVertex(uint vertexId : SV_VertexID, uint instanceId : SV_Instan
     const float maxSize = float(POINT.counts.w);
     float diameter = clamp(2.0 * radiusPixels, 1.0, maxSize);
 
-    float3 color = saturate(float3(p.colors[source * 3u], p.colors[source * 3u + 1u], p.colors[source * 3u + 2u]));
+    float3 color = saturate(pointRow(p.colors, source));
     if (desaturate) {
         const float gray = dot(color, float3(0.299, 0.587, 0.114));
         color = lerp(color, float3(gray), 0.75);

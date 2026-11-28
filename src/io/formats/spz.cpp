@@ -220,7 +220,10 @@ namespace lfs::io {
                 shN = decoded.contiguous().to_pageable_host();
             }
 
-            const auto num_points = static_cast<int>(means.size(0));
+            // Sizes in size_t: at SH 3 the SH values pass 2^31 at 47.7M points, which the 30M export limit keeps out
+            // of reach but must not depend on.
+            const size_t point_count = means.size(0);
+            const auto num_points = static_cast<int>(point_count);
 
             spz::GaussianCloud cloud;
             cloud.numPoints = num_points;
@@ -228,13 +231,13 @@ namespace lfs::io {
             cloud.antialiased = false;
 
             LOG_TIMER_DEBUG("SPZ export: pack");
-            cloud.positions.resize(num_points * 3);
-            cloud.scales.resize(num_points * 3);
-            cloud.rotations.resize(num_points * 4);
-            cloud.alphas.resize(num_points);
-            cloud.colors.resize(num_points * 3);
+            cloud.positions.resize(point_count * 3);
+            cloud.scales.resize(point_count * 3);
+            cloud.rotations.resize(point_count * 4);
+            cloud.alphas.resize(point_count);
+            cloud.colors.resize(point_count * 3);
             if (sh_coeffs > 0 && shN.is_valid() && shN.numel() > 0) {
-                cloud.sh.resize(num_points * sh_coeffs * 3);
+                cloud.sh.resize(point_count * static_cast<size_t>(sh_coeffs) * 3);
             }
 
             const auto* const means_ptr = static_cast<const float*>(means.data_ptr());

@@ -111,6 +111,21 @@ namespace lfs::training {
             grad.append_zeros(new_rows - rows);
         }
 
+        // The fused backward step takes each group's element count as an int (gpu_ops::BackwardAdamParam). The
+        // geometry groups' counts are read on Metal and Vulkan, so a count past INT_MAX stops here instead of
+        // wrapping: rotations pass it at 536.9M Gaussians, means, scales and sh0 at 715.8M. No backend reads the
+        // shN group's count (its step counts primitives), and fp32 degree-3 storage passes INT_MAX at 44.7M, so
+        // that one is clamped instead of refused.
+        int fused_group_elements(const ParamType type, const size_t numel, const std::string_view name) {
+            constexpr size_t kMax = static_cast<size_t>(std::numeric_limits<int>::max());
+            if (type == ParamType::ShN)
+                return static_cast<int>(std::min(numel, kMax));
+            LFS_ASSERT_MSG(numel <= kMax, std::format("AdamOptimizer: the {} group has {} elements, past the fused "
+                                                      "step's 32-bit element count",
+                                                      name, numel));
+            return static_cast<int>(numel);
+        }
+
     } // namespace
 
     void ensure_joint_bounds_capacity(lfs::core::Tensor& joint_bounds,
@@ -1071,7 +1086,7 @@ namespace lfs::training {
             out.joint_bits = state.joint_bits;
             out.frozen_lr_scale = frozen_lr_scale_;
             out.cropbox_lr_scale = cropbox_lr_scale_;
-            out.elements = static_cast<int>(param.numel());
+            out.elements = fused_group_elements(type, param.numel(), name);
             out.attributes = n_attributes;
             out.step_size = static_cast<float>(get_param_lr(type) * bias_correction1_rcp);
             out.bc2_sqrt_rcp = static_cast<float>(bias_correction2_sqrt_rcp);
@@ -1172,7 +1187,7 @@ namespace lfs::training {
                 .crop_damping_mask = absent_,
                 .screen_share = absent_,
                 .primitives = primitives,
-                .elements = static_cast<int>(gradient.numel()),
+                .elements = fused_group_elements(type, gradient.numel(), param_name(type)),
                 .attributes = attributes,
                 .gradient = gradient,
             };

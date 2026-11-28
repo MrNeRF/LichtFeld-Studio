@@ -17,7 +17,8 @@ namespace lfs::core::internal {
             uint64_t matrices;
         };
         static_assert(sizeof(Push) == 80);
-        Push push{vk::address(scales), vk::address(rotations), vk::address(out_scales), vk::address(out_rotations), {}, vk::checked_u32(n, "affine splat count exceeds uint32"), matrices ? vk::address(*matrices) : 0};
+        // affine_splat_geometry.slang addresses every row in 64-bit byte offsets, so every binding is wide.
+        Push push{vk::wide_address(scales), vk::wide_address(rotations), vk::wide_address(out_scales), vk::wide_address(out_rotations), {}, vk::checked_u32(n, "affine splat count exceeds uint32"), matrices ? vk::wide_address(*matrices) : 0};
         std::copy(std::begin(linear.rows), std::end(linear.rows), push.linear);
         const auto& pipeline = context->pipelines().specialized("affine_splat_geometry", sizeof(push), {});
         std::vector<StorageRef> reads{scales, rotations};

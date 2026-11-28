@@ -27,6 +27,11 @@ struct Parameters {
 };
 [[vk::push_constant]] ConstantBuffer<Parameters> p;
 
+// A draw's record at its 64-bit byte address, not as an index from the buffer's pointer: NVIDIA's Vulkan computes an
+// access chain's byte offset in 32 bits without VK_EXT_shader_64bit_indexing, and the 64-byte records pass 4 GiB at
+// 67.1M draws. The address and the bytes are the ones the index gave, so every backend computes the same values.
+ProjectedSplat splat_at(uint i) { return ((Ptr<ProjectedSplat, Access.Read>)(uint64_t(p.splats) + uint64_t(i) * 64u))[0]; }
+
 uint4 clipped_bounds(ProjectedSplat s, RasterParameters r) {
     if (!all(isfinite(s.mean_depth)) || s.mean_depth.z <= 0 ||
         !all(isfinite(s.conic_opacity)) || !all(isfinite(s.color)))
@@ -54,7 +59,7 @@ void tile_counts(uint3 tid : SV_DispatchThreadID) {
         const uint source = p.source_order[i];
         p.counts[i] = source < r.count ? p.source_counts[source] : 0ul;
     } else {
-        const uint4 b = clipped_bounds(p.splats[i], r);
+        const uint4 b = clipped_bounds(splat_at(i), r);
         p.counts[i] = b.z > b.x && b.w > b.y
                           ? uint64_t((b.z + 15u) / 16u - b.x / 16u) * uint64_t((b.w + 15u) / 16u - b.y / 16u)
                           : 0ul;
@@ -107,7 +112,7 @@ void source_key_groups(uint3 group_id : SV_GroupID, uint3 thread : SV_GroupThrea
     uint key = 0;
     uint64_t count = 0;
     if (i < r.count) {
-        const ProjectedSplat s = p.splats[i];
+        const ProjectedSplat s = splat_at(i);
         key = asuint(s.color.w);
         const uint4 b = clipped_bounds(s, r);
         count = b.z > b.x && b.w > b.y ? uint64_t((b.z + 15u) / 16u - b.x / 16u) * uint64_t((b.w + 15u) / 16u - b.y / 16u) : 0ul;
@@ -176,7 +181,7 @@ void tile_instances(uint3 tid : SV_DispatchThreadID) {
     const uint source = sorted ? p.source_order[i] : i;
     if (source >= r.count)
         return;
-    const ProjectedSplat s = p.splats[source];
+    const ProjectedSplat s = splat_at(source);
     const uint4 bounds = clipped_bounds(s, r);
     if (bounds.z <= bounds.x || bounds.w <= bounds.y)
         return;

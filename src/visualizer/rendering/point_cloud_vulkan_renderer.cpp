@@ -311,9 +311,9 @@ namespace lfs::vis {
                 return false;
             }
 
-            VkBufferCopy region{};
-            region.size = bytes;
-            vkCmdCopyBuffer(cb, staging_scratch.buffer, dst.buffer, 1, &region);
+            const auto regions = lfs::rendering::buffer_copy_pieces(VkBufferCopy{0, 0, bytes});
+            vkCmdCopyBuffer(cb, staging_scratch.buffer, dst.buffer, static_cast<uint32_t>(regions.size()),
+                            regions.data());
             return true;
         }
 
