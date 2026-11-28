@@ -29,6 +29,8 @@ namespace lfs::vis::gui {
         std::vector<std::vector<int>> descriptions;
         // Default threshold in the official LLMDet Tiny detection example.
         float confidence = 0.4f;
+        // Inclusive extracted-frame range; absent for a single-image search.
+        std::optional<std::array<int, 2>> frames{};
     };
     struct AssistedMaskRequest {
         std::filesystem::path image;

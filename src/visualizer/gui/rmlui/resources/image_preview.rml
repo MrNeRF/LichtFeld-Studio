@@ -95,7 +95,6 @@
         <button type="button" class="btn" id="sam-page-sequence"></button>
       </div>
       <div id="sam-controls" class="hidden">
-        <div id="sam-frame-controls">
         <div id="sam-methods" class="sam-tool-row">
           <button type="button" class="btn" id="sam-method-manual"></button>
           <button type="button" class="btn" id="sam-semantic-heading"></button>
@@ -122,6 +121,7 @@
           </div>
         </div>
         </div>
+        <div id="sam-frame-controls">
         <div id="sam-manual-controls">
         <span class="section-label-ip" id="sam-heading"></span>
         <div class="sam-tool-row">
@@ -160,9 +160,6 @@
           </div>
           <label for="sam-track-direction" id="sam-track-direction-label"></label>
           <select id="sam-track-direction"></select>
-          <div class="sam-tool-row">
-            <button type="button" class="btn" id="sam-track"></button>
-          </div>
           <div class="sidebar-check-row">
             <input type="checkbox" id="sam-approve"/>
             <label for="sam-approve" id="sam-approve-label"></label>
@@ -237,6 +234,9 @@
       </div>
       </div>
       <div id="sam-apply-controls" class="hidden">
+        <div class="sam-tool-row hidden" id="sam-sequence-action-row">
+          <button type="button" class="btn btn--primary" id="sam-track"></button>
+        </div>
         <div class="sam-tool-row hidden" id="sam-semantic-find-row">
           <button type="button" class="btn btn--primary" id="sam-semantic-find"></button>
         </div>

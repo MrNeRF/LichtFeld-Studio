@@ -121,6 +121,70 @@ namespace lfs::vis::gui {
                 throw lfs::Exception(lfs::make_error({.code = lfs::ErrorCode::Unavailable, .domain = lfs::ErrorDomain::Core, .user_message = LOC("image_preview.sam_write_failed"), .detection = LFS_SOURCE_SITE_CURRENT()}));
             return std::make_shared<const std::vector<std::byte>>(std::move(encoded));
         }
+
+        struct SemanticMask {
+            Tensor low_res, preview;
+            std::shared_ptr<const std::vector<std::byte>> png;
+            float quality = 0;
+        };
+
+        // Shared per-frame segmentation for single-image and sequence searches.
+        // Only a complete union escapes; cancellation never publishes a partial frame.
+        std::optional<SemanticMask> segment_semantic_mask(
+            Sam2& model, const SemanticBoxes& detected, int width, int height, cudaStream_t stream,
+            const std::function<bool()>& cancelled, const std::function<void(float)>& progress) {
+            if (cancelled())
+                return std::nullopt;
+            auto low_union = Tensor::full({1, 256, 256}, -10.f, Device::CUDA);
+            auto combined = Tensor::full({1u, size_t(height), size_t(width)}, -10.f, Device::CUDA);
+            float quality = detected.boxes.empty() ? 0.f : 1.f;
+            const auto prediction_quality = [stream](const core::nn::models::Sam2Prediction& prediction) {
+                auto score = prediction.iou.to(Device::CPU, stream).contiguous();
+                LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+                if (!score.numel() || !std::isfinite(score.ptr<float>()[0]))
+                    throw std::runtime_error(LOC("image_preview.sam_semantic_failed"));
+                return score.ptr<float>()[0];
+            };
+            for (size_t i = 0; i < detected.boxes.size(); ++i) {
+                if (cancelled())
+                    break;
+                auto prediction = model.predict({}, detected.boxes[i], false, nullptr,
+                                                core::nn::models::Sam2MaskOutput::RawLowResolution);
+                if (!prediction)
+                    throw lfs::Exception(prediction.error());
+                const float initial_quality = prediction_quality(*prediction);
+                if (cancelled())
+                    break;
+                // Refine each detector proposal before combining objects. A
+                // union is not a valid single-object SAM refinement prompt.
+                const auto mask_input = prediction->low_res_logits.clamp(-32.f, 32.f).unsqueeze(1);
+                auto refined = model.predict({}, detected.boxes[i], false, &mask_input,
+                                             core::nn::models::Sam2MaskOutput::RawLowResolution);
+                if (!refined)
+                    throw lfs::Exception(refined.error());
+                const float refined_quality = prediction_quality(*refined);
+                const bool improved = refined_quality > initial_quality;
+                const auto& selected = improved ? *refined : *prediction;
+                auto original = model.postprocess_masks(selected.low_res_logits);
+                if (!original)
+                    throw lfs::Exception(original.error());
+                combined = combined.maximum(*original);
+                low_union = low_union.maximum(selected.low_res_logits);
+                quality = std::min(quality, improved ? refined_quality : initial_quality);
+                progress(float(i + 1) / float(detected.boxes.size()));
+            }
+            if (cancelled())
+                return std::nullopt;
+            // Keep the exact source-resolution union for Apply/export;
+            // the low-resolution union is only a future refinement seed.
+            auto semantic_preview = combined.gt(0).to(DataType::Float32);
+            auto selected = semantic_preview.mul(255).to(DataType::UInt8).to(Device::CPU, stream).contiguous();
+            LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+            auto png = encode_mask({selected.ptr<uint8_t>(), selected.numel()}, width, height);
+            if (cancelled())
+                return std::nullopt;
+            return SemanticMask{low_union.clamp(-32.f, 32.f), std::move(semantic_preview), std::move(png), quality};
+        }
     } // namespace
 
     struct AssistedMasking::Impl {
@@ -168,7 +232,7 @@ namespace lfs::vis::gui {
         bool editable() const {
             const auto& phase = result.phase;
             return !release && !stopping && !pending &&
-                   (phase == "idle" || phase == "editing" || phase == "ready" || phase == "tracked" ||
+                   (phase == "idle" || phase == "editing" || phase == "ready" || phase == "tracked" || phase == "searched" ||
                     phase == "mask_ready" || phase == "saved" || phase == "error" || phase == "expired");
         }
 
@@ -279,6 +343,11 @@ namespace lfs::vis::gui {
                     return release || stopping || result.request != w.id;
                 };
                 const auto stage = [&](const char* value, float progress) {
+                    if (w.input.semantic && w.input.semantic->frames) {
+                        std::lock_guard lock(mutex);
+                        if (result.total)
+                            progress = std::min(1.f, (float(result.completed) + progress) / float(result.total));
+                    }
                     jobs.report(active, progress, value);
                     std::lock_guard lock(mutex);
                     if (result.request == w.id)
@@ -367,6 +436,177 @@ namespace lfs::vis::gui {
                         LFS_CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
                     const core::CUDAStreamGuard guard(stream);
                     SemanticBoxes detected;
+                    std::optional<core::nn::models::LlmDetText> semantic_text;
+                    std::unique_ptr<io::PipelinedImageLoader> loader;
+                    size_t decode_request = 0;
+                    const auto prepare_frame = [&](const std::filesystem::path& source_path,
+                                                   std::filesystem::file_time_type source_time, uint64_t source_bytes,
+                                                   const core::ExtractedFrame* expected = nullptr) -> std::optional<SemanticBoxes> {
+                        SemanticBoxes frame_boxes;
+                        if (model && model_key != w.input.weights) {
+                            LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+                            clear_previous();
+                            model.reset();
+                            image.clear();
+                        }
+                        const bool encode_image = !model || image != source_path || stamp != source_time || bytes != source_bytes;
+                        if (encode_image || w.input.semantic) {
+                            // Drain prior work before admitting the next source buffers.
+                            LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+                            if (previous_image != source_path || previous_time != source_time || previous_bytes != source_bytes) {
+                                clear_previous();
+                            }
+                            size_t available = 0, total = 0;
+                            LFS_CUDA_CHECK(cudaMemGetInfo(&available, &total));
+                            auto [width, height, channels] = core::probe_image_info(source_path);
+                            if (expected && (expected->width != width || expected->height != height))
+                                throw std::runtime_error(LOC("image_preview.sam_source_changed"));
+                            if (w.input.semantic && !LlmDet::input_size(size_t(height), size_t(width)))
+                                throw std::runtime_error(LOC("image_preview.sam_semantic_geometry"));
+                            preprocessing::VideoMaskFrame frame{};
+                            frame.image_path = source_path;
+                            frame.width = width;
+                            frame.height = height;
+                            // Credit only allocations already owned by this model, not a second estimated model reserve.
+                            const auto resident = (model ? model->weights_bytes() + model->arena_bytes() : 0) +
+                                                  (w.input.semantic && detector ? detector->weights_bytes() : 0);
+                            const auto accounted = std::min(total, available + resident);
+                            // LLMDet weights and bounded 800/1333 detector activations. The
+                            // canonical planner already accounts for source-sized buffers.
+                            const auto extra = w.input.semantic ? size_t(2) << 30 : 0;
+                            const auto plan = preprocessing::plan_video_mask_resources({&frame, 1}, {},
+                                                                                       accounted > extra ? accounted - extra : 0);
+                            if (!plan)
+                                throw std::runtime_error(w.input.semantic ? LOC("image_preview.sam_semantic_memory") : std::string(plan.error().user_message()));
+                            if (!model) {
+                                std::optional<core::nn::WeightFile> prepared_weights;
+                                auto weights = w.input.weights;
+                                if (weights.empty()) {
+                                    auto cached = preprocessing::ensure_sam2_weights(true, obsolete);
+                                    if (!cached)
+                                        throw std::runtime_error(std::string(cached.error().user_message()));
+                                    prepared_weights = std::move(*cached);
+                                }
+                                if (obsolete())
+                                    return std::nullopt;
+                                model_failure = true;
+                                auto loaded = prepared_weights ? Sam2::load(*prepared_weights, Device::CUDA, DataType::Float32)
+                                                               : Sam2::load(weights, Device::CUDA, DataType::Float32);
+                                if (!loaded)
+                                    throw std::runtime_error(std::string(loaded.error().user_message()));
+                                model.emplace(std::move(*loaded));
+                                model->set_encoder_dtype(DataType::Float16);
+                                model_key = w.input.weights;
+                                model_failure = false;
+                            }
+                            if (!loader) {
+                                io::PipelinedLoaderConfig config;
+                                config.jpeg_batch_size = config.prefetch_count = config.output_queue_size = config.decoder_pool_size = 1;
+                                config.decode_frame_ring_capacity = 2;
+                                loader = std::make_unique<io::PipelinedImageLoader>(config);
+                            }
+                            io::LoadParams params{};
+                            params.skip_blob_cache = true;
+                            loader->prefetch(decode_request++, source_path, params);
+                            auto decoded = loader->get();
+                            const FrameDrain frame_drain{stream};
+                            if (!decoded.error.empty())
+                                throw std::runtime_error(decoded.error);
+                            core::waitForCUDAStream(stream, decoded.stream);
+                            decoded.tensor.set_stream(stream);
+                            if (encode_image)
+                                image.clear(); // Detection/cancellation must not leave stale encoder identity.
+                            if (w.input.semantic) {
+                                const auto& semantic = *w.input.semantic;
+                                if (decoded.tensor.ndim() != 3 || decoded.tensor.size(0) != 3 ||
+                                    decoded.tensor.size(1) != size_t(height) || decoded.tensor.size(2) != size_t(width))
+                                    throw std::runtime_error(LOC("image_preview.sam_source_changed"));
+                                if (!detector) {
+                                    stage("loading", 0.35f);
+                                    preparation_failure = true;
+                                    auto prepared = semantic.prepare_weights(obsolete);
+                                    if (!prepared)
+                                        throw lfs::Exception(prepared.error());
+                                    preparation_failure = false;
+                                    model_failure = true;
+                                    LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+                                    const FrameDrain transfer_drain{stream};
+                                    auto loaded = LlmDet::load(*prepared, Device::CUDA);
+                                    if (!loaded)
+                                        throw lfs::Exception(loaded.error());
+                                    detector.emplace(std::move(*loaded));
+                                }
+                                model_failure = true;
+                                if (obsolete())
+                                    return std::nullopt;
+                                if (!semantic_text) {
+                                    auto text = detector->encode(semantic.descriptions);
+                                    if (!text)
+                                        throw lfs::Exception(text.error());
+                                    semantic_text = std::move(*text);
+                                }
+                                stage("predicting", 0.5f);
+                                frame_boxes = find_semantic_boxes(*detector, decoded.tensor.unsqueeze(0), *semantic_text,
+                                                                  width, height, semantic.confidence, stream);
+                                model_failure = false;
+                            }
+                            if (encode_image && (!w.input.semantic || !frame_boxes.boxes.empty())) {
+                                stage("encoding", w.input.semantic ? 0.6f : 0.3f);
+                                model_failure = true;
+                                const auto encoded = model->set_image(decoded.tensor.unsqueeze(0));
+                                if (!encoded)
+                                    throw std::runtime_error(std::string(encoded.error().user_message()));
+                                model_failure = false;
+                                image = source_path;
+                                stamp = source_time;
+                                bytes = source_bytes;
+                            }
+                            LFS_CUDA_CHECK(cudaStreamSynchronize(stream)); // Decoder owns frame leases until this point.
+                        }
+                        return frame_boxes;
+                    };
+                    if (w.input.semantic && w.input.semantic->frames) {
+                        const auto range = *w.input.semantic->frames;
+                        std::vector<size_t> selected;
+                        {
+                            std::lock_guard lock(mutex);
+                            if (release || stopping || result.request != w.id || sequence != w.sequence)
+                                continue;
+                            for (int index = range[0]; index <= range[1]; ++index) {
+                                const auto& frame = w.sequence->frames[size_t(index)].summary;
+                                if (!frame.approved && !frame.keyframe)
+                                    selected.push_back(size_t(index));
+                            }
+                            result.total = selected.size();
+                        }
+                        clear_previous();
+                        for (const auto index : selected) {
+                            if (obsolete())
+                                break;
+                            const auto& source = w.sequence->sources[index];
+                            const auto source_time = fs::last_write_time(source.path);
+                            const auto source_bytes = fs::file_size(source.path);
+                            auto prepared = prepare_frame(source.path, source_time, source_bytes, &source);
+                            if (!prepared)
+                                break;
+                            model_failure = true;
+                            auto mask = segment_semantic_mask(*model, *prepared, source.width, source.height, stream, obsolete,
+                                                              [&](float fraction) { stage("predicting", 0.6f + 0.3f * fraction); });
+                            if (!mask)
+                                break;
+                            model_failure = false;
+                            if (fs::last_write_time(source.path) != source_time || fs::file_size(source.path) != source_bytes)
+                                throw std::runtime_error(LOC("image_preview.sam_source_changed"));
+                            retain(w, index, std::move(mask->png), source_time, source_bytes, mask->quality,
+                                   mask->quality >= core::nn::models::kSam2MinIou && !prepared->limited,
+                                   false, int(prepared->boxes.size()), prepared->limited);
+                        }
+                        clear_previous();
+                        image.clear();
+                        if (!obsolete())
+                            stage("searched", 1.f);
+                        continue;
+                    }
                     if (w.input.review_frame >= 0) {
                         Sequence::Frame frame;
                         const auto index = size_t(w.input.review_frame);
@@ -414,120 +654,12 @@ namespace lfs::vis::gui {
                         continue;
                     }
                     if (w.input.export_candidate < 0) {
-                        if (model && model_key != w.input.weights) {
-                            LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
-                            clear_previous();
-                            model.reset();
-                            image.clear();
-                        }
-                        const bool encode_image = !model || image != w.input.image || stamp != current_stamp || bytes != current_bytes;
-                        if (encode_image || w.input.semantic) {
-                            // Drain prior work before admitting the next source buffers.
-                            LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
-                            if (previous_image != w.input.image || previous_time != current_stamp || previous_bytes != current_bytes) {
-                                clear_previous();
-                            }
-                            size_t available = 0, total = 0;
-                            LFS_CUDA_CHECK(cudaMemGetInfo(&available, &total));
-                            auto [width, height, channels] = core::probe_image_info(w.input.image);
-                            if (w.input.semantic && !LlmDet::input_size(size_t(height), size_t(width)))
-                                throw std::runtime_error(LOC("image_preview.sam_semantic_geometry"));
-                            preprocessing::VideoMaskFrame frame{};
-                            frame.image_path = w.input.image;
-                            frame.width = width;
-                            frame.height = height;
-                            // Credit only allocations already owned by this model, not a second estimated model reserve.
-                            const auto resident = (model ? model->weights_bytes() + model->arena_bytes() : 0) +
-                                                  (w.input.semantic && detector ? detector->weights_bytes() : 0);
-                            const auto accounted = std::min(total, available + resident);
-                            // LLMDet weights and bounded 800/1333 detector activations. The
-                            // canonical planner already accounts for source-sized buffers.
-                            const auto extra = w.input.semantic ? size_t(2) << 30 : 0;
-                            const auto plan = preprocessing::plan_video_mask_resources({&frame, 1}, {},
-                                                                                       accounted > extra ? accounted - extra : 0);
-                            if (!plan)
-                                throw std::runtime_error(w.input.semantic ? LOC("image_preview.sam_semantic_memory") : std::string(plan.error().user_message()));
-                            if (!model) {
-                                std::optional<core::nn::WeightFile> prepared_weights;
-                                auto weights = w.input.weights;
-                                if (weights.empty()) {
-                                    auto cached = preprocessing::ensure_sam2_weights(true, obsolete);
-                                    if (!cached)
-                                        throw std::runtime_error(std::string(cached.error().user_message()));
-                                    prepared_weights = std::move(*cached);
-                                }
-                                if (obsolete())
-                                    continue;
-                                model_failure = true;
-                                auto loaded = prepared_weights ? Sam2::load(*prepared_weights, Device::CUDA, DataType::Float32)
-                                                               : Sam2::load(weights, Device::CUDA, DataType::Float32);
-                                if (!loaded)
-                                    throw std::runtime_error(std::string(loaded.error().user_message()));
-                                model.emplace(std::move(*loaded));
-                                model->set_encoder_dtype(DataType::Float16);
-                                model_key = w.input.weights;
-                                model_failure = false;
-                            }
-                            io::PipelinedLoaderConfig config;
-                            config.jpeg_batch_size = config.prefetch_count = config.output_queue_size = config.decoder_pool_size = 1;
-                            config.decode_frame_ring_capacity = 2;
-                            io::PipelinedImageLoader loader(config);
-                            io::LoadParams params{};
-                            params.skip_blob_cache = true;
-                            loader.prefetch(0, w.input.image, params);
-                            auto decoded = loader.get();
-                            const FrameDrain frame_drain{stream};
-                            if (!decoded.error.empty())
-                                throw std::runtime_error(decoded.error);
-                            core::waitForCUDAStream(stream, decoded.stream);
-                            decoded.tensor.set_stream(stream);
-                            if (encode_image) {
-                                // Cancellation during detection must not leave the
-                                // previous source associated with new encoder features.
-                                image.clear();
-                                stage("encoding", 0.3f);
-                                model_failure = true;
-                                const auto encoded = model->set_image(decoded.tensor.unsqueeze(0));
-                                if (!encoded)
-                                    throw std::runtime_error(std::string(encoded.error().user_message()));
-                                model_failure = false;
-                            }
-                            if (w.input.semantic) {
-                                const auto& semantic = *w.input.semantic;
-                                if (decoded.tensor.ndim() != 3 || decoded.tensor.size(0) != 3 ||
-                                    decoded.tensor.size(1) != size_t(height) || decoded.tensor.size(2) != size_t(width))
-                                    throw std::runtime_error(LOC("image_preview.sam_source_changed"));
-                                if (!detector) {
-                                    stage("loading", 0.35f);
-                                    preparation_failure = true;
-                                    auto prepared = semantic.prepare_weights(obsolete);
-                                    if (!prepared)
-                                        throw lfs::Exception(prepared.error());
-                                    preparation_failure = false;
-                                    model_failure = true;
-                                    LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
-                                    const FrameDrain transfer_drain{stream};
-                                    auto loaded = LlmDet::load(*prepared, Device::CUDA);
-                                    if (!loaded)
-                                        throw lfs::Exception(loaded.error());
-                                    detector.emplace(std::move(*loaded));
-                                }
-                                model_failure = true;
-                                if (obsolete())
-                                    continue;
-                                auto text = detector->encode(semantic.descriptions);
-                                if (!text)
-                                    throw lfs::Exception(text.error());
-                                stage("predicting", 0.5f);
-                                detected = find_semantic_boxes(*detector, decoded.tensor.unsqueeze(0), *text,
-                                                               width, height, semantic.confidence, stream);
-                                model_failure = false;
-                            }
-                            LFS_CUDA_CHECK(cudaStreamSynchronize(stream)); // Decoder owns frame leases until this point.
-                            image = w.input.image;
-                            stamp = current_stamp;
-                            bytes = current_bytes;
-                        }
+                        auto prepared = prepare_frame(w.input.image, current_stamp, current_bytes);
+                        if (!prepared)
+                            continue;
+                        detected = std::move(*prepared);
+                        // Decoder reads are drained; single-frame work no longer needs the loader.
+                        loader.reset();
                     }
                     if (obsolete())
                         continue;
@@ -729,57 +861,14 @@ namespace lfs::vis::gui {
                     Tensor semantic_preview;
                     if (w.input.semantic) {
                         model_failure = true;
-                        auto low_union = Tensor::full({1, 256, 256}, -10.f, Device::CUDA);
-                        auto combined = Tensor::full({1u, size_t(height), size_t(width)}, -10.f, Device::CUDA);
-                        float quality = detected.boxes.empty() ? 0.f : 1.f;
-                        const auto prediction_quality = [stream](const core::nn::models::Sam2Prediction& prediction) {
-                            auto score = prediction.iou.to(Device::CPU, stream).contiguous();
-                            LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
-                            if (!score.numel() || !std::isfinite(score.ptr<float>()[0]))
-                                throw std::runtime_error(LOC("image_preview.sam_semantic_failed"));
-                            return score.ptr<float>()[0];
-                        };
-                        for (size_t i = 0; i < detected.boxes.size(); ++i) {
-                            if (obsolete())
-                                break;
-                            auto prediction = model->predict({}, detected.boxes[i], false, nullptr,
-                                                             core::nn::models::Sam2MaskOutput::RawLowResolution);
-                            if (!prediction)
-                                throw lfs::Exception(prediction.error());
-                            const float initial_quality = prediction_quality(*prediction);
-                            if (obsolete())
-                                break;
-                            // Refine each detector proposal before combining objects. A
-                            // union is not a valid single-object SAM refinement prompt.
-                            const auto mask_input = prediction->low_res_logits.clamp(-32.f, 32.f).unsqueeze(1);
-                            auto refined = model->predict({}, detected.boxes[i], false, &mask_input,
-                                                          core::nn::models::Sam2MaskOutput::RawLowResolution);
-                            if (!refined)
-                                throw lfs::Exception(refined.error());
-                            const float refined_quality = prediction_quality(*refined);
-                            const bool improved = refined_quality > initial_quality;
-                            const auto& selected = improved ? *refined : *prediction;
-                            auto original = model->postprocess_masks(selected.low_res_logits);
-                            if (!original)
-                                throw lfs::Exception(original.error());
-                            combined = combined.maximum(*original);
-                            low_union = low_union.maximum(selected.low_res_logits);
-                            quality = std::min(quality, improved ? refined_quality : initial_quality);
-                            stage("predicting", 0.6f + 0.3f * float(i + 1) / float(detected.boxes.size()));
-                        }
-                        if (obsolete())
+                        auto segmented = segment_semantic_mask(*model, detected, width, height, stream, obsolete,
+                                                               [&](float fraction) { stage("predicting", 0.6f + 0.3f * fraction); });
+                        if (!segmented)
                             continue;
-                        // Keep the exact source-resolution union for Apply/export;
-                        // the low-resolution union is only a future refinement seed.
-                        semantic_preview = combined.gt(0).to(DataType::Float32);
-                        auto selected = semantic_preview.mul(255).to(DataType::UInt8).to(Device::CPU, stream).contiguous();
-                        LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
-                        auto png = encode_mask({selected.ptr<uint8_t>(), selected.numel()}, width, height);
-                        if (obsolete())
-                            continue;
-                        previous = low_union.clamp(-32.f, 32.f);
-                        previous_png = std::move(png);
-                        previous_scores = {quality};
+                        semantic_preview = std::move(segmented->preview);
+                        previous = std::move(segmented->low_res);
+                        previous_png = std::move(segmented->png);
+                        previous_scores = {segmented->quality};
                         model_failure = false;
                     } else {
                         std::vector<core::nn::models::Sam2PointPrompt> points;
@@ -834,7 +923,7 @@ namespace lfs::vis::gui {
                                      .to(DataType::Float32);
                     if (obsolete())
                         continue;
-                    if (fs::last_write_time(image) != stamp || fs::file_size(image) != bytes)
+                    if (fs::last_write_time(w.input.image) != current_stamp || fs::file_size(w.input.image) != current_bytes)
                         throw std::runtime_error(LOC("image_preview.sam_source_changed"));
                     if (w.sequence) {
                         const auto found = std::ranges::find(w.sequence->sources, w.input.image, &core::ExtractedFrame::path);
@@ -931,9 +1020,7 @@ namespace lfs::vis::gui {
         const auto valid = [](float v) { return std::isfinite(v) && v >= 0 && v <= 1; };
         // Retaining is a destination for export_candidate, not another request mode.
         const int modes = int(input.tracking.has_value()) + int(input.review_frame >= 0) + int(input.publish_approved) + int(input.export_candidate >= 0) + int(input.semantic.has_value());
-        if (modes > 1 || input.review_frame < -1 || (sequence && std::ranges::none_of(sequence->sources, [&](const auto& source) {
-                                                         return source.path.lexically_normal() == input.image.lexically_normal();
-                                                     })))
+        if (modes > 1 || input.review_frame < -1 || (sequence && std::ranges::none_of(sequence->sources, [&](const auto& source) { return source.path.lexically_normal() == input.image.lexically_normal(); })))
             throw std::invalid_argument(LOC("image_preview.sam_sequence_invalid"));
         if (input.image.empty() || input.revision.empty() || input.points.size() > 256 ||
             (input.points.empty() && !input.box && !input.tracking && !input.semantic && !input.publish_approved && input.review_frame < 0 && input.export_candidate < 0))
@@ -945,6 +1032,10 @@ namespace lfs::vis::gui {
             if (!semantic.prepare_weights || !LlmDet::valid_phrases(semantic.descriptions) || !input.points.empty() || input.box ||
                 input.refine_request || input.refine_candidate != -1)
                 throw std::invalid_argument(LOC("image_preview.sam_semantic_invalid"));
+            if (semantic.frames && (!sequence || (*semantic.frames)[0] < 0 ||
+                                    (*semantic.frames)[1] < (*semantic.frames)[0] ||
+                                    (*semantic.frames)[1] >= int(sequence->sources.size())))
+                throw std::invalid_argument(LOC("image_preview.sam_sequence_invalid"));
         }
         for (const auto& p : input.points)
             if (!valid(p[0]) || !valid(p[1]) || (p[2] != 0 && p[2] != 1))
