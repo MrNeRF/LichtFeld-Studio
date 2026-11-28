@@ -27,12 +27,14 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <format>
+#include <limits>
 #include <optional>
 #include <span>
 #include <sstream>
@@ -123,23 +125,38 @@ namespace lfs::io {
             out << "    }\n";
         }
 
+        // zlib counts its input in 32-bit uInt and libarchive writes at most INT_MAX bytes a call, so a payload past
+        // either goes to them in pieces. 0 means each library's own limit; a test lowers it.
+        std::atomic<size_t> piece_bytes_for_testing{0};
+
+        size_t piece_bytes(const size_t library_limit) {
+            const size_t lowered = piece_bytes_for_testing.load(std::memory_order_relaxed);
+            return lowered == 0 ? library_limit : std::min(lowered, library_limit);
+        }
+
         std::expected<std::vector<uint8_t>, std::string> gzip_compress(const std::vector<uint8_t>& input) {
             z_stream stream{};
             if (deflateInit2(&stream, 0, Z_DEFLATED, 16 + MAX_WBITS, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
                 return std::unexpected("Failed to initialize gzip compressor");
             }
 
+            // A payload past 4 GiB goes in pieces. Below that it is one piece, and the calls are the single Z_FINISH
+            // pass they always were, so the bytes are too.
             stream.next_in = const_cast<Bytef*>(reinterpret_cast<const Bytef*>(input.data()));
-            stream.avail_in = static_cast<uInt>(input.size());
+            size_t remaining = input.size();
 
             std::vector<uint8_t> output;
             std::array<uint8_t, 16384> chunk{};
 
             int status = Z_OK;
             while (status != Z_STREAM_END) {
+                if (stream.avail_in == 0 && remaining > 0) {
+                    stream.avail_in = static_cast<uInt>(std::min(remaining, piece_bytes(std::numeric_limits<uInt>::max())));
+                    remaining -= stream.avail_in;
+                }
                 stream.next_out = chunk.data();
                 stream.avail_out = static_cast<uInt>(chunk.size());
-                status = deflate(&stream, Z_FINISH);
+                status = deflate(&stream, remaining == 0 ? Z_FINISH : Z_NO_FLUSH);
                 if (status != Z_OK && status != Z_STREAM_END) {
                     deflateEnd(&stream);
                     return std::unexpected(std::format("gzip compression failed with zlib status {}", status));
@@ -159,14 +176,19 @@ namespace lfs::io {
                 return std::unexpected("Failed to initialize gzip decompressor");
             }
 
+            // In pieces, as the compressor.
             stream.next_in = const_cast<Bytef*>(reinterpret_cast<const Bytef*>(input.data()));
-            stream.avail_in = static_cast<uInt>(input.size());
+            size_t remaining = input.size();
 
             std::vector<uint8_t> output;
             std::array<uint8_t, 16384> chunk{};
 
             int status = Z_OK;
             while (status != Z_STREAM_END) {
+                if (stream.avail_in == 0 && remaining > 0) {
+                    stream.avail_in = static_cast<uInt>(std::min(remaining, piece_bytes(std::numeric_limits<uInt>::max())));
+                    remaining -= stream.avail_in;
+                }
                 stream.next_out = chunk.data();
                 stream.avail_out = static_cast<uInt>(chunk.size());
                 status = inflate(&stream, Z_NO_FLUSH);
@@ -542,13 +564,18 @@ namespace lfs::io {
                     return std::unexpected(std::format("Failed to write USDZ header for '{}': {}", filename, error));
                 }
 
-                if (!data.empty()) {
-                    const ssize_t written = archive_write_data(archive_, data.data(), data.size());
-                    if (written != static_cast<ssize_t>(data.size())) {
+                // libarchive writes at most INT_MAX bytes a call, so a larger entry goes in pieces; a smaller one is
+                // the single call it always was.
+                const size_t write_limit = piece_bytes(static_cast<size_t>(std::numeric_limits<int>::max()));
+                for (size_t offset = 0; offset < data.size();) {
+                    const ssize_t written =
+                        archive_write_data(archive_, data.data() + offset, std::min(data.size() - offset, write_limit));
+                    if (written <= 0) {
                         const std::string error = archive_error_string(archive_) ? archive_error_string(archive_) : "unknown error";
                         archive_entry_free(entry);
                         return std::unexpected(std::format("Failed to write USDZ data for '{}': {}", filename, error));
                     }
+                    offset += static_cast<size_t>(written);
                 }
 
                 archive_entry_free(entry);
@@ -765,6 +792,10 @@ namespace lfs::io {
 
     } // namespace
 
+    void set_nurec_piece_bytes_for_testing(const std::size_t bytes) noexcept {
+        piece_bytes_for_testing.store(bytes, std::memory_order_relaxed);
+    }
+
     std::expected<bool, std::string> is_nurec_usdz(const std::filesystem::path& filepath) {
         auto entries = read_usdz_entries(filepath);
         if (!entries) {
@@ -836,6 +867,21 @@ namespace lfs::io {
                                          : splat_data.size();
         if (visible_count == 0) {
             return make_error(ErrorCode::EMPTY_DATASET, "No visible splats to write", options.output_path);
+        }
+        // The payload is msgpack, which stores a tensor as one binary of at most 2^32 - 1 bytes (bin 32); the largest
+        // here is the specular SH in half, 90 bytes a splat at SH 3, so past 47.7M splats the export refuses before
+        // writing anything.
+        {
+            const int degree = splat_data.get_max_sh_degree();
+            const size_t rest_values = degree > 0 ? static_cast<size_t>(((degree + 1) * (degree + 1) - 1) * 3) : 0;
+            const size_t largest_blob = visible_count * std::max<size_t>(4, rest_values) * sizeof(uint16_t);
+            if (largest_blob > std::numeric_limits<uint32_t>::max()) {
+                return make_error(ErrorCode::INVALID_DATASET,
+                                  std::format("NuRec USDZ stores each tensor in one msgpack binary of at most 4 GiB; "
+                                              "{} visible splats at SH {} need {} bytes",
+                                              visible_count, degree, largest_blob),
+                                  options.output_path);
+            }
         }
 
         if (auto validation = validate_export_tensors(splat_data, options.output_path); !validation) {

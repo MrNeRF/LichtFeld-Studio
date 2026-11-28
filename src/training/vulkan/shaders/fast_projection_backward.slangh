@@ -474,9 +474,9 @@ void projectionBackward(BackPush back, uint primitive_idx) {
                 for (uint k = 0; k < p.activeBases - 1; ++k) {
                     float v = shColor(p, primitive_idx, k)[c];
                     uint a = k * 3 + c;
-                    uint cell = ((primitive_idx / 32 * back.slots + a / 4) * 32 + primitive_idx % 32) * 4 + a % 4;
+                    uint64_t cell = uint64_t((primitive_idx / 32 * back.slots + a / 4) * 32 + primitive_idx % 32) * 4 + a % 4;
                     if (allowed)
-                        storeFloat(back.shGradient, cell, loadFloat(back.shGradient, cell) + 2.0f * coef * v);
+                        ((Ptr<float, Access.ReadWrite>)back.shGradient)[cell] += 2.0f * coef * v;
                     shLoss += coef * v * v;
                 }
             }

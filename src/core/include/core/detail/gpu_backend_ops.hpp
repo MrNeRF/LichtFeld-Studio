@@ -321,6 +321,10 @@ namespace lfs::core {
                                  const StridedLayout& output_layout,
                                  const StridedLayout& index_layout,
                                  const IndexProgram& program, ExecContext context) = 0;
+            // Whether index_copy addresses a destination row in 64 bits, so that a row assignment with int32
+            // indices needs only its rows, not its elements, to fit int32. A backend that cannot promise it for
+            // every destination reports false and keeps the element bound.
+            virtual bool index_copy_rows_in_64_bits() const = 0;
             virtual void index_copy(StorageRef output, StorageRef indices,
                                     StorageRef source,
                                     const StridedLayout& output_layout,
@@ -656,6 +660,7 @@ namespace lfs::core {
             void inference(StorageRef input, StorageRef output,
                            const InferenceProgram& program, ExecContext context) override;
             bool nn_kernels() const override { return false; }
+            bool index_copy_rows_in_64_bits() const override { return false; }
             void nn_linear(StorageRef, StorageRef, std::optional<StorageRef>, std::optional<StorageRef>,
                            std::optional<StorageRef>, StorageRef, const LinearProgram&, ExecContext) override;
             void nn_attention(StorageRef, StorageRef, StorageRef, std::optional<StorageRef>, StorageRef,

@@ -290,7 +290,8 @@ namespace lfs::io {
         const int64_t num_splats = splat_data.size();
         const int width = static_cast<int>(std::ceil(std::sqrt(num_splats) / 4.0)) * 4;
         const int height = static_cast<int>(std::ceil(static_cast<double>(num_splats) / width / 4.0)) * 4;
-        const size_t sog_estimate = static_cast<size_t>(width * height * 4 * 5 * 0.4);
+        // In floating point: in int the product passes 2^31 at about 107M splats.
+        const size_t sog_estimate = static_cast<size_t>(static_cast<double>(width) * height * 4 * 5 * 0.4);
         const size_t base64_estimate = (sog_estimate * 4) / 3 + 4; // Base64 is 4/3 larger
         const size_t html_template_size = 51200;                   // ~50KB for HTML/CSS/JS
         const size_t estimated_size = base64_estimate + html_template_size;

@@ -33,7 +33,8 @@ struct RefineSplitParams {
 kernel void refine_split(constant RefineSplitParams& p [[buffer(0)]], uint i [[thread_position_in_grid]]) {
     if (i >= p.count)
         return;
-    const int src = int(p.indices[i]);
+    // 64-bit: an int source index times 4 overflows past 536.9M Gaussians (times 3 past 715.8M).
+    const long src = p.indices[i];
     const float3 pos = float3(p.means[src * 3], p.means[src * 3 + 1], p.means[src * 3 + 2]);
     const float4 q = float4(p.rotations[src * 4], p.rotations[src * 4 + 1], p.rotations[src * 4 + 2],
                             p.rotations[src * 4 + 3]);
@@ -58,11 +59,11 @@ kernel void refine_split(constant RefineSplitParams& p [[buffer(0)]], uint i [[t
     const float3 offset = column[axes.x] * offset_magnitude;
 
     for (uint d = 0; d < 3; ++d) {
-        p.means[src * 3 + int(d)] = pos[d] + offset[d];
-        p.scales[src * 3 + int(d)] = new_scale[d];
+        p.means[src * 3 + d] = pos[d] + offset[d];
+        p.scales[src * 3 + d] = new_scale[d];
         p.child_means[i * 3 + d] = pos[d] - offset[d];
         p.child_scales[i * 3 + d] = new_scale[d];
-        p.child_sh0[i * 3 + d] = p.sh0[src * 3 + int(d)];
+        p.child_sh0[i * 3 + d] = p.sh0[src * 3 + d];
     }
     for (uint d = 0; d < 4; ++d)
         p.child_rotations[i * 4 + d] = q[d];

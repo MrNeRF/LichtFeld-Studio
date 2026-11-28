@@ -12,6 +12,7 @@ constant constexpr uint kGsplatTile = 16u;
 constant constexpr uint kGsplatBatch = 64u;
 constant constexpr uint kGsplatRadixItems = 8u;
 constant constexpr uint kGsplatRadixBlock = kThreadgroupWidth * kGsplatRadixItems;
+// A row starts at ulong(g) * kGsplatGradStride: in 32 bits that offset wraps past 306.8M Gaussians.
 constant constexpr uint kGsplatGradStride = 14u; // mean 3, scale 3, quat 4, opacity 1, rgb 3
 constant constexpr float kGsplatAlphaMin = 1.0f / 255.0f;
 constant constexpr float kGsplatPi = 3.14159265358979323846f;
@@ -497,9 +498,10 @@ static void gsplat_sh_basis(const float3 dir, const uint degree, thread float* b
 }
 
 // Float index of SH-rest value (coeff, channel) in swizzled float storage.
-static uint gsplat_sh_float_index(const uint g, const uint coeff, const uint channel, const uint layout_rest) {
+// 64-bit: with 12 float4 slots (degree 3) a 32-bit float index wraps past 89.5M primitives.
+static ulong gsplat_sh_float_index(const uint g, const uint coeff, const uint channel, const uint layout_rest) {
     const uint offset = coeff * 3u + channel;
-    return sh_swizzled_index(g, offset / 4u, layout_rest) * 4u + offset % 4u;
+    return ulong(sh_swizzled_index(g, offset / 4u, layout_rest)) * 4u + offset % 4u;
 }
 
 // ---------------------------------------------------------------------------
@@ -1132,7 +1134,7 @@ kernel void gsplat_rasterize_backward(constant GsplatRasterParams& p [[buffer(0)
             const float edge = edge_scoring ? simd_sum(grad.edge) : 0.0f;
             if (simd_is_first()) {
                 const uint g = as_type<uint>(s_rgb[t].w);
-                device float* out = p.grads + g * kGsplatGradStride;
+                device float* out = p.grads + ulong(g) * kGsplatGradStride;
                 for (uint k = 0; k < kGsplatGradStride; ++k)
                     gsplat_atomic_add(out + k, values[k]);
                 if (do_dens) {
@@ -1177,7 +1179,7 @@ struct GsplatAccumulateParams {
 kernel void gsplat_accumulate(constant GsplatAccumulateParams& p [[buffer(0)]], uint g [[thread_position_in_grid]]) {
     if (g >= p.count)
         return;
-    device const float* v = p.grads + g * kGsplatGradStride;
+    device const float* v = p.grads + ulong(g) * kGsplatGradStride;
     const float3 scale = exp(gsplat_load3(p.scales, g));
     for (uint k = 0; k < 3u; ++k) {
         p.means_grad[g * 3u + k] += v[k];

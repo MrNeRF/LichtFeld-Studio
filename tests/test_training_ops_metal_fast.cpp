@@ -15,6 +15,10 @@
 #include "core/tensor_backend.hpp"
 #include "lfs/training/ops/popspa.hpp"
 #include "lfs/training/ops/registry.hpp"
+#ifdef LFS_TENSOR_METAL
+#include "ops/metal_kernels.hpp"
+#include "ops/sh_metal.hpp"
+#endif
 
 #include "cuda_backend_test.hpp"
 #include <gtest/gtest.h>
@@ -1786,5 +1790,58 @@ namespace {
 
     INSTANTIATE_TEST_SUITE_P(Backends, PortableFastRaster, testing::Values(GpuBackend::Metal, GpuBackend::Vulkan),
                              [](const auto& info) { return std::string(lfs::core::gpu_backend_name(info.param)); });
+
+#ifdef LFS_TENSOR_METAL
+    // A Metal dispatch runs its thread count modulo 2^32 and the trainer's kernels index threads in 32 bits, so a
+    // launch of 2^32 threads or more would leave work undone silently; the launcher refuses it before anything is
+    // dispatched, per dimension and in total.
+    TEST(MetalTrainingLaunch, RefusesGridsPastThe32BitThreadIndex) {
+        const struct {
+            uint64_t values = 0, indices = 0;
+            uint32_t count = 0, slots = 0;
+        } params;
+        namespace mk = lfs::training::metal;
+        EXPECT_THROW(mk::launch_items("sh_zero_rows", params, {}, size_t{1} << 32), std::overflow_error);
+        EXPECT_THROW(mk::launch_items("sh_zero_rows", params, {}, (size_t{1} << 32) + 1), std::overflow_error);
+        EXPECT_THROW(mk::launch("sh_zero_rows", params, {}, 1u << 24, 256u), std::overflow_error);
+        EXPECT_THROW(mk::launch_2d("sh_zero_rows", params, {}, 1u << 28, 1u, 16u, 16u), std::overflow_error);
+        EXPECT_THROW(mk::launch_2d("sh_zero_rows", params, {}, 1u << 16, 1u << 16, 16u, 16u), std::overflow_error);
+    }
+
+    // Byte fills and row copies go in pieces, each from its own 64-bit offset, so that no dispatch passes the 2^32
+    // threads a Metal grid runs. Pieces of 4,096 bytes here put every piece boundary inside the data.
+    TEST(MetalTrainingLaunch, ByteFillAndRowCopyCoverEveryPiece) {
+        if (lfs::core::default_gpu_backend() != GpuBackend::Metal)
+            GTEST_SKIP() << "Metal ShOps";
+        namespace mk = lfs::training::metal;
+        struct Restore {
+            ~Restore() { mk::set_byte_piece_items_for_testing(0); }
+        } restore;
+        mk::set_byte_piece_items_for_testing(4096);
+        constexpr size_t fill_bytes = 3 * 4096 + 17;
+        std::vector<uint8_t> zeros(fill_bytes, 0);
+        Tensor filled =
+            Tensor::from_blob(zeros.data(), {fill_bytes}, Device::CPU, DataType::UInt8).to(Device::GPU);
+        lfs::training::training_ops(GpuBackend::Metal).sh->fill_bytes(filled, fill_bytes, 0x5a);
+        const std::vector<uint8_t> got_fill = download_bytes(filled);
+        EXPECT_EQ(std::count(got_fill.begin(), got_fill.end(), uint8_t{0x5a}), static_cast<std::ptrdiff_t>(fill_bytes));
+
+        constexpr size_t width = 100, rows = 150, source_pitch = 131, destination_pitch = 117;
+        std::vector<uint8_t> source(rows * source_pitch), destination(rows * destination_pitch, 0xee);
+        for (size_t i = 0; i < source.size(); ++i)
+            source[i] = uint8_t(i % 251);
+        Tensor source_gpu = Tensor::from_blob(source.data(), {source.size()}, Device::CPU, DataType::UInt8).to(Device::GPU);
+        Tensor destination_gpu =
+            Tensor::from_blob(destination.data(), {destination.size()}, Device::CPU, DataType::UInt8).to(Device::GPU);
+        mk::copy_rows(mk::address(source_gpu), mk::address(destination_gpu), width, rows, source_pitch,
+                      destination_pitch, {&source_gpu, &destination_gpu});
+        const std::vector<uint8_t> got_copy = download_bytes(destination_gpu);
+        size_t wrong = 0;
+        for (size_t r = 0; r < rows; ++r)
+            for (size_t c = 0; c < destination_pitch; ++c)
+                wrong += got_copy[r * destination_pitch + c] != (c < width ? source[r * source_pitch + c] : 0xee) ? 1 : 0;
+        EXPECT_EQ(wrong, 0u);
+    }
+#endif
 
 } // namespace

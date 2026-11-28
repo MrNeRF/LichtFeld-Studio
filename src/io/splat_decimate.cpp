@@ -211,7 +211,7 @@ namespace lfs::io {
                     return make_error(ErrorCode::INVALID_DATASET, "decimation deleted mask must be bool [N]");
                 // apply_deleted deliberately refuses to remove every row. The IO
                 // contract must still exclude an entirely soft-deleted scene.
-                if (size_t(mask.sum_scalar()) == input_n) {
+                if (mask.count_nonzero() == input_n) {
                     auto empty = allocate(0, int(input.max_sh_coeffs_rest()), Device::GPU);
                     visible = core::SplatData(input.get_max_sh_degree(), empty.pos, empty.dc, empty.sh,
                                               empty.scale, empty.rot, empty.opacity, input.get_scene_scale(), core::SplatData::ShNLayout::Canonical);

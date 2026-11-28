@@ -45,11 +45,22 @@ namespace lfs::training::metal {
     // Device address of a tensor, or 0 when it is absent.
     inline uint64_t address(const core::Tensor& tensor) { return kernels().address(tensor); }
 
+    // A Metal dispatch runs its total thread count modulo 2^32 (measured: 2^32 + 1 MiB threads run 1 MiB of them,
+    // whether the grid is given in threads or threadgroups), and the kernels index threads with a 32-bit
+    // thread_position_in_grid. A launch of 2^32 threads or more would leave work undone silently, so it stops here;
+    // work past that goes in several launches, each from its own 64-bit offset.
+    inline void check_grid(const std::string_view function, const uint64_t threads) {
+        if (threads > std::numeric_limits<uint32_t>::max())
+            throw std::overflow_error(std::format("Metal kernel '{}' needs {} threads, past its 32-bit thread index",
+                                                  function, threads));
+    }
+
     template <class Params>
     void launch(const std::string_view function, const Params& params,
                 const std::initializer_list<const core::Tensor*> uses, const uint32_t groups,
                 const uint32_t width = kGroupWidth,
                 const std::initializer_list<std::pair<uint32_t, uint32_t>> constants = {}) {
+        check_grid(function, uint64_t{groups} * width);
         kernels().launch({.function = function,
                           .params = std::as_bytes(std::span(&params, 1)),
                           .uses = std::span(uses.begin(), uses.size()),
@@ -64,6 +75,9 @@ namespace lfs::training::metal {
                    const std::initializer_list<const core::Tensor*> uses, const uint32_t groups_x,
                    const uint32_t groups_y, const uint32_t width, const uint32_t height,
                    const std::initializer_list<std::pair<uint32_t, uint32_t>> constants = {}) {
+        check_grid(function, uint64_t{groups_x} * width);
+        check_grid(function, uint64_t{groups_y} * height);
+        check_grid(function, uint64_t{groups_x} * width * (uint64_t{groups_y} * height));
         kernels().launch({.function = function,
                           .params = std::as_bytes(std::span(&params, 1)),
                           .uses = std::span(uses.begin(), uses.size()),
