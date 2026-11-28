@@ -861,7 +861,7 @@ class _GizmoToolbarController:
                                tooltip_key="align.clear", tooltip_text="Clear", enabled=True, separator_before=True),
             ]
             controls = (
-                ("swap", "align.swap_roles" if can_swap else "align.swap_unavailable", "Swap roles", "",
+                ("swap", "align.swap_roles" if can_swap else "align.swap_unavailable", "Swap the fixed and moving models", "",
                  "⇄", False, can_swap),
                 ("delete", "align.delete_pair", "Delete selected pair", "scene/trash", "", False, can_delete),
                 cancel,

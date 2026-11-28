@@ -308,6 +308,8 @@ namespace lfs::vis::tools {
         const auto selected_point = state.getSelectedPoint();
         auto* const sm = tool_context_->getSceneManager();
         if (alignment) {
+            // Leave the role labels at the bottom of the panes readable on narrow layouts.
+            const float role_label_space = 28.0f * ui_scale;
             const auto& point_state = op::ModelAlignmentOperator::active()->pointState();
             const bool pending_right = op::ModelAlignmentOperator::active()->pendingPairOnRight();
             if (!alignment->preview) {
@@ -320,7 +322,8 @@ namespace lfs::vis::tools {
                 }
                 const auto count = picked_points.size();
                 const auto next = count % 2 && !pending_right ? SplitViewPanelId::Right : SplitViewPanelId::Left;
-                const auto projection = pointPickOverlayFrame(*tool_context_, next).panel;
+                auto projection = pointPickOverlayFrame(*tool_context_, next).panel;
+                projection.info.height -= role_label_space;
                 const char* hint = pending_right                        ? "align.pair_match_left"
                                    : count % 2 != 0                     ? "align.pair_mobile"
                                    : op::hasEnoughAlignmentPairs(count) ? "align.pair_ready"
@@ -349,6 +352,7 @@ namespace lfs::vis::tools {
                         info.width = std::max(left_width, right_width);
                     }
                 }
+                projection.info.height -= role_label_space;
                 drawPointPickHud(*overlay, projection, LOC("align.pair_preview"),
                                  LOCF("align.pair_progress", picked_points.size() / 2),
                                  &op::ModelAlignmentOperator::active()->feedback().summary);

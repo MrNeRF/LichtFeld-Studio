@@ -994,6 +994,38 @@ namespace lfs::vis::op {
         EXPECT_EQ(manager_->getNodeTransform("reference"), reference);
     }
 
+    TEST_F(ModelAlignmentTest, UsingAnAlignedSplatAsReferenceKeepsTheEarlierPairFixed) {
+        pair_rendering_ = std::make_unique<RenderingManager>();
+        startPairAlignment(*pair_rendering_);
+        ASSERT_FALSE(HasFatalFailure());
+        ASSERT_EQ(action(PointPickState::UiAction::Apply), OperatorResult::FINISHED);
+        const auto first = manager_->getNodeTransform("reference");
+        const auto second = manager_->getNodeTransform("mobile");
+
+        auto& scene = manager_->getScene();
+        scene.addSplat("third", lfs::test::licht::make_splat(1));
+        const auto third_id = scene.getNode("third")->id;
+        const auto third = manager_->getNodeTransform("third");
+        const auto third_world = scene_coords::nodeVisualizerWorldTransform(scene, third_id);
+        manager_->selectNodes({"mobile", "third"});
+        ASSERT_TRUE(operation_.begin(pair_primary_, scene, *scene.getNode("mobile"), *scene.getNode("third")));
+        OperatorProperties properties;
+        ASSERT_EQ(operation_.invoke(*context_, properties), OperatorResult::RUNNING_MODAL);
+        const glm::vec3 offset(3, -2, 1);
+        for (const auto point : {glm::vec3(0), glm::vec3(1, 0, 0), glm::vec3(0, 1, 0)}) {
+            ASSERT_TRUE(sample(point + offset, SplitViewPanelId::Left));
+            ASSERT_TRUE(sample(point, SplitViewPanelId::Right));
+        }
+        ASSERT_EQ(action(PointPickState::UiAction::Apply), OperatorResult::FINISHED);
+        EXPECT_EQ(manager_->getNodeTransform("reference"), first);
+        EXPECT_EQ(manager_->getNodeTransform("mobile"), second);
+        const auto third_after = scene_coords::nodeVisualizerWorldTransform(scene, third_id);
+        EXPECT_NEAR(glm::length(glm::vec3(third_after[3] - third_world[3]) - offset), 0.0f, 1e-5f);
+        ASSERT_TRUE(undoHistory().undo().success);
+        EXPECT_EQ(manager_->getNodeTransform("third"), third);
+        EXPECT_EQ(manager_->getNodeTransform("mobile"), second);
+    }
+
     TEST_F(ModelAlignmentTest, DedicatedViewRestoresCamerasAndKeepsPreviewOutOfScene) {
         pair_rendering_ = std::make_unique<RenderingManager>();
         startPairAlignment(*pair_rendering_);
